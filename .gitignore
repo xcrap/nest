@@ -1,0 +1,15 @@
+.DS_Store
+node_modules/
+dist/
+coverage/
+.vite/
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+desktop/out/
+desktop/.electron/
+bin/
+tmp/
+Nest.app/
+*.log
+*.pid

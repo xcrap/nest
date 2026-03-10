@@ -1,0 +1,14 @@
+{
+  "name": "nest",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "desktop"
+  ],
+  "scripts": {
+    "bootstrap": "./scripts/bootstrap-macos.sh",
+    "desktop:dev": "npm --workspace desktop run dev",
+    "desktop:build": "npm --workspace desktop run build"
+  }
+}
+

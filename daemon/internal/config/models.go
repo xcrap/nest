@@ -1,0 +1,61 @@
+package config
+
+import "time"
+
+type Site struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Domain       string    `json:"domain"`
+	RootPath     string    `json:"rootPath"`
+	Status       string    `json:"status"`
+	HTTPSEnabled bool      `json:"httpsEnabled"`
+	PHPVersion   string    `json:"phpVersion"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+type ShellIntegrationState struct {
+	ZshManaged bool      `json:"zshManaged"`
+	RcFile     string    `json:"rcFile"`
+	BinPath    string    `json:"binPath"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+}
+
+type BootstrapState struct {
+	TestDomainConfigured   bool      `json:"testDomainConfigured"`
+	LocalCATrusted         bool      `json:"localCATrusted"`
+	PrivilegedPortsReady   bool      `json:"privilegedPortsReady"`
+	ResolverIPAddress      string    `json:"resolverIpAddress"`
+	ResolverPort           int       `json:"resolverPort"`
+	LastBootstrapCompleted time.Time `json:"lastBootstrapCompleted"`
+}
+
+type Settings struct {
+	ActivePHPVersion string                `json:"activePhpVersion"`
+	ShellIntegration ShellIntegrationState `json:"shellIntegration"`
+	Bootstrap        BootstrapState        `json:"bootstrap"`
+}
+
+type PhpVersion struct {
+	Version   string `json:"version"`
+	Installed bool   `json:"installed"`
+	Active    bool   `json:"active"`
+	Path      string `json:"path"`
+}
+
+type DoctorCheck struct {
+	ID      string `json:"id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	FixHint string `json:"fixHint"`
+}
+
+func DefaultSettings() Settings {
+	return Settings{
+		ActivePHPVersion: "8.5",
+		Bootstrap: BootstrapState{
+			ResolverIPAddress: "127.0.0.1",
+			ResolverPort:      5354,
+		},
+	}
+}

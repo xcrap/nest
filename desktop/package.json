@@ -1,0 +1,52 @@
+{
+  "name": "nest-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Nest desktop control plane for local PHP development on macOS",
+  "author": "xcrap",
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "node ./scripts/dev.mjs",
+    "build": "vite build",
+    "package": "npm run build && electron-builder --dir"
+  },
+  "build": {
+    "appId": "dev.xcrap.nest",
+    "productName": "Nest",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../bin/nestd",
+        "to": "bin/nestd"
+      },
+      {
+        "from": "../bin/nesthelper",
+        "to": "bin/nesthelper"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dir"
+      ],
+      "category": "public.app-category.developer-tools"
+    }
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "36.0.0",
+    "electron-builder": "^25.1.8",
+    "vite": "^7.0.0"
+  }
+}
