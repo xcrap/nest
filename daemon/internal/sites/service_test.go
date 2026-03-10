@@ -53,6 +53,80 @@ func TestCreateAndDeleteSite(t *testing.T) {
 	}
 }
 
+func TestUpdateValidatesAndPersistsSite(t *testing.T) {
+	paths := tempPaths(t)
+	store := config.NewStore(paths)
+	if err := store.Ensure(); err != nil {
+		t.Fatalf("ensure store: %v", err)
+	}
+
+	firstRoot := filepath.Join(paths.HomeDir, "project-a")
+	secondRoot := filepath.Join(paths.HomeDir, "project-b")
+	if err := os.MkdirAll(firstRoot, 0o755); err != nil {
+		t.Fatalf("mkdir first root: %v", err)
+	}
+	if err := os.MkdirAll(secondRoot, 0o755); err != nil {
+		t.Fatalf("mkdir second root: %v", err)
+	}
+
+	service := NewService(paths, store)
+	firstSite, err := service.Create(CreateInput{
+		Name:         "Project A",
+		Domain:       "project-a.test",
+		RootPath:     firstRoot,
+		PHPVersion:   "8.5",
+		HTTPSEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create first site: %v", err)
+	}
+	if _, err := service.Create(CreateInput{
+		Name:         "Project B",
+		Domain:       "project-b.test",
+		RootPath:     secondRoot,
+		PHPVersion:   "8.5",
+		HTTPSEnabled: false,
+	}); err != nil {
+		t.Fatalf("create second site: %v", err)
+	}
+
+	newName := "Project A Prime"
+	newDomain := "project-prime.test"
+	newRoot := secondRoot
+	newVersion := "8.4"
+	httpsEnabled := false
+
+	updated, err := service.Update(firstSite.ID, UpdateInput{
+		Name:         &newName,
+		Domain:       &newDomain,
+		RootPath:     &newRoot,
+		PHPVersion:   &newVersion,
+		HTTPSEnabled: &httpsEnabled,
+	})
+	if err != nil {
+		t.Fatalf("update site: %v", err)
+	}
+
+	if updated.Name != newName || updated.Domain != newDomain || updated.RootPath != newRoot || updated.PHPVersion != newVersion || updated.HTTPSEnabled != httpsEnabled {
+		t.Fatalf("unexpected updated site: %+v", updated)
+	}
+
+	duplicateDomain := "project-b.test"
+	if _, err := service.Update(firstSite.ID, UpdateInput{Domain: &duplicateDomain}); err == nil {
+		t.Fatal("expected duplicate domain to fail")
+	}
+
+	emptyName := ""
+	if _, err := service.Update(firstSite.ID, UpdateInput{Name: &emptyName}); err == nil {
+		t.Fatal("expected empty name to fail")
+	}
+
+	missingRoot := filepath.Join(paths.HomeDir, "missing")
+	if _, err := service.Update(firstSite.ID, UpdateInput{RootPath: &missingRoot}); err == nil {
+		t.Fatal("expected missing root to fail")
+	}
+}
+
 func tempPaths(t *testing.T) state.Paths {
 	t.Helper()
 

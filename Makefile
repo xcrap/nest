@@ -1,6 +1,6 @@
 SHELL := /bin/zsh
 
-.PHONY: bootstrap dev run-daemon build test doctor package desktop-dev services-start services-stop
+.PHONY: bootstrap dev run-daemon build test doctor package release desktop-dev services-start services-stop
 
 bootstrap:
 	./scripts/bootstrap-macos.sh
@@ -41,3 +41,9 @@ package:
 	rm -rf ./Nest.app
 	cp -R ./desktop/release/mac-arm64/Nest.app ./Nest.app
 	rm -rf ./desktop/dist/mac-arm64/Nest.app
+
+release:
+	go build -o ./bin/nestd ./daemon/cmd/nestd
+	go build -o ./bin/nestctl ./daemon/cmd/nestctl
+	go build -o ./bin/nesthelper ./helper/cmd/nesthelper
+	npm --workspace desktop run release

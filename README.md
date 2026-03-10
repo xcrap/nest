@@ -9,6 +9,7 @@ If you are using Nest as an app, start here:
 If you are coding on Nest itself, start here:
 
 - [Developer Setup](docs/setup-and-run.md)
+- [Release Process](docs/releasing.md)
 
 ## User View
 

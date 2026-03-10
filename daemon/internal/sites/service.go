@@ -115,16 +115,40 @@ func (s *Service) Update(id string, input UpdateInput) (config.Site, error) {
 	}
 
 	if input.Name != nil {
-		sites[index].Name = strings.TrimSpace(*input.Name)
+		name := strings.TrimSpace(*input.Name)
+		if name == "" {
+			return config.Site{}, errors.New("site name is required")
+		}
+		sites[index].Name = name
 	}
 	if input.Domain != nil {
-		sites[index].Domain = strings.ToLower(strings.TrimSpace(*input.Domain))
+		domain := strings.ToLower(strings.TrimSpace(*input.Domain))
+		if domain == "" {
+			return config.Site{}, errors.New("domain is required")
+		}
+		for i, existing := range sites {
+			if i != index && existing.Domain == domain {
+				return config.Site{}, errors.New("domain already exists")
+			}
+		}
+		sites[index].Domain = domain
 	}
 	if input.RootPath != nil {
-		sites[index].RootPath = strings.TrimSpace(*input.RootPath)
+		rootPath := strings.TrimSpace(*input.RootPath)
+		if rootPath == "" {
+			return config.Site{}, errors.New("root path is required")
+		}
+		if _, err := os.Stat(rootPath); err != nil {
+			return config.Site{}, err
+		}
+		sites[index].RootPath = rootPath
 	}
 	if input.PHPVersion != nil {
-		sites[index].PHPVersion = strings.TrimSpace(*input.PHPVersion)
+		phpVersion := strings.TrimSpace(*input.PHPVersion)
+		if phpVersion == "" {
+			return config.Site{}, errors.New("php version is required")
+		}
+		sites[index].PHPVersion = phpVersion
 	}
 	if input.HTTPSEnabled != nil {
 		sites[index].HTTPSEnabled = *input.HTTPSEnabled

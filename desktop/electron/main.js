@@ -1,10 +1,9 @@
-import { app, BrowserWindow, ipcMain } from "electron";
-import { execFile } from "node:child_process";
-import http from "node:http";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -18,6 +17,11 @@ let daemonProcess;
 
 app.whenReady().then(async () => {
   ipcMain.handle("daemon:request", async (_event, request) => requestDaemon(request));
+  ipcMain.handle("dialog:pick-directory", handlePickDirectory);
+  ipcMain.handle("app:get-meta", () => getAppMeta());
+  ipcMain.handle("updates:check", checkForUpdates);
+  ipcMain.handle("shell:open-external", async (_event, url) => shell.openExternal(url));
+
   await ensureDaemonStarted();
   await createWindow();
 });
@@ -92,11 +96,12 @@ async function requestDaemon({ method, route, body }) {
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1120,
-    minHeight: 720,
-    backgroundColor: "#f4efe4",
+    width: 1520,
+    height: 980,
+    minWidth: 1240,
+    minHeight: 780,
+    backgroundColor: "#f8fafc",
+    titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -114,24 +119,6 @@ async function createWindow() {
     mainWindow.webContents.on("render-process-gone", (_event, details) => {
       console.error("[nest] render-process-gone", details);
     });
-    mainWindow.webContents.on("did-finish-load", () => {
-      console.error("[nest] did-finish-load", mainWindow.webContents.getURL());
-      setTimeout(async () => {
-        try {
-          const snapshot = await mainWindow.webContents.executeJavaScript(`
-            ({
-              hasNestAPI: typeof window.nestAPI !== "undefined",
-              bodyText: document.body.innerText.slice(0, 200),
-              rootHTML: document.getElementById("root")?.innerHTML.slice(0, 500) || "",
-              documentHTML: document.documentElement.outerHTML.slice(0, 500)
-            })
-          `);
-          console.error("[nest] renderer-snapshot", snapshot);
-        } catch (error) {
-          console.error("[nest] renderer-snapshot-error", error);
-        }
-      }, 1000);
-    });
   }
 
   if (isDev) {
@@ -143,6 +130,105 @@ async function createWindow() {
   if (process.env.NEST_DEBUG === "1") {
     mainWindow.webContents.openDevTools({ mode: "detach" });
   }
+}
+
+function handlePickDirectory() {
+  return dialog
+    .showOpenDialog(mainWindow, {
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "Choose folder"
+    })
+    .then((result) => (result.canceled ? null : result.filePaths[0]));
+}
+
+function getAppMeta() {
+  return {
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+    releaseFeedConfigured: Boolean(resolveReleaseRepository())
+  };
+}
+
+async function checkForUpdates() {
+  const repository = resolveReleaseRepository();
+  if (!repository) {
+    return {
+      configured: false,
+      status: "unavailable",
+      message: "Set NEST_GITHUB_REPOSITORY to enable GitHub release checks for this build."
+    };
+  }
+
+  const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "Nest"
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Release check failed with ${response.status}`);
+  }
+
+  const release = await response.json();
+  const latestVersion = normalizeVersion(release.tag_name || release.name || app.getVersion());
+  const currentVersion = normalizeVersion(app.getVersion());
+  const asset = pickReleaseAsset(release.assets || []);
+
+  return {
+    configured: true,
+    status: compareVersions(latestVersion, currentVersion) > 0 ? "available" : "current",
+    currentVersion,
+    latestVersion,
+    publishedAt: release.published_at,
+    notes: release.body || "",
+    htmlUrl: release.html_url,
+    asset: asset
+      ? {
+          name: asset.name,
+          url: asset.browser_download_url
+        }
+      : null
+  };
+}
+
+function resolveReleaseRepository() {
+  return process.env.NEST_GITHUB_REPOSITORY || "xcrap/nest";
+}
+
+function pickReleaseAsset(assets) {
+  const lowerArch = process.arch.toLowerCase();
+  const candidates = assets.filter((asset) => /\.(dmg|zip)$/i.test(asset.name || ""));
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return (
+    candidates.find((asset) => asset.name.toLowerCase().includes(lowerArch) && asset.name.toLowerCase().endsWith(".dmg")) ||
+    candidates.find((asset) => asset.name.toLowerCase().endsWith(".dmg")) ||
+    candidates.find((asset) => asset.name.toLowerCase().includes(lowerArch)) ||
+    candidates[0]
+  );
+}
+
+function normalizeVersion(value) {
+  return String(value || "0.0.0").replace(/^v/, "");
+}
+
+function compareVersions(leftVersion, rightVersion) {
+  const left = normalizeVersion(leftVersion).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const right = normalizeVersion(rightVersion).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(left.length, right.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const diff = (left[index] || 0) - (right[index] || 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+
+  return 0;
 }
 
 function runPrivilegedHelper(...args) {
