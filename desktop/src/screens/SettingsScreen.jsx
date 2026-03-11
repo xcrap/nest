@@ -2,7 +2,7 @@ import { DownloadCloud, Github, RefreshCw, ShieldCheck, Stethoscope, TerminalSqu
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
 import { formatRelativeDate } from "../lib/utils";
 
@@ -15,26 +15,25 @@ const doctorVariant = {
 export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appMeta, updateState, onCheckUpdates, onOpenUpdate }) {
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Machine bootstrap</CardTitle>
-            <CardDescription>Run the one-time macOS steps that let `.test` domains and local TLS behave like first-class sites.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3">
             <ActionRow
               icon={TerminalSquare}
               title="Install .test routing"
-              body="Creates the resolver and local forwarding required for `.test` domains on this Mac."
-              action={<Button onClick={onBootstrap}>Run bootstrap</Button>}
+              body="Creates resolver and forwarding for .test domains."
+              action={<Button size="sm" onClick={onBootstrap}>Run bootstrap</Button>}
             />
             <ActionRow
               icon={ShieldCheck}
               title="Trust local HTTPS"
-              body="Adds the local Caddy CA to your login keychain so browsers trust site certificates."
+              body="Adds local CA to your keychain for trusted certificates."
               action={
-                <Button variant="secondary" onClick={onTrustLocalCA}>
-                  Trust certificates
+                <Button size="sm" variant="outline" onClick={onTrustLocalCA}>
+                  Trust CA
                 </Button>
               }
             />
@@ -43,60 +42,52 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
 
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <CardTitle>App release</CardTitle>
-                <CardDescription>Track build version, release source, and downloadable updates.</CardDescription>
-              </div>
+            <div className="flex items-center justify-between">
+              <CardTitle>Release</CardTitle>
               <Badge variant="accent">v{appMeta.version}</Badge>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-600">
-              <ReleaseMeta label="Current version" value={`v${appMeta.version}`} />
-              <ReleaseMeta label="Build type" value={appMeta.packaged ? "Packaged app" : "Development build"} />
-              <ReleaseMeta label="Platform" value={`${appMeta.platform} ${appMeta.arch}`} />
+          <CardContent className="space-y-3">
+            <div className="space-y-1.5 rounded-md border border-zinc-100 bg-zinc-50 p-3 text-[13px]">
+              <MetaRow label="Version" value={`v${appMeta.version}`} />
+              <MetaRow label="Build" value={appMeta.packaged ? "Packaged" : "Development"} />
+              <MetaRow label="Platform" value={`${appMeta.platform} ${appMeta.arch}`} />
             </div>
             <Separator />
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-slate-950">Update feed</p>
-                  <p className="text-sm text-slate-500">
-                    {updateState.message || (appMeta.releaseFeedConfigured ? "Check GitHub Releases for the latest DMG." : "Release feed is not configured yet.")}
-                  </p>
-                </div>
-                <Button variant="outline" onClick={onCheckUpdates}>
-                  <RefreshCw className="h-4 w-4" />
-                  Check
-                </Button>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-zinc-900">Updates</p>
+                <p className="text-[13px] text-zinc-500">
+                  {updateState.message || "Check for new releases."}
+                </p>
               </div>
-              {updateState.latestVersion ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
-                  <p className="font-medium text-slate-950">Latest release</p>
-                  <p className="mt-1">v{updateState.latestVersion}</p>
-                  {updateState.publishedAt ? <p className="mt-1 text-xs text-slate-400">Published {formatRelativeDate(updateState.publishedAt)}</p> : null}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {updateState.asset?.url ? (
-                      <Button onClick={() => onOpenUpdate(updateState.asset.url)}>
-                        <DownloadCloud className="h-4 w-4" />
-                        Download {updateState.asset.name}
-                      </Button>
-                    ) : null}
-                    {updateState.htmlUrl ? (
-                      <Button variant="secondary" onClick={() => onOpenUpdate(updateState.htmlUrl)}>
-                        <Github className="h-4 w-4" />
-                        Open release
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-              <p className="text-xs leading-5 text-slate-400">
-                Nest can already check GitHub Releases and open the matching DMG or ZIP. Fully automatic in-place updating on
-                macOS should be enabled only after the app is signed and notarized.
-              </p>
+              <Button size="sm" variant="outline" onClick={onCheckUpdates}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Check
+              </Button>
             </div>
+            {updateState.latestVersion && (
+              <div className="rounded-md border border-zinc-200 bg-white p-3 text-[13px]">
+                <p className="font-medium text-zinc-900">v{updateState.latestVersion}</p>
+                {updateState.publishedAt && (
+                  <p className="text-xs text-zinc-400">{formatRelativeDate(updateState.publishedAt)}</p>
+                )}
+                <div className="mt-2 flex gap-2">
+                  {updateState.asset?.url && (
+                    <Button size="sm" onClick={() => onOpenUpdate(updateState.asset.url)}>
+                      <DownloadCloud className="h-3.5 w-3.5" />
+                      Download
+                    </Button>
+                  )}
+                  {updateState.htmlUrl && (
+                    <Button size="sm" variant="outline" onClick={() => onOpenUpdate(updateState.htmlUrl)}>
+                      <Github className="h-3.5 w-3.5" />
+                      Release
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -104,21 +95,23 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
       <Card>
         <CardHeader>
           <CardTitle>Doctor checks</CardTitle>
-          <CardDescription>Everything Nest can currently validate about the local stack.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3">
+        <CardContent className="space-y-2">
           {doctorChecks.map((check) => (
-            <article className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4" key={check.id}>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Stethoscope className="h-4 w-4 text-slate-400" />
-                  <p className="text-sm font-semibold text-slate-950">{check.id}</p>
+            <div
+              key={check.id}
+              className="flex items-start justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3"
+            >
+              <div className="min-w-0 space-y-0.5">
+                <div className="flex items-center gap-1.5">
+                  <Stethoscope className="h-3.5 w-3.5 text-zinc-400" />
+                  <span className="text-sm font-medium text-zinc-900">{check.id}</span>
                 </div>
-                <p className="text-sm text-slate-600">{check.message}</p>
-                {check.fixHint ? <p className="text-xs text-slate-500">{check.fixHint}</p> : null}
+                <p className="text-[13px] text-zinc-500">{check.message}</p>
+                {check.fixHint && <p className="text-xs text-zinc-400">{check.fixHint}</p>}
               </div>
               <Badge variant={doctorVariant[check.status] || "default"}>{check.status}</Badge>
-            </article>
+            </div>
           ))}
         </CardContent>
       </Card>
@@ -128,26 +121,26 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
 
 function ActionRow({ icon: Icon, title, body, action }) {
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white text-slate-700 shadow-sm ring-1 ring-slate-200">
-          <Icon className="h-5 w-5" />
+    <div className="flex items-center justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3">
+      <div className="flex items-center gap-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-600">
+          <Icon className="h-4 w-4" />
         </div>
         <div>
-          <p className="text-sm font-semibold text-slate-950">{title}</p>
-          <p className="mt-1 text-sm text-slate-600">{body}</p>
+          <p className="text-sm font-medium text-zinc-900">{title}</p>
+          <p className="text-[13px] text-zinc-500">{body}</p>
         </div>
       </div>
-      <div>{action}</div>
+      {action}
     </div>
   );
 }
 
-function ReleaseMeta({ label, value }) {
+function MetaRow({ label, value }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-slate-500">{label}</span>
-      <span className="font-medium text-slate-950">{value}</span>
+      <span className="text-zinc-500">{label}</span>
+      <span className="font-medium text-zinc-900">{value}</span>
     </div>
   );
 }

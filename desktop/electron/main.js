@@ -100,7 +100,7 @@ async function createWindow() {
     height: 980,
     minWidth: 1240,
     minHeight: 780,
-    backgroundColor: "#f8fafc",
+    backgroundColor: "#fafafa",
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),

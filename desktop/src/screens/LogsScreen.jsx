@@ -1,34 +1,24 @@
-import { FileText, RefreshCw } from "lucide-react";
+import { FileText } from "lucide-react";
 
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Card } from "../components/ui/card";
 import { ScrollArea } from "../components/ui/scroll-area";
 
-export function LogsScreen({ content, onRefresh }) {
+export function LogsScreen({ content }) {
   return (
-    <Card className="overflow-hidden">
-      <CardHeader className="border-b border-slate-200/80">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="space-y-1">
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5 text-slate-500" />
-              Runtime logs
-            </CardTitle>
-            <CardDescription>Live stdout and stderr written by FrankenPHP.</CardDescription>
-          </div>
-          <Button variant="secondary" onClick={onRefresh}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="p-0">
-        <ScrollArea className="h-[680px]">
-          <pre className="m-0 min-h-[680px] whitespace-pre-wrap bg-slate-950 px-6 py-5 font-mono text-sm leading-6 text-slate-200">
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <FileText className="h-4 w-4 text-zinc-400" />
+        <h2 className="text-lg font-semibold text-zinc-900">Runtime logs</h2>
+        <span className="text-sm text-zinc-400">FrankenPHP stdout / stderr</span>
+      </div>
+
+      <Card className="overflow-hidden">
+        <ScrollArea className="h-[calc(100vh-200px)]">
+          <pre className="min-h-[400px] whitespace-pre-wrap bg-zinc-950 px-5 py-4 font-mono text-[13px] leading-relaxed text-zinc-300">
             {content || "No logs recorded yet."}
           </pre>
         </ScrollArea>
-      </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }

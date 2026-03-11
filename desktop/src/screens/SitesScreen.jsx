@@ -3,7 +3,7 @@ import { ExternalLink, FolderSearch2, Pencil, Plus, Power, PowerOff, Shield, Tra
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Card, CardContent } from "../components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -33,9 +33,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const phpOptions = useMemo(() => {
-    if (versions.length > 0) {
-      return versions;
-    }
+    if (versions.length > 0) return versions;
     return [{ version: "8.5", installed: false, active: false, path: "" }];
   }, [versions]);
 
@@ -43,7 +41,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
     setEditingSiteId(null);
     setForm({
       ...defaultForm,
-      phpVersion: phpOptions.find((version) => version.active)?.version || phpOptions[0]?.version || "8.5"
+      phpVersion: phpOptions.find((v) => v.active)?.version || phpOptions[0]?.version || "8.5"
     });
     setDialogOpen(true);
   };
@@ -79,100 +77,77 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
 
   const pickDirectory = async () => {
     const path = await onPickDirectory();
-    if (path) {
-      setForm((current) => ({ ...current, rootPath: path }));
-    }
+    if (path) setForm((current) => ({ ...current, rootPath: path }));
   };
 
   const deleteSite = async (site) => {
-    if (!window.confirm(`Delete ${site.domain}?`)) {
-      return;
-    }
+    if (!window.confirm(`Delete ${site.domain}?`)) return;
     await onDelete(site.id);
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-zinc-900">Sites</h2>
+        <Button size="sm" onClick={openCreate}>
+          <Plus className="h-3.5 w-3.5" />
+          Add site
+        </Button>
+      </div>
+
+      {sites.length === 0 && (
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-zinc-400">
+            No sites yet. Add your first project to get started.
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
-        <CardContent className="flex flex-col gap-5 px-6 py-6 lg:flex-row lg:items-end lg:justify-between lg:px-8">
-          <div className="space-y-2">
-            <Badge variant="accent">Sites</Badge>
-            <h2 className="text-3xl font-semibold tracking-tight text-slate-950">Map projects to clean local domains.</h2>
-            <p className="max-w-2xl text-sm leading-6 text-slate-600">
-              Register a project root, pick the active PHP runtime, and edit site settings without touching config files.
-            </p>
-          </div>
-          <Button onClick={openCreate}>
-            <Plus className="h-4 w-4" />
-            Add website
-          </Button>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        {sites.length === 0 ? (
-          <Card className="xl:col-span-2">
-            <CardContent className="px-6 py-16 text-center text-sm text-slate-500">
-              No websites yet. Add your first project and Nest will generate routing and TLS around it.
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {sites.map((site) => (
-          <Card key={site.id} className="border-slate-200/90">
-            <CardHeader className="gap-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <CardTitle className="text-xl">{site.name}</CardTitle>
-                  <CardDescription className="text-base text-slate-500">{site.domain}</CardDescription>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant={site.status === "running" ? "success" : "default"}>{site.status}</Badge>
-                  <Badge variant="accent">PHP {site.phpVersion}</Badge>
-                  <Badge variant={site.httpsEnabled ? "success" : "warning"}>{site.httpsEnabled ? "HTTPS" : "HTTP"}</Badge>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-600">
-                <p className="font-medium text-slate-900">Project root</p>
-                <p className="mt-2 break-all">{site.rootPath}</p>
+        <div className="divide-y divide-zinc-100">
+          {sites.map((site) => (
+            <div key={site.id} className="flex items-center gap-4 px-4 py-3">
+              <div className="w-36 min-w-0 shrink-0">
+                <p className="truncate text-sm font-medium text-zinc-900">{site.name}</p>
+                <p className="truncate text-[13px] text-zinc-400">{site.domain}</p>
               </div>
 
-              <div className="flex flex-wrap gap-2">
+              <p className="min-w-0 flex-1 truncate rounded bg-zinc-50 px-2.5 py-1 font-mono text-xs text-zinc-500">
+                {site.rootPath}
+              </p>
+
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Badge variant={site.status === "running" ? "success" : "default"}>{site.status}</Badge>
+                <Badge variant="accent">PHP {site.phpVersion}</Badge>
+                <Badge variant={site.httpsEnabled ? "success" : "warning"}>
+                  {site.httpsEnabled ? "HTTPS" : "HTTP"}
+                </Badge>
+              </div>
+
+              <div className="flex shrink-0 items-center gap-0.5">
                 {site.status === "running" ? (
-                  <Button variant="secondary" onClick={() => onStop(site.id)}>
-                    <PowerOff className="h-4 w-4" />
-                    Stop
+                  <Button size="iconSm" variant="ghost" onClick={() => onStop(site.id)} title="Stop">
+                    <PowerOff className="h-3.5 w-3.5" />
                   </Button>
                 ) : (
-                  <Button onClick={() => onStart(site.id)}>
-                    <Power className="h-4 w-4" />
-                    Start
+                  <Button size="iconSm" variant="ghost" onClick={() => onStart(site.id)} title="Start">
+                    <Power className="h-3.5 w-3.5" />
                   </Button>
                 )}
-                <Button variant="outline" onClick={() => openEdit(site)}>
-                  <Pencil className="h-4 w-4" />
-                  Edit
+                <Button size="iconSm" variant="ghost" onClick={() => openEdit(site)} title="Edit">
+                  <Pencil className="h-3.5 w-3.5" />
                 </Button>
-                <Button variant="outline" onClick={() => onOpenUrl(site.httpsEnabled ? `https://${site.domain}` : `http://${site.domain}`)}>
-                  <ExternalLink className="h-4 w-4" />
-                  Open
+                <Button size="iconSm" variant="ghost" onClick={() => onOpenUrl(site.httpsEnabled ? `https://${site.domain}` : `http://${site.domain}`)} title="Open in browser">
+                  <ExternalLink className="h-3.5 w-3.5" />
                 </Button>
-                <Button variant="ghost" onClick={() => deleteSite(site)}>
-                  <Trash2 className="h-4 w-4" />
-                  Delete
+                <Button size="iconSm" variant="ghost" onClick={() => deleteSite(site)} title="Delete">
+                  <Trash2 className="h-3.5 w-3.5 text-zinc-400" />
                 </Button>
               </div>
-
-              <div className="flex items-center justify-between text-xs text-slate-400">
-                <span>Updated {formatRelativeDate(site.updatedAt)}</span>
-                <span>ID {site.id}</span>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       <SiteDialog
         form={form}
@@ -197,82 +172,76 @@ function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPic
     <Dialog open={open} onOpenChange={(nextOpen) => (nextOpen ? null : onClose())}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isEditing ? "Edit website" : "Add website"}</DialogTitle>
-          <DialogDescription>Choose the project folder, domain, runtime, and TLS preference for this site.</DialogDescription>
+          <DialogTitle>{isEditing ? "Edit site" : "Add site"}</DialogTitle>
+          <DialogDescription>Configure the domain, project folder, and runtime.</DialogDescription>
         </DialogHeader>
 
-        <form className="space-y-5" onSubmit={onSubmit}>
-          <div className="grid gap-4 sm:grid-cols-2">
+        <form className="space-y-4" onSubmit={onSubmit}>
+          <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name">
               <Input
                 value={form.name}
-                onChange={(event) => onSetForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Marketing site"
+                onChange={(e) => onSetForm((c) => ({ ...c, name: e.target.value }))}
+                placeholder="My project"
                 required
               />
             </Field>
             <Field label="Domain">
               <Input
                 value={form.domain}
-                onChange={(event) => onSetForm((current) => ({ ...current, domain: event.target.value }))}
-                placeholder="marketing.test"
+                onChange={(e) => onSetForm((c) => ({ ...c, domain: e.target.value }))}
+                placeholder="project.test"
                 required
               />
             </Field>
           </div>
 
           <Field label="Project root">
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <Input
                 className="flex-1"
                 value={form.rootPath}
-                onChange={(event) => onSetForm((current) => ({ ...current, rootPath: event.target.value }))}
+                onChange={(e) => onSetForm((c) => ({ ...c, rootPath: e.target.value }))}
                 placeholder="/Users/you/Sites/project/public"
                 required
               />
-              <Button onClick={onPickDirectory} type="button" variant="secondary">
-                <FolderSearch2 className="h-4 w-4" />
-                Choose folder
+              <Button onClick={onPickDirectory} type="button" variant="outline" size="sm">
+                <FolderSearch2 className="h-3.5 w-3.5" />
+                Browse
               </Button>
             </div>
           </Field>
 
-          <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="grid gap-3 sm:grid-cols-2">
             <Field label="PHP version">
-              <Select value={form.phpVersion} onChange={(event) => onSetForm((current) => ({ ...current, phpVersion: event.target.value }))}>
-                {versions.map((version) => (
-                  <option key={version.version} value={version.version}>
-                    PHP {version.version}
-                    {version.active ? " • active" : ""}
-                    {version.installed ? "" : " • not installed"}
+              <Select value={form.phpVersion} onChange={(e) => onSetForm((c) => ({ ...c, phpVersion: e.target.value }))}>
+                {versions.map((v) => (
+                  <option key={v.version} value={v.version}>
+                    PHP {v.version}{v.active ? " (active)" : ""}{v.installed ? "" : " (not installed)"}
                   </option>
                 ))}
               </Select>
             </Field>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <Label className="flex items-center gap-2 text-slate-900">
-                    <Shield className="h-4 w-4 text-emerald-600" />
-                    HTTPS
-                  </Label>
-                  <p className="mt-1 text-xs text-slate-500">Issue local certificates for this domain.</p>
-                </div>
-                <Switch
-                  checked={form.httpsEnabled}
-                  onCheckedChange={(checked) => onSetForm((current) => ({ ...current, httpsEnabled: checked }))}
-                />
+            <div className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2">
+              <div>
+                <Label className="flex items-center gap-1.5">
+                  <Shield className="h-3.5 w-3.5 text-emerald-600" />
+                  HTTPS
+                </Label>
+                <p className="mt-0.5 text-xs text-zinc-400">Local certificates</p>
               </div>
+              <Switch
+                checked={form.httpsEnabled}
+                onCheckedChange={(checked) => onSetForm((c) => ({ ...c, httpsEnabled: checked }))}
+              />
             </div>
           </div>
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
             <Button type="submit" disabled={isSubmitting}>
-              {isEditing ? "Save changes" : "Create website"}
+              {isEditing ? "Save" : "Create"}
             </Button>
           </DialogFooter>
         </form>
@@ -283,7 +252,7 @@ function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPic
 
 function Field({ label, children }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       <Label>{label}</Label>
       {children}
     </div>

@@ -1,16 +1,8 @@
-import { AlertTriangle, Activity, FolderKanban, RotateCcw, ShieldCheck, Sparkles } from "lucide-react";
+import { Activity, AlertTriangle, FolderKanban, ShieldCheck } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { Separator } from "../components/ui/separator";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { formatRelativeDate } from "../lib/utils";
-
-const statusVariant = {
-  running: "success",
-  stopped: "warning",
-  unknown: "default"
-};
 
 const doctorVariant = {
   pass: "success",
@@ -18,106 +10,72 @@ const doctorVariant = {
   fail: "danger"
 };
 
-export function DashboardScreen({ sites, doctorChecks, serviceStatus, onStartServices, onStopServices, onReloadServices }) {
+export function DashboardScreen({ sites, doctorChecks, serviceStatus }) {
   const runningSites = sites.filter((site) => site.status === "running").length;
   const doctorWarnings = doctorChecks.filter((check) => check.status !== "pass");
   const latestSites = [...sites]
     .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
-    .slice(0, 3);
+    .slice(0, 5);
 
   return (
     <div className="space-y-6">
-      <Card className="overflow-hidden border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.96),rgba(241,245,249,0.88))]">
-        <CardContent className="grid gap-8 px-6 py-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-8 lg:py-8">
-          <div className="space-y-6">
-            <div className="flex flex-wrap items-center gap-3">
-              <Badge variant={statusVariant[serviceStatus] || "default"}>Service {serviceStatus}</Badge>
-              <Badge variant="accent">FrankenPHP + HTTPS</Badge>
-            </div>
-            <div className="space-y-3">
-              <h2 className="max-w-3xl text-4xl font-semibold tracking-tight text-slate-950 lg:text-5xl">
-                Local PHP environments with one control plane.
-              </h2>
-              <p className="max-w-2xl text-base leading-7 text-slate-600">
-                Start the runtime, manage site routing, and keep TLS and shell integration visible from a single dashboard.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <Button onClick={onStartServices}>Start services</Button>
-              <Button variant="secondary" onClick={onReloadServices}>
-                <RotateCcw className="h-4 w-4" />
-                Reload config
-              </Button>
-              <Button variant="outline" onClick={onStopServices}>
-                Stop runtime
-              </Button>
-            </div>
-          </div>
+      <div className="grid grid-cols-4 gap-3">
+        <StatCard icon={Activity} label="Service" value={serviceStatus} />
+        <StatCard icon={FolderKanban} label="Total sites" value={String(sites.length)} />
+        <StatCard icon={FolderKanban} label="Running" value={String(runningSites)} />
+        <StatCard icon={AlertTriangle} label="Alerts" value={String(doctorWarnings.length)} />
+      </div>
 
-          <div className="grid gap-4 rounded-[28px] border border-white/80 bg-slate-950 p-5 text-white shadow-[0_20px_80px_rgba(15,23,42,0.3)]">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm uppercase tracking-[0.24em] text-slate-400">Live state</p>
-                <h3 className="mt-2 text-2xl font-semibold">Nest runtime</h3>
-              </div>
-              <Sparkles className="h-5 w-5 text-sky-300" />
-            </div>
-            <Separator className="bg-white/10" />
-            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-              <StatBlock icon={Activity} label="Runtime" value={serviceStatus} />
-              <StatBlock icon={FolderKanban} label="Running sites" value={String(runningSites)} />
-              <StatBlock icon={AlertTriangle} label="Doctor alerts" value={String(doctorWarnings.length)} />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
+      <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Doctor board</CardTitle>
-            <CardDescription>Everything that still needs attention before the stack is fully ready.</CardDescription>
+            <CardTitle>Doctor checks</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {doctorChecks.length === 0 ? <EmptyState message="No doctor checks reported yet." /> : null}
+          <CardContent className="space-y-2">
+            {doctorChecks.length === 0 && (
+              <p className="py-6 text-center text-sm text-zinc-400">No checks reported yet.</p>
+            )}
             {doctorChecks.map((check) => (
-              <article
-                className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4"
+              <div
                 key={check.id}
+                className="flex items-start justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3"
               >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-slate-400" />
-                    <p className="text-sm font-semibold text-slate-950">{check.id}</p>
+                <div className="min-w-0 space-y-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck className="h-3.5 w-3.5 text-zinc-400" />
+                    <span className="text-sm font-medium text-zinc-900">{check.id}</span>
                   </div>
-                  <p className="text-sm text-slate-600">{check.message}</p>
-                  {check.fixHint ? <p className="text-xs text-slate-500">{check.fixHint}</p> : null}
+                  <p className="text-[13px] text-zinc-500">{check.message}</p>
+                  {check.fixHint && <p className="text-xs text-zinc-400">{check.fixHint}</p>}
                 </div>
                 <Badge variant={doctorVariant[check.status] || "default"}>{check.status}</Badge>
-              </article>
+              </div>
             ))}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Recently changed sites</CardTitle>
-            <CardDescription>Quick visibility into the projects you touched last.</CardDescription>
+            <CardTitle>Recent sites</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {latestSites.length === 0 ? <EmptyState message="No sites are registered yet." /> : null}
+          <CardContent className="space-y-2">
+            {latestSites.length === 0 && (
+              <p className="py-6 text-center text-sm text-zinc-400">No sites registered yet.</p>
+            )}
             {latestSites.map((site) => (
-              <article className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm" key={site.id}>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-base font-semibold text-slate-950">{site.name}</p>
-                    <p className="text-sm text-slate-500">{site.domain}</p>
-                  </div>
-                  <Badge variant={site.status === "running" ? "success" : "default"}>{site.status}</Badge>
+              <div
+                key={site.id}
+                className="flex items-center justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-zinc-900">{site.name}</p>
+                  <p className="text-[13px] text-zinc-500">{site.domain}</p>
                 </div>
-                <p className="mt-3 line-clamp-1 text-sm text-slate-600">{site.rootPath}</p>
-                <p className="mt-3 text-xs text-slate-400">Updated {formatRelativeDate(site.updatedAt)}</p>
-              </article>
+                <div className="flex items-center gap-2">
+                  <Badge variant={site.status === "running" ? "success" : "default"}>{site.status}</Badge>
+                  <span className="whitespace-nowrap text-xs text-zinc-400">{formatRelativeDate(site.updatedAt)}</span>
+                </div>
+              </div>
             ))}
           </CardContent>
         </Card>
@@ -126,18 +84,16 @@ export function DashboardScreen({ sites, doctorChecks, serviceStatus, onStartSer
   );
 }
 
-function StatBlock({ icon: Icon, label, value }) {
+function StatCard({ icon: Icon, label, value }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-      <div className="flex items-center gap-2 text-slate-400">
-        <Icon className="h-4 w-4" />
-        <span className="text-xs uppercase tracking-[0.2em]">{label}</span>
+    <Card>
+      <div className="p-4">
+        <div className="flex items-center gap-1.5 text-zinc-500">
+          <Icon className="h-3.5 w-3.5" />
+          <span className="text-xs font-medium">{label}</span>
+        </div>
+        <p className="mt-1.5 text-2xl font-semibold capitalize text-zinc-900">{value}</p>
       </div>
-      <p className="mt-3 text-3xl font-semibold capitalize text-white">{value}</p>
-    </div>
+    </Card>
   );
-}
-
-function EmptyState({ message }) {
-  return <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-8 text-sm text-slate-500">{message}</div>;
 }

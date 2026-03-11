@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { Code2, FileText, Globe2, LayoutDashboard, RefreshCw, Settings2, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Code2, FileText, Globe2, LayoutDashboard, Play, RefreshCw, RotateCcw, Settings2, Square } from "lucide-react";
 
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
-import { Card, CardContent } from "./components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
+import { Separator } from "./components/ui/separator";
 import { api, desktop } from "./lib/api";
+import { cn } from "./lib/utils";
 import { DashboardScreen } from "./screens/DashboardScreen";
 import { LogsScreen } from "./screens/LogsScreen";
 import { PHPVersionsScreen } from "./screens/PHPVersionsScreen";
@@ -13,51 +13,11 @@ import { SettingsScreen } from "./screens/SettingsScreen";
 import { SitesScreen } from "./screens/SitesScreen";
 
 const tabs = [
-  {
-    value: "dashboard",
-    label: "Dashboard",
-    caption: "Service health and doctor status",
-    icon: LayoutDashboard,
-    eyebrow: "Overview",
-    title: "A cleaner control plane for local PHP.",
-    body: "Own site routing, runtime state, TLS setup, and CLI versions from one app."
-  },
-  {
-    value: "sites",
-    label: "Websites",
-    caption: "Create, edit, and route sites",
-    icon: Globe2,
-    eyebrow: "Projects",
-    title: "Manage your domains and project folders.",
-    body: "Each site stays editable from the UI, including its local path, runtime, and HTTPS toggle."
-  },
-  {
-    value: "logs",
-    label: "Logs",
-    caption: "Read runtime output",
-    icon: FileText,
-    eyebrow: "Observability",
-    title: "Inspect runtime output without leaving the app.",
-    body: "FrankenPHP logs stay visible here so failures are easy to diagnose."
-  },
-  {
-    value: "php",
-    label: "PHP Versions",
-    caption: "Install and activate runtimes",
-    icon: Code2,
-    eyebrow: "Runtimes",
-    title: "Switch the machine-wide PHP runtime cleanly.",
-    body: "Nest maintains a stable bin directory and points shell usage at the active runtime."
-  },
-  {
-    value: "settings",
-    label: "Settings",
-    caption: "Bootstrap, doctor, and releases",
-    icon: Settings2,
-    eyebrow: "System",
-    title: "Machine setup, release checks, and repair tools.",
-    body: "Use this screen for `.test` bootstrap, certificate trust, and release management."
-  }
+  { value: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { value: "sites", label: "Sites", icon: Globe2 },
+  { value: "logs", label: "Logs", icon: FileText },
+  { value: "php", label: "PHP", icon: Code2 },
+  { value: "settings", label: "Settings", icon: Settings2 }
 ];
 
 const serviceVariant = {
@@ -87,10 +47,6 @@ export default function App() {
     status: "idle",
     message: "Release checks have not been run yet."
   });
-
-  const currentTab = useMemo(() => tabs.find((tab) => tab.value === activeTab) || tabs[0], [activeTab]);
-  const installedVersions = useMemo(() => versions.filter((version) => version.installed).length, [versions]);
-  const runningSites = useMemo(() => sites.filter((site) => site.status === "running").length, [sites]);
 
   const refresh = async () => {
     try {
@@ -155,96 +111,103 @@ export default function App() {
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[linear-gradient(180deg,#f8fafc_0%,#eef2ff_100%)] text-slate-950">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.12),transparent_22%),radial-gradient(circle_at_85%_80%,rgba(14,165,233,0.14),transparent_18%)]" />
-      <div className="relative mx-auto flex min-h-screen max-w-[1680px] flex-col gap-6 p-4 lg:p-6 xl:flex-row">
-        <Tabs className="grid gap-6 xl:grid-cols-[290px_minmax(0,1fr)] xl:flex-1" orientation="vertical" value={activeTab} onValueChange={setActiveTab}>
-          <aside className="space-y-6 rounded-[32px] border border-white/80 bg-white/60 p-4 shadow-[0_30px_120px_rgba(15,23,42,0.08)] backdrop-blur-xl xl:p-5">
-            <div className="space-y-4 rounded-[28px] bg-slate-950 p-5 text-white shadow-[0_20px_80px_rgba(15,23,42,0.24)]">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.28em] text-slate-400">Nest</p>
-                  <h1 className="mt-2 text-3xl font-semibold tracking-tight">Local PHP</h1>
-                </div>
-                <Sparkles className="h-5 w-5 text-sky-300" />
-              </div>
-              <p className="text-sm leading-6 text-slate-300">
-                A native macOS control panel for websites, runtimes, certificates, and shell integration.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant={serviceVariant[serviceStatus] || "default"}>Service {serviceStatus}</Badge>
-                <Badge variant="accent">v{appMeta.version}</Badge>
-              </div>
-            </div>
+    <div className="flex h-screen flex-col bg-zinc-50 text-zinc-950">
+      {/* Fixed header */}
+      <header
+        className="flex-none border-b border-zinc-200 bg-white"
+        style={{ WebkitAppRegion: "drag" }}
+      >
+        <div
+          className="flex items-center gap-3 pr-4 pb-2.5"
+          style={{ paddingTop: "36px", paddingLeft: "80px" }}
+        >
+          <span className="text-[13px] font-semibold text-zinc-900">Nest</span>
+          <Badge variant={serviceVariant[serviceStatus] || "default"}>{serviceStatus}</Badge>
 
-            <TabsList>
-              {tabs.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.value;
-                return (
-                  <TabsTrigger className="w-full" key={tab.value} value={tab.value}>
-                    <span className="flex items-center gap-3">
-                      <span
-                        className={
-                          isActive
-                            ? "flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-white"
-                            : "flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700"
-                        }
-                      >
-                        <Icon className="h-4 w-4" />
-                      </span>
-                      <span>
-                        <span className="block text-sm font-semibold">{tab.label}</span>
-                        <span className="block text-xs text-slate-400">{tab.caption}</span>
-                      </span>
-                    </span>
-                  </TabsTrigger>
-                );
-              })}
-            </TabsList>
+          <div className="flex-1" />
 
-            <Card className="border-slate-200/90 bg-white/80 shadow-none">
-              <CardContent className="grid gap-4 px-5 py-5">
-                <SidebarStat label="Sites" value={String(sites.length)} />
-                <SidebarStat label="Running" value={String(runningSites)} />
-                <SidebarStat label="Installed PHP" value={String(installedVersions)} />
-              </CardContent>
-            </Card>
-          </aside>
+          <div
+            className="flex items-center gap-1.5"
+            style={{ WebkitAppRegion: "no-drag" }}
+          >
+            {serviceStatus === "running" ? (
+              <Button size="sm" variant="outline" onClick={() => wrap(() => api.stopServices())}>
+                <Square className="h-3 w-3 fill-current" />
+                Stop
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => wrap(() => api.startServices())}>
+                <Play className="h-3 w-3 fill-current" />
+                Start
+              </Button>
+            )}
+            <Separator orientation="vertical" className="mx-0.5 h-4" />
+            <Button
+              size="iconSm"
+              variant="ghost"
+              onClick={() => wrap(() => api.reloadServices())}
+              title="Reload config"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="iconSm"
+              variant="ghost"
+              onClick={refresh}
+              title="Refresh data"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
+            </Button>
+          </div>
+        </div>
+      </header>
 
-          <main className="space-y-6">
-            <header className="rounded-[32px] border border-white/80 bg-white/70 px-6 py-6 shadow-[0_30px_120px_rgba(15,23,42,0.08)] backdrop-blur-xl lg:px-8">
-              <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-                <div className="space-y-3">
-                  <p className="text-xs uppercase tracking-[0.28em] text-slate-400">{currentTab.eyebrow}</p>
-                  <h2 className="max-w-4xl text-4xl font-semibold tracking-tight text-slate-950 lg:text-5xl">{currentTab.title}</h2>
-                  <p className="max-w-2xl text-sm leading-7 text-slate-600">{currentTab.body}</p>
-                </div>
-                <div className="flex flex-wrap gap-3">
-                  <Button variant="secondary" onClick={checkForUpdates}>
-                    Check releases
-                  </Button>
-                  <Button variant="outline" onClick={refresh}>
-                    <RefreshCw className="h-4 w-4" />
-                    {isRefreshing ? "Refreshing..." : "Refresh state"}
-                  </Button>
-                </div>
-              </div>
-              {error ? <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
-            </header>
+      {error && (
+        <div className="flex-none border-b border-red-200 bg-red-50 px-6 py-2 text-[13px] text-red-600">
+          {error}
+        </div>
+      )}
 
-            <TabsContent className="m-0" value="dashboard">
+      {/* Sidebar + Content */}
+      <div className="flex flex-1 overflow-hidden">
+        <aside className="flex w-48 flex-none flex-col border-r border-zinc-200 bg-white p-2">
+          <nav className="space-y-0.5">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              const active = activeTab === tab.value;
+              return (
+                <button
+                  key={tab.value}
+                  onClick={() => setActiveTab(tab.value)}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
+                    active
+                      ? "bg-zinc-100 text-zinc-900"
+                      : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900"
+                  )}
+                >
+                  <Icon className={cn("h-4 w-4", active ? "text-zinc-900" : "text-zinc-400")} />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="mt-auto border-t border-zinc-100 pt-3 pb-1 px-3">
+            <p className="text-[11px] text-zinc-400">v{appMeta.version}</p>
+          </div>
+        </aside>
+
+        <main className="flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-5xl p-6">
+            {activeTab === "dashboard" && (
               <DashboardScreen
                 doctorChecks={doctorChecks}
                 serviceStatus={serviceStatus}
                 sites={sites}
-                onStartServices={() => wrap(() => api.startServices())}
-                onStopServices={() => wrap(() => api.stopServices())}
-                onReloadServices={() => wrap(() => api.reloadServices())}
               />
-            </TabsContent>
-
-            <TabsContent className="m-0" value="sites">
+            )}
+            {activeTab === "sites" && (
               <SitesScreen
                 sites={sites}
                 versions={versions}
@@ -256,21 +219,16 @@ export default function App() {
                 onStop={(id) => wrap(() => api.stopSite(id))}
                 onUpdate={(id, payload) => wrap(() => api.updateSite(id, payload))}
               />
-            </TabsContent>
-
-            <TabsContent className="m-0" value="logs">
-              <LogsScreen content={logs} onRefresh={refresh} />
-            </TabsContent>
-
-            <TabsContent className="m-0" value="php">
+            )}
+            {activeTab === "logs" && <LogsScreen content={logs} />}
+            {activeTab === "php" && (
               <PHPVersionsScreen
                 versions={versions}
                 onInstall={(version) => wrap(() => api.installPHP(version))}
                 onActivate={(version) => wrap(() => api.activatePHP(version))}
               />
-            </TabsContent>
-
-            <TabsContent className="m-0" value="settings">
+            )}
+            {activeTab === "settings" && (
               <SettingsScreen
                 appMeta={appMeta}
                 doctorChecks={doctorChecks}
@@ -280,19 +238,10 @@ export default function App() {
                 onTrustLocalCA={() => wrap(() => api.trustLocalCA())}
                 updateState={updateState}
               />
-            </TabsContent>
-          </main>
-        </Tabs>
+            )}
+          </div>
+        </main>
       </div>
-    </div>
-  );
-}
-
-function SidebarStat({ label, value }) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
-      <span className="text-sm text-slate-500">{label}</span>
-      <span className="text-lg font-semibold text-slate-950">{value}</span>
     </div>
   );
 }
