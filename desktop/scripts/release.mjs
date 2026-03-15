@@ -28,11 +28,8 @@ if (fs.existsSync(dmgPath)) {
 
 run("hdiutil", ["create", "-volname", "Nest", "-srcfolder", appPath, "-ov", "-format", "UDZO", dmgPath]);
 
-const signingIdentity = process.env.CSC_NAME;
-if (signingIdentity) {
-  console.log("Signing DMG...");
-  run("codesign", ["--sign", signingIdentity, "--force", dmgPath]);
-}
+// The .app inside the DMG is already signed and notarized by electron-builder.
+// DMG signing is not required — macOS validates the app bundle signature, not the DMG.
 
 function run(command, args) {
   execFileSync(command, args, {
