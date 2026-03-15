@@ -64,25 +64,25 @@ func handleSite(client *api.Client) {
 		var response []config.Site
 		exitOnError("list sites", client.Do(ctx, "GET", "/sites", nil, &response))
 		writer := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "ID\tDOMAIN\tSTATUS\tROOT")
+		fmt.Fprintln(writer, "ID\tDOMAIN\tSTATUS\tPROJECT_FOLDER\tDOCUMENT_ROOT")
 		for _, site := range response {
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", site.ID, site.Domain, site.Status, site.RootPath)
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", site.ID, site.Domain, site.Status, site.RootPath, site.DocumentRoot)
 		}
 		_ = writer.Flush()
 	case "add":
 		flags := flag.NewFlagSet("site add", flag.ExitOnError)
 		name := flags.String("name", "", "site name")
-		siteType := flags.String("type", "php", "site type: php or laravel")
 		domain := flags.String("domain", "", "site domain")
-		root := flags.String("root", "", "project root (document root is {root}/public)")
+		root := flags.String("root", "", "project folder")
+		documentRoot := flags.String("document-root", "", "document root relative to the project folder (default: public, use . for project folder)")
 		phpVersion := flags.String("php-version", "", "php version")
 		httpsEnabled := flags.Bool("https", true, "enable https")
 		_ = flags.Parse(os.Args[3:])
 		payload := sites.CreateInput{
 			Name:         *name,
-			Type:         *siteType,
 			Domain:       *domain,
 			RootPath:     *root,
+			DocumentRoot: *documentRoot,
 			PHPVersion:   *phpVersion,
 			HTTPSEnabled: *httpsEnabled,
 		}
@@ -293,7 +293,7 @@ func handleBootstrap(application *app.App) {
 func usage() {
 	fmt.Println("nestcli commands:")
 	fmt.Println("  nestcli site list")
-	fmt.Println("  nestcli site add --name NAME --domain DOMAIN --root PATH [--type php|laravel] [--php-version VERSION] [--https=true]")
+	fmt.Println("  nestcli site add --name NAME --domain DOMAIN --root PATH [--document-root public|.|web] [--php-version VERSION] [--https=true]")
 	fmt.Println("  nestcli site remove ID")
 	fmt.Println("  nestcli site start ID")
 	fmt.Println("  nestcli site stop ID")

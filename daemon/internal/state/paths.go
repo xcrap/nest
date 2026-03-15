@@ -156,7 +156,3 @@ func (p Paths) MariaDBAdminSymlinkPath() string {
 func (p Paths) PHPAppSnippetPath() string {
 	return filepath.Join(p.SnippetsDir, "php-app")
 }
-
-func (p Paths) LaravelAppSnippetPath() string {
-	return filepath.Join(p.SnippetsDir, "laravel-app")
-}

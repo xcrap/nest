@@ -8,7 +8,6 @@ import { cn } from "../lib/utils";
 const configFiles = [
   { key: "security", label: "Security", description: "HTTP security headers applied to every site" },
   { key: "php-app", label: "PHP App", description: "Caddy snippet for custom PHP websites" },
-  { key: "laravel-app", label: "Laravel App", description: "Caddy snippet for Laravel projects" },
   { key: "php-ini", label: "php.ini", description: "PHP runtime settings (requires restart)" }
 ];
 

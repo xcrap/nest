@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/xcrap/nest/daemon/internal/app"
+	"github.com/xcrap/nest/daemon/internal/buildinfo"
 	"github.com/xcrap/nest/daemon/internal/sites"
 )
 
@@ -64,6 +65,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/services/stop", s.handleServicesStop)
 	mux.HandleFunc("/services/reload", s.handleServicesReload)
 	mux.HandleFunc("/services/status", s.handleServicesStatus)
+	mux.HandleFunc("/meta", s.handleMeta)
 	mux.HandleFunc("/logs/frankenphp", s.handleFrankenPHPLogs)
 	mux.HandleFunc("/php/versions", s.handlePHPVersions)
 	mux.HandleFunc("/php/versions/install", s.handlePHPInstall)
@@ -222,6 +224,14 @@ func (s *Server) handleServicesStatus(writer http.ResponseWriter, request *http.
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]string{"status": status})
+}
+
+func (s *Server) handleMeta(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(writer, http.StatusOK, buildinfo.Current())
 }
 
 func (s *Server) handleFrankenPHPLogs(writer http.ResponseWriter, request *http.Request) {
@@ -463,10 +473,9 @@ func (s *Server) handleTrustLocalCA(writer http.ResponseWriter, request *http.Re
 
 func (s *Server) configFileMap() map[string]string {
 	return map[string]string{
-		"security":    s.app.Paths.SecurityConfPath,
-		"php-app":     s.app.Paths.PHPAppSnippetPath(),
-		"laravel-app": s.app.Paths.LaravelAppSnippetPath(),
-		"php-ini":     s.app.Paths.PHPIniPath,
+		"security": s.app.Paths.SecurityConfPath,
+		"php-app":  s.app.Paths.PHPAppSnippetPath(),
+		"php-ini":  s.app.Paths.PHPIniPath,
 	}
 }
 

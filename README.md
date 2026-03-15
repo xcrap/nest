@@ -86,7 +86,7 @@ Main commands:
 
 ```bash
 nestcli site list
-nestcli site add --name NAME --domain DOMAIN --root PATH [--type php|laravel] [--php-version VERSION] [--https=true]
+nestcli site add --name NAME --domain DOMAIN --root PATH [--document-root public|.|web] [--php-version VERSION] [--https=true]
 nestcli site remove ID
 nestcli site start ID
 nestcli site stop ID

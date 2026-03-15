@@ -40,17 +40,18 @@ func (s *Store) Ensure() error {
 		}
 	}
 
-	defaults := map[string]string{
-		s.paths.SecurityConfPath:       DefaultSecurityConf,
-		s.paths.PHPIniPath:             DefaultPHPIni,
-		s.paths.PHPAppSnippetPath():    DefaultPHPAppSnippet,
-		s.paths.LaravelAppSnippetPath(): DefaultLaravelAppSnippet,
+	defaults := []struct {
+		path    string
+		content string
+		legacy  []string
+	}{
+		{path: s.paths.SecurityConfPath, content: DefaultSecurityConf},
+		{path: s.paths.PHPIniPath, content: DefaultPHPIni},
+		{path: s.paths.PHPAppSnippetPath(), content: DefaultPHPAppSnippet, legacy: []string{LegacyPHPAppSnippet}},
 	}
-	for path, content := range defaults {
-		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-				return err
-			}
+	for _, file := range defaults {
+		if err := ensureManagedFile(file.path, file.content, file.legacy...); err != nil {
+			return err
 		}
 	}
 
@@ -114,22 +115,20 @@ const DefaultPHPAppSnippet = `(php-app) {
     {args[0]} {
         import ../security.conf
 
-        root * {args[1]}/public
+        root * {args[2]}
 
         @blocked path */.* *.sql *.log *.bak *.env
         respond @blocked 404
 
         encode zstd gzip
 
-        php_server {
-            env PHP_INI_log_errors 1
-        }
+        php_server
         file_server
     }
 }
 `
 
-const DefaultLaravelAppSnippet = `(laravel-app) {
+const LegacyPHPAppSnippet = `(php-app) {
     {args[0]} {
         import ../security.conf
 
@@ -140,7 +139,9 @@ const DefaultLaravelAppSnippet = `(laravel-app) {
 
         encode zstd gzip
 
-        php_server
+        php_server {
+            env PHP_INI_log_errors 1
+        }
         file_server
     }
 }
@@ -170,4 +171,25 @@ func writeJSONFile(path string, value any) error {
 	}
 
 	return os.Rename(tempFile, filepath.Clean(path))
+}
+
+func ensureManagedFile(path, content string, legacyContents ...string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.WriteFile(path, []byte(content), 0o644)
+	}
+	if err != nil {
+		return err
+	}
+
+	current := string(data)
+	if current == content {
+		return nil
+	}
+	for _, legacy := range legacyContents {
+		if current == legacy {
+			return os.WriteFile(path, []byte(content), 0o644)
+		}
+	}
+	return nil
 }

@@ -15,6 +15,7 @@ const daemonPath = process.env.NEST_DAEMON_BIN || resolveBundledBinary("nestd");
 let mainWindow;
 let daemonProcess;
 let daemonStartPromise = null;
+let bundledDaemonMetaPromise = null;
 
 app.whenReady().then(async () => {
   ipcMain.handle("daemon:request", async (_event, request) => requestDaemon(request));
@@ -303,9 +304,8 @@ async function ensureDaemonStarted() {
   if (fs.existsSync(socketPath)) {
     const alive = await pingDaemon().catch(() => false);
     if (alive) {
-      const compatible = await daemonSupportsCurrentAPI().catch(() => false);
-      const expectedBinary = await daemonUsesExpectedBinary().catch(() => false);
-      if (compatible && expectedBinary) {
+      const compatible = await daemonMatchesCurrentBundle().catch(() => false);
+      if (compatible) {
         return;
       }
       await stopDaemonUsingSocket();
@@ -347,16 +347,64 @@ async function daemonUsesExpectedBinary() {
   }
 }
 
-function daemonSupportsCurrentAPI() {
+async function daemonMatchesCurrentBundle() {
+  const [runningMeta, bundledMeta, expectedBinary] = await Promise.all([
+    fetchDaemonMeta(),
+    bundledDaemonMeta(),
+    daemonUsesExpectedBinary().catch(() => false)
+  ]);
+
+  return (
+    Boolean(runningMeta?.version) &&
+    Boolean(runningMeta?.buildId) &&
+    runningMeta.version === bundledMeta.version &&
+    runningMeta.buildId === bundledMeta.buildId &&
+    expectedBinary
+  );
+}
+
+function fetchDaemonMeta() {
   return new Promise((resolve, reject) => {
-    const req = http.request({ method: "GET", socketPath, path: "/mariadb", timeout: 2000 }, (res) => {
-      res.resume();
-      res.on("end", () => resolve(res.statusCode === 200));
+    const req = http.request({ method: "GET", socketPath, path: "/meta", timeout: 2000 }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => {
+        data += chunk;
+      });
+      res.on("end", () => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`Unexpected daemon meta status ${res.statusCode}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(data));
+        } catch (error) {
+          reject(error);
+        }
+      });
     });
     req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(false); });
+    req.on("timeout", () => { req.destroy(); reject(new Error("Timed out reading daemon metadata")); });
     req.end();
   });
+}
+
+function bundledDaemonMeta() {
+  if (!bundledDaemonMetaPromise) {
+    bundledDaemonMetaPromise = new Promise((resolve, reject) => {
+      execFile(daemonPath, ["--meta-json"], (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error((stderr || stdout || error.message).trim()));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout));
+        } catch (parseError) {
+          reject(parseError);
+        }
+      });
+    });
+  }
+  return bundledDaemonMetaPromise;
 }
 
 async function stopDaemonUsingSocket() {

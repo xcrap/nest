@@ -16,13 +16,12 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Select } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
-import { formatRelativeDate } from "../lib/utils";
 
 const defaultForm = {
   name: "",
-  type: "php",
   domain: "",
   rootPath: "",
+  documentRoot: "public",
   phpVersion: "8.5",
   httpsEnabled: true
 };
@@ -38,6 +37,16 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
     return [{ version: "8.5", installed: false, active: false, path: "" }];
   }, [versions]);
 
+  const sortedSites = useMemo(
+    () =>
+      [...sites].sort(
+        (left, right) =>
+          right.name.localeCompare(left.name, undefined, { sensitivity: "base" }) ||
+          right.domain.localeCompare(left.domain, undefined, { sensitivity: "base" })
+      ),
+    [sites]
+  );
+
   const openCreate = () => {
     setEditingSiteId(null);
     setForm({
@@ -51,9 +60,9 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
     setEditingSiteId(site.id);
     setForm({
       name: site.name,
-      type: site.type || "php",
       domain: site.domain,
       rootPath: site.rootPath,
+      documentRoot: site.documentRoot || "public",
       phpVersion: site.phpVersion,
       httpsEnabled: site.httpsEnabled
     });
@@ -97,7 +106,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
         </Button>
       </div>
 
-      {sites.length === 0 && (
+      {sortedSites.length === 0 && (
         <Card>
           <CardContent className="py-12 text-center text-sm text-zinc-400">
             No sites yet. Add your first project to get started.
@@ -107,7 +116,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
 
       <Card>
         <div className="divide-y divide-zinc-100">
-          {sites.map((site) => (
+          {sortedSites.map((site) => (
             <div key={site.id} className="flex items-center gap-3 px-4 py-3">
               <span className={`h-2 w-2 shrink-0 rounded-full ${site.status === "running" ? "bg-emerald-500" : "bg-zinc-300"}`} title={site.status} />
 
@@ -121,9 +130,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
               </p>
 
               <div className="flex shrink-0 items-center gap-1.5">
-                <Badge variant={site.type === "laravel" ? "accent" : "default"}>
-                  {site.type === "laravel" ? "Laravel" : "PHP"}
-                </Badge>
+                <Badge variant="default">PHP</Badge>
                 <Badge variant="accent">PHP {site.phpVersion}</Badge>
                 <Badge variant={site.httpsEnabled ? "success" : "warning"}>
                   {site.httpsEnabled ? "HTTPS" : "HTTP"}
@@ -183,38 +190,32 @@ function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPic
         </DialogHeader>
 
         <form className="space-y-4" onSubmit={onSubmit}>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Name">
               <Input
                 value={form.name}
-                onChange={(e) => onSetForm((c) => ({ ...c, name: e.target.value }))}
+                onChange={(e) => onSetForm((current) => ({ ...current, name: e.target.value }))}
                 placeholder="My project"
                 required
               />
             </Field>
-            <Field label="Type">
-              <Select value={form.type} onChange={(e) => onSetForm((c) => ({ ...c, type: e.target.value }))}>
-                <option value="php">PHP</option>
-                <option value="laravel">Laravel</option>
-              </Select>
-            </Field>
             <Field label="Domain">
               <Input
                 value={form.domain}
-                onChange={(e) => onSetForm((c) => ({ ...c, domain: e.target.value }))}
+                onChange={(e) => onSetForm((current) => ({ ...current, domain: e.target.value }))}
                 placeholder="project.test"
                 required
               />
             </Field>
           </div>
 
-          <Field label="Project root">
+          <Field label="Project folder">
             <div className="flex gap-2">
               <Input
                 className="flex-1"
                 value={form.rootPath}
-                onChange={(e) => onSetForm((c) => ({ ...c, rootPath: e.target.value }))}
-                placeholder="/Users/you/Sites/project/public"
+                onChange={(e) => onSetForm((current) => ({ ...current, rootPath: e.target.value }))}
+                placeholder="/Users/you/Sites/project"
                 required
               />
               <Button onClick={onPickDirectory} type="button" variant="outline" size="sm">
@@ -224,9 +225,19 @@ function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPic
             </div>
           </Field>
 
+          <Field label="Document root">
+            <Input
+              value={form.documentRoot}
+              onChange={(e) => onSetForm((current) => ({ ...current, documentRoot: e.target.value }))}
+              placeholder="public"
+              required
+            />
+            <p className="text-xs text-zinc-400">Use `public` for `/public`, or `.` to serve the project folder directly.</p>
+          </Field>
+
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="PHP version">
-              <Select value={form.phpVersion} onChange={(e) => onSetForm((c) => ({ ...c, phpVersion: e.target.value }))}>
+              <Select value={form.phpVersion} onChange={(e) => onSetForm((current) => ({ ...current, phpVersion: e.target.value }))}>
                 {versions.map((v) => (
                   <option key={v.version} value={v.version}>
                     PHP {v.version}{v.active ? " (active)" : ""}{v.installed ? "" : " (not installed)"}
@@ -245,7 +256,7 @@ function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPic
               </div>
               <Switch
                 checked={form.httpsEnabled}
-                onCheckedChange={(checked) => onSetForm((c) => ({ ...c, httpsEnabled: checked }))}
+                onCheckedChange={(checked) => onSetForm((current) => ({ ...current, httpsEnabled: checked }))}
               />
             </div>
           </div>

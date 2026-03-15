@@ -1,23 +1,27 @@
 SHELL := /bin/zsh
 
+APP_VERSION := $(shell node -p "require('./package.json').version")
+BUILD_ID := $(shell date -u +%Y%m%d%H%M%S)-$(shell git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)
+GO_LDFLAGS := -X github.com/xcrap/nest/daemon/internal/buildinfo.Version=$(APP_VERSION) -X github.com/xcrap/nest/daemon/internal/buildinfo.BuildID=$(BUILD_ID)
+
 .PHONY: bootstrap dev run-daemon build test doctor package release desktop-dev services-start services-stop
 
 bootstrap:
 	./scripts/bootstrap-macos.sh
 
 dev:
-	go run ./daemon/cmd/nestd &
+	go run -ldflags "$(GO_LDFLAGS)" ./daemon/cmd/nestd &
 	npm --workspace desktop run dev
 
 run-daemon:
-	go run ./daemon/cmd/nestd
+	go run -ldflags "$(GO_LDFLAGS)" ./daemon/cmd/nestd
 
 desktop-dev:
 	npm --workspace desktop run dev
 
 build:
-	go build -o ./bin/nestd ./daemon/cmd/nestd
-	go build -o ./bin/nestcli ./daemon/cmd/nestcli
+	go build -ldflags "$(GO_LDFLAGS)" -o ./bin/nestd ./daemon/cmd/nestd
+	go build -ldflags "$(GO_LDFLAGS)" -o ./bin/nestcli ./daemon/cmd/nestcli
 	go build -o ./bin/nesthelper ./helper/cmd/nesthelper
 	npm --workspace desktop run build
 
@@ -34,8 +38,8 @@ services-stop:
 	go run ./daemon/cmd/nestcli services stop
 
 package:
-	go build -o ./bin/nestd ./daemon/cmd/nestd
-	go build -o ./bin/nestcli ./daemon/cmd/nestcli
+	go build -ldflags "$(GO_LDFLAGS)" -o ./bin/nestd ./daemon/cmd/nestd
+	go build -ldflags "$(GO_LDFLAGS)" -o ./bin/nestcli ./daemon/cmd/nestcli
 	go build -o ./bin/nesthelper ./helper/cmd/nesthelper
 	npm --workspace desktop run package
 	rm -rf ./Nest.app
@@ -43,7 +47,7 @@ package:
 	rm -rf ./desktop/dist/mac-arm64/Nest.app
 
 release:
-	go build -o ./bin/nestd ./daemon/cmd/nestd
-	go build -o ./bin/nestcli ./daemon/cmd/nestcli
+	go build -ldflags "$(GO_LDFLAGS)" -o ./bin/nestd ./daemon/cmd/nestd
+	go build -ldflags "$(GO_LDFLAGS)" -o ./bin/nestcli ./daemon/cmd/nestcli
 	go build -o ./bin/nesthelper ./helper/cmd/nesthelper
 	npm --workspace desktop run release

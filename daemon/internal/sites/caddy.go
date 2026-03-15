@@ -2,6 +2,7 @@ package sites
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -40,15 +41,15 @@ func GenerateCaddyfile(sites []config.Site, logPath string) string {
 	}
 
 	for _, site := range runningSites {
-		siteType := site.Type
-		if siteType == "" {
-			siteType = "php-app"
-		} else if siteType == "php" {
-			siteType = "php-app"
-		} else if siteType == "laravel" {
-			siteType = "laravel-app"
+		documentRoot := site.DocumentRoot
+		if strings.TrimSpace(documentRoot) == "" {
+			documentRoot = inferredDocumentRoot(site.RootPath)
 		}
-		builder.WriteString(fmt.Sprintf("import %s %s %s\n", siteType, site.Domain, site.RootPath))
+		documentRootPath := site.RootPath
+		if documentRoot != "." {
+			documentRootPath = filepath.Join(site.RootPath, documentRoot)
+		}
+		builder.WriteString(fmt.Sprintf("import php-app %s %s %s\n", site.Domain, site.RootPath, documentRootPath))
 	}
 
 	return builder.String()

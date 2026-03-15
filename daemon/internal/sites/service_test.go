@@ -17,7 +17,7 @@ func TestCreateAndDeleteSite(t *testing.T) {
 	}
 
 	rootPath := filepath.Join(paths.HomeDir, "project")
-	if err := os.MkdirAll(rootPath, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(rootPath, "public"), 0o755); err != nil {
 		t.Fatalf("mkdir site root: %v", err)
 	}
 
@@ -38,6 +38,9 @@ func TestCreateAndDeleteSite(t *testing.T) {
 	}
 	if len(sitesList) != 1 || sitesList[0].ID != site.ID {
 		t.Fatalf("unexpected sites after create: %+v", sitesList)
+	}
+	if sitesList[0].DocumentRoot != defaultDocumentRoot {
+		t.Fatalf("expected default document root, got %+v", sitesList[0])
 	}
 
 	if err := service.Delete(site.ID); err != nil {
@@ -62,10 +65,10 @@ func TestUpdateValidatesAndPersistsSite(t *testing.T) {
 
 	firstRoot := filepath.Join(paths.HomeDir, "project-a")
 	secondRoot := filepath.Join(paths.HomeDir, "project-b")
-	if err := os.MkdirAll(firstRoot, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(firstRoot, "public"), 0o755); err != nil {
 		t.Fatalf("mkdir first root: %v", err)
 	}
-	if err := os.MkdirAll(secondRoot, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(secondRoot, "public"), 0o755); err != nil {
 		t.Fatalf("mkdir second root: %v", err)
 	}
 
@@ -124,6 +127,34 @@ func TestUpdateValidatesAndPersistsSite(t *testing.T) {
 	missingRoot := filepath.Join(paths.HomeDir, "missing")
 	if _, err := service.Update(firstSite.ID, UpdateInput{RootPath: &missingRoot}); err == nil {
 		t.Fatal("expected missing root to fail")
+	}
+}
+
+func TestCreateSupportsProjectRootDocumentRoot(t *testing.T) {
+	paths := tempPaths(t)
+	store := config.NewStore(paths)
+	if err := store.Ensure(); err != nil {
+		t.Fatalf("ensure store: %v", err)
+	}
+
+	rootPath := filepath.Join(paths.HomeDir, "rooted-project")
+	if err := os.MkdirAll(rootPath, 0o755); err != nil {
+		t.Fatalf("mkdir site root: %v", err)
+	}
+
+	service := NewService(paths, store)
+	site, err := service.Create(CreateInput{
+		Name:         "Rooted Project",
+		Domain:       "rooted.test",
+		RootPath:     rootPath,
+		DocumentRoot: ".",
+		HTTPSEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	if site.DocumentRoot != "." {
+		t.Fatalf("expected document root '.', got %+v", site)
 	}
 }
 

@@ -5,9 +5,9 @@ import "time"
 type Site struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
-	Type         string    `json:"type"`
 	Domain       string    `json:"domain"`
 	RootPath     string    `json:"rootPath"`
+	DocumentRoot string    `json:"documentRoot"`
 	Status       string    `json:"status"`
 	HTTPSEnabled bool      `json:"httpsEnabled"`
 	PHPVersion   string    `json:"phpVersion"`
