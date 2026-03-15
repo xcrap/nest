@@ -16,7 +16,7 @@ if (process.platform !== "darwin") {
 }
 
 run("npm", ["run", "build"]);
-run("npm", ["exec", "electron-builder", "--", "--mac", "dir", "zip"]);
+run("npm", ["exec", "electron-builder", "--", "--mac", "dir", "zip", "--publish", "never"]);
 
 if (!fs.existsSync(appPath)) {
   throw new Error(`Expected packaged app at ${appPath}`);
