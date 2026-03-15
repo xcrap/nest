@@ -14,6 +14,7 @@ const daemonPath = process.env.NEST_DAEMON_BIN || resolveBundledBinary("nestd");
 
 let mainWindow;
 let daemonProcess;
+let daemonStartPromise = null;
 
 app.whenReady().then(async () => {
   ipcMain.handle("daemon:request", async (_event, request) => requestDaemon(request));
@@ -51,12 +52,30 @@ async function requestDaemon({ method, route, body }) {
     return requestDaemon({ method: "POST", route: "/bootstrap/trust-local-ca?skipHelper=1" });
   }
 
-  if (!fs.existsSync(socketPath)) {
-    throw new Error(`Nest daemon socket not found at ${socketPath}. Start nestd first.`);
+  const payload = body ? JSON.stringify(body) : null;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!fs.existsSync(socketPath)) {
+      await ensureDaemonAvailable();
+    }
+
+    try {
+      return await performDaemonRequest({ method, route, payload });
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0 && shouldRetryDaemonRequest(error)) {
+        await ensureDaemonAvailable();
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const payload = body ? JSON.stringify(body) : null;
+  throw lastError ?? new Error("Nest daemon request failed");
+}
 
+function performDaemonRequest({ method, route, payload }) {
   return new Promise((resolve, reject) => {
     const request = http.request(
       {
@@ -98,6 +117,26 @@ async function requestDaemon({ method, route, body }) {
     }
     request.end();
   });
+}
+
+function shouldRetryDaemonRequest(error) {
+  if (!error) {
+    return false;
+  }
+
+  return (
+    ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(error.code) ||
+    /socket not found|socket hang up|connect: no such file or directory|ECONN/i.test(String(error.message || ""))
+  );
+}
+
+function ensureDaemonAvailable() {
+  if (!daemonStartPromise) {
+    daemonStartPromise = ensureDaemonStarted().finally(() => {
+      daemonStartPromise = null;
+    });
+  }
+  return daemonStartPromise;
 }
 
 async function createWindow() {
