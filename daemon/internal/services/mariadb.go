@@ -347,21 +347,40 @@ func (s *MariaDBService) installRelease(ctx context.Context, release dbmeta.Rele
 }
 
 func (s *MariaDBService) syncClientSymlinks() error {
-	symlinks := map[string]string{
+	wrappers := map[string]string{
 		s.paths.MySQLSymlinkPath():        s.paths.MariaDBClientPath(),
 		s.paths.MySQLDumpSymlinkPath():    s.paths.MariaDBDumpPath(),
 		s.paths.MariaDBSymlinkPath():      filepath.Join(s.paths.ActiveMariaDBDir(), "bin", "mariadb"),
 		s.paths.MariaDBAdminSymlinkPath(): s.paths.MariaDBAdminPath(),
 	}
 
-	for linkPath, target := range symlinks {
-		_ = os.Remove(linkPath)
-		if err := os.Symlink(target, linkPath); err != nil {
+	for wrapperPath, target := range wrappers {
+		if err := writeMariaDBClientWrapper(wrapperPath, target, s.paths.MariaDBSocketPath); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func writeMariaDBClientWrapper(wrapperPath, target, socketPath string) error {
+	content := "#!/usr/bin/env bash\n" +
+		"set -euo pipefail\n" +
+		"export MYSQL_UNIX_PORT=" + shellQuote(targetPathValue(socketPath)) + "\n" +
+		"exec " + shellQuote(targetPathValue(target)) + " \"$@\"\n"
+
+	if err := os.RemoveAll(wrapperPath); err != nil {
+		return err
+	}
+	return os.WriteFile(wrapperPath, []byte(content), 0o755)
+}
+
+func targetPathValue(value string) string {
+	return strings.ReplaceAll(value, "\n", "")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func (s *MariaDBService) ensureInitialized(ctx context.Context) error {
