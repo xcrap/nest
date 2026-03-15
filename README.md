@@ -1,42 +1,129 @@
 # Nest
 
-Nest is a macOS-first local PHP development app that replaces Herd with FrankenPHP, local `.test` domains, HTTPS, and a desktop UI.
+Nest is a macOS local PHP development app with a desktop UI, Nest-managed PHP and MariaDB runtimes, local `.test` domains, HTTPS bootstrap, and site management.
 
-If you are using Nest as an app, start here:
+## What You Run
 
-- [User Guide](docs/user-guide.md)
+If you are using Nest as a product, open `Nest.app` in the project root.
 
-If you are coding on Nest itself, start here:
+Typical flow:
 
-- [Developer Setup](docs/setup-and-run.md)
-- [Release Process](docs/releasing.md)
+1. Open `Nest.app`.
+2. Install PHP from the `PHP` screen.
+3. Install MariaDB from the `MariaDB` screen if your project needs a database.
+4. Start services from the header controls.
+5. In `Settings`, run `Install .test Routing` and `Trust Local HTTPS`.
+6. Add sites in `Sites`.
+7. Open `https://your-site.test`.
 
-## User View
+## Managed Runtime Layout
 
-As a user, you should ignore the repo folders. The thing you run is `Nest.app` in the project root.
+Nest manages its own runtime state under:
 
-The end-user flow is:
+- `~/Library/Application Support/Nest`
 
-1. Open `Nest.app` in the project root.
-2. Install PHP from the `PHP Versions` screen.
-3. Start services from the dashboard.
-4. Open `Settings` and run:
-   `Install .test Routing`
-   `Trust Local HTTPS`
-5. Add a site in `Websites`.
-6. Open `https://your-site.test`.
+Important paths:
 
-## Developer View
+- `versions/php`: installed PHP runtimes
+- `versions/mariadb`: installed MariaDB runtimes
+- `data/mariadb`: MariaDB data directory
+- `config/mariadb.cnf`: MariaDB config file
+- `run/mariadb.sock`: MariaDB socket
+- `logs/`: service logs
+- `bin/`: active runtime symlinks and wrappers
 
-Internal folders:
+MariaDB defaults:
 
-- `daemon/`: Go daemon and CLI
-- `desktop/`: Electron + React UI
+- host: `127.0.0.1`
+- port: `3306`
+- user: `root`
+- password: none
+
+## Repository Layout
+
+- `daemon/`: Go daemon, API, services, and `nestcli`
+- `desktop/`: Electron + React desktop app
 - `helper/`: privileged macOS helper
-- `docs/`: user and developer documentation
+- `scripts/`: bootstrap and release support scripts
+- `bin/`: local build outputs
+- `Nest.app`: packaged desktop app copied to the repo root by `make package`
+
+## Local Development
+
+Bootstrap:
+
+```bash
+make bootstrap
+```
+
+Run the daemon and desktop app in development:
+
+```bash
+make dev
+```
+
+Build the binaries and frontend:
+
+```bash
+make build
+```
+
+Run tests:
+
+```bash
+make test
+```
+
+Build a fresh root app bundle:
+
+```bash
+make package
+```
+
+## CLI
+
+Main commands:
+
+```bash
+nestcli site list
+nestcli site add --name NAME --domain DOMAIN --root PATH [--type php|laravel] [--php-version VERSION] [--https=true]
+nestcli site remove ID
+nestcli site start ID
+nestcli site stop ID
+
+nestcli php list
+nestcli php install VERSION
+nestcli php activate VERSION
+
+nestcli mariadb status
+nestcli mariadb install
+nestcli mariadb start
+nestcli mariadb stop
+nestcli mariadb check-updates
+
+nestcli services start
+nestcli services stop
+nestcli services reload
+nestcli services status
+
+nestcli doctor
+nestcli shell integrate --zsh
+nestcli bootstrap test-domain
+sudo nestcli bootstrap trust-local-ca
+```
+
+## Packaging
+
+`make package` builds:
+
+- `bin/nestd`
+- `bin/nestcli`
+- `bin/nesthelper`
+- `desktop/release/mac-arm64/Nest.app`
+- root `./Nest.app`
 
 ## Notes
 
-- MariaDB stays external for v1.
-- Nest should not run at the same time as Herd.
-- The packaged app is currently unsigned.
+- Nest runtime binaries are app-managed and do not require Homebrew runtime packages.
+- The root `Nest.app` in this repo is the main packaged output to test.
+- This repository keeps project documentation in this `README.md`.

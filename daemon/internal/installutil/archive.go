@@ -2,6 +2,7 @@ package installutil
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -111,4 +112,57 @@ func ExtractTarGz(archivePath, destination string) error {
 			}
 		}
 	}
+}
+
+func ExtractZip(archivePath, destination string) error {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	cleanDestination := filepath.Clean(destination)
+	for _, file := range reader.File {
+		target := filepath.Join(cleanDestination, filepath.Clean(file.Name))
+		if !strings.HasPrefix(target, cleanDestination+string(os.PathSeparator)) && target != cleanDestination {
+			return fmt.Errorf("archive entry escapes destination: %s", file.Name)
+		}
+
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, file.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+
+		input, err := file.Open()
+		if err != nil {
+			return err
+		}
+
+		output, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, file.Mode())
+		if err != nil {
+			input.Close()
+			return err
+		}
+
+		if _, err := io.Copy(output, input); err != nil {
+			output.Close()
+			input.Close()
+			return err
+		}
+		if err := output.Close(); err != nil {
+			input.Close()
+			return err
+		}
+		if err := input.Close(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

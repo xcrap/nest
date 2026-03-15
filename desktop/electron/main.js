@@ -264,7 +264,12 @@ async function ensureDaemonStarted() {
   if (fs.existsSync(socketPath)) {
     const alive = await pingDaemon().catch(() => false);
     if (alive) {
-      return;
+      const compatible = await daemonSupportsCurrentAPI().catch(() => false);
+      const expectedBinary = await daemonUsesExpectedBinary().catch(() => false);
+      if (compatible && expectedBinary) {
+        return;
+      }
+      await stopDaemonUsingSocket();
     }
     try { fs.unlinkSync(socketPath); } catch {}
   }
@@ -285,11 +290,111 @@ async function ensureDaemonStarted() {
   await waitForSocket(socketPath, 5000);
 }
 
+async function daemonUsesExpectedBinary() {
+  const pid = await pidForSocket(socketPath);
+  if (!pid) {
+    return false;
+  }
+
+  const actualPath = await executablePathForPid(pid);
+  if (!actualPath) {
+    return false;
+  }
+
+  try {
+    return fs.realpathSync(actualPath) === fs.realpathSync(daemonPath);
+  } catch {
+    return actualPath === daemonPath;
+  }
+}
+
+function daemonSupportsCurrentAPI() {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ method: "GET", socketPath, path: "/mariadb", timeout: 2000 }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode === 200));
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(false); });
+    req.end();
+  });
+}
+
+async function stopDaemonUsingSocket() {
+  const pid = await pidForSocket(socketPath);
+  if (!pid) {
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+
+  const stopped = await waitForProcessExit(pid, 3000);
+  if (!stopped) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+    await waitForProcessExit(pid, 1000);
+  }
+}
+
+function pidForSocket(targetPath) {
+  return new Promise((resolve) => {
+    execFile("lsof", ["-t", "--", targetPath], (error, stdout) => {
+      if (error) {
+        resolve(null);
+        return;
+      }
+      const pid = Number.parseInt(String(stdout).trim().split("\n")[0], 10);
+      resolve(Number.isFinite(pid) ? pid : null);
+    });
+  });
+}
+
+function executablePathForPid(pid) {
+  return new Promise((resolve) => {
+    execFile("lsof", ["-a", "-p", String(pid), "-d", "txt", "-Fn"], (error, stdout) => {
+      if (error) {
+        resolve(null);
+        return;
+      }
+
+      const line = String(stdout)
+        .split("\n")
+        .find((entry) => entry.startsWith("n/"));
+
+      resolve(line ? line.slice(1) : null);
+    });
+  });
+}
+
+function waitForProcessExit(pid, timeoutMs) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        clearInterval(timer);
+        resolve(true);
+        return;
+      }
+
+      if (Date.now() - startedAt > timeoutMs) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 100);
+  });
+}
+
 function pingDaemon() {
   return new Promise((resolve, reject) => {
     const req = http.request({ method: "GET", socketPath, path: "/services/status", timeout: 2000 }, (res) => {
-      let data = "";
-      res.on("data", (chunk) => { data += chunk; });
+      res.resume();
       res.on("end", () => resolve(res.statusCode < 500));
     });
     req.on("error", () => reject(false));

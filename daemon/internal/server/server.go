@@ -68,6 +68,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/php/versions", s.handlePHPVersions)
 	mux.HandleFunc("/php/versions/install", s.handlePHPInstall)
 	mux.HandleFunc("/php/versions/activate", s.handlePHPActivate)
+	mux.HandleFunc("/mariadb", s.handleMariaDBStatus)
+	mux.HandleFunc("/mariadb/check-updates", s.handleMariaDBCheckUpdates)
+	mux.HandleFunc("/mariadb/install", s.handleMariaDBInstall)
+	mux.HandleFunc("/mariadb/start", s.handleMariaDBStart)
+	mux.HandleFunc("/mariadb/stop", s.handleMariaDBStop)
 	mux.HandleFunc("/settings", s.handleSettings)
 	mux.HandleFunc("/doctor", s.handleDoctor)
 	mux.HandleFunc("/bootstrap/test-domain", s.handleBootstrapTestDomain)
@@ -288,6 +293,78 @@ func (s *Server) handlePHPActivate(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "active"})
+}
+
+func (s *Server) handleMariaDBStatus(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := s.app.MariaDB.RuntimeStatus(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
+}
+
+func (s *Server) handleMariaDBCheckUpdates(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := s.app.MariaDB.CheckForUpdates(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
+}
+
+func (s *Server) handleMariaDBInstall(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.app.MariaDB.InstallAsync(); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	status, err := s.app.MariaDB.RuntimeStatus(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, status)
+}
+
+func (s *Server) handleMariaDBStart(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.app.MariaDB.StartAsync(); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	status, err := s.app.MariaDB.RuntimeStatus(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, status)
+}
+
+func (s *Server) handleMariaDBStop(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.app.MariaDB.Stop(); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
 func (s *Server) handleSettings(writer http.ResponseWriter, request *http.Request) {

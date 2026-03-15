@@ -38,12 +38,30 @@ type Settings struct {
 }
 
 type PhpVersion struct {
-	Version          string `json:"version"`
-	FullVersion      string `json:"fullVersion"`
+	Version           string `json:"version"`
+	FullVersion       string `json:"fullVersion"`
 	FrankenPHPVersion string `json:"frankenphpVersion"`
+	Installed         bool   `json:"installed"`
+	Active            bool   `json:"active"`
+	Path              string `json:"path"`
+}
+
+type MariaDBRuntime struct {
 	Installed        bool   `json:"installed"`
-	Active           bool   `json:"active"`
-	Path             string `json:"path"`
+	Status           string `json:"status"`
+	InstalledVersion string `json:"installedVersion"`
+	AvailableVersion string `json:"availableVersion"`
+	UpdateAvailable  bool   `json:"updateAvailable"`
+	BinaryPath       string `json:"binaryPath"`
+	DataDir          string `json:"dataDir"`
+	SocketPath       string `json:"socketPath"`
+	Port             int    `json:"port"`
+	RootUser         string `json:"rootUser"`
+	PasswordlessRoot bool   `json:"passwordlessRoot"`
+	Busy             bool   `json:"busy"`
+	Activity         string `json:"activity"`
+	ActivityMessage  string `json:"activityMessage"`
+	LastError        string `json:"lastError"`
 }
 
 type DoctorCheck struct {

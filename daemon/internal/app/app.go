@@ -25,6 +25,7 @@ type App struct {
 	Sites      *sites.Service
 	Runtime    *runtime.Manager
 	FrankenPHP *services.FrankenPHPService
+	MariaDB    *services.MariaDBService
 	Doctor     *doctor.Service
 	DNS        *dns.Server
 }
@@ -42,6 +43,7 @@ func New() (*App, error) {
 		Sites:      sites.NewService(paths, store),
 		Runtime:    runtime.NewManager(paths, store),
 		FrankenPHP: services.NewFrankenPHPService(paths),
+		MariaDB:    services.NewMariaDBService(paths),
 		Doctor:     doctor.NewService(paths, store),
 		DNS:        dns.NewServer("127.0.0.1:5354"),
 	}
@@ -157,6 +159,14 @@ func (a *App) ensureNestcliSymlink() error {
 	if _, err := os.Stat(candidate); err != nil {
 		return nil
 	}
+	if samePath(candidate, nestcliDst) {
+		return nil
+	}
+	if existingTarget, err := os.Readlink(nestcliDst); err == nil {
+		if samePath(existingTarget, candidate) {
+			return nil
+		}
+	}
 
 	_ = os.Remove(nestcliDst)
 	return os.Symlink(candidate, nestcliDst)
@@ -201,4 +211,16 @@ func ResolveHelperBinaryForCLI() (string, error) {
 	}
 
 	return "", fmt.Errorf("nesthelper binary was not found; build it into ./bin/nesthelper or set NEST_HELPER_BIN")
+}
+
+func samePath(left, right string) bool {
+	leftResolved, leftErr := filepath.EvalSymlinks(left)
+	if leftErr != nil {
+		leftResolved = left
+	}
+	rightResolved, rightErr := filepath.EvalSymlinks(right)
+	if rightErr != nil {
+		rightResolved = right
+	}
+	return filepath.Clean(leftResolved) == filepath.Clean(rightResolved)
 }

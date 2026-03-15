@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Code2, FileText, Globe2, LayoutDashboard, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Square } from "lucide-react";
+import { Code2, Database, FileText, Globe2, LayoutDashboard, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Square } from "lucide-react";
 
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -8,6 +8,7 @@ import { api, desktop } from "./lib/api";
 import { cn } from "./lib/utils";
 import { DashboardScreen } from "./screens/DashboardScreen";
 import { LogsScreen } from "./screens/LogsScreen";
+import { MariaDBScreen } from "./screens/MariaDBScreen";
 import { PHPVersionsScreen } from "./screens/PHPVersionsScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { ConfigScreen } from "./screens/ConfigScreen";
@@ -19,6 +20,7 @@ const tabs = [
   { value: "config", label: "Config", icon: SlidersHorizontal },
   { value: "logs", label: "Logs", icon: FileText },
   { value: "php", label: "PHP", icon: Code2 },
+  { value: "mariadb", label: "MariaDB", icon: Database },
   { value: "settings", label: "Settings", icon: Settings2 }
 ];
 
@@ -34,6 +36,7 @@ export default function App() {
   const [doctorChecks, setDoctorChecks] = useState([]);
   const [logs, setLogs] = useState("");
   const [versions, setVersions] = useState([]);
+  const [mariaDB, setMariaDB] = useState(null);
   const [serviceStatus, setServiceStatus] = useState("unknown");
   const [settings, setSettings] = useState(null);
   const [configs, setConfigs] = useState({});
@@ -56,11 +59,12 @@ export default function App() {
     try {
       setIsRefreshing(true);
       setError("");
-      const [siteData, doctorData, logData, versionData, statusData, settingsData, configData] = await Promise.all([
+      const [siteData, doctorData, logData, versionData, mariaDBData, statusData, settingsData, configData] = await Promise.all([
         api.getSites(),
         api.getDoctor(),
         api.getLogs(),
         api.getPHPVersions(),
+        api.getMariaDB(),
         api.getServiceStatus(),
         api.getSettings(),
         api.getConfigFiles()
@@ -69,6 +73,7 @@ export default function App() {
       setDoctorChecks(doctorData);
       setLogs(logData.content);
       setVersions(versionData);
+      setMariaDB(mariaDBData);
       setServiceStatus(statusData.status);
       setSettings(settingsData);
       setConfigs(configData);
@@ -83,6 +88,18 @@ export default function App() {
     void refresh();
     void desktop.getMeta().then(setAppMeta).catch(() => null);
   }, []);
+
+  useEffect(() => {
+    if (!mariaDB?.busy) {
+      return undefined;
+    }
+
+    const interval = window.setInterval(() => {
+      void refresh();
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [mariaDB?.busy]);
 
   const wrap = async (action) => {
     try {
@@ -245,6 +262,18 @@ export default function App() {
                 versions={versions}
                 onInstall={(version) => wrap(() => api.installPHP(version))}
                 onActivate={(version) => wrap(() => api.activatePHP(version))}
+              />
+            )}
+            {activeTab === "mariadb" && (
+              <MariaDBScreen
+                runtime={mariaDB}
+                onInstall={() => wrap(() => api.installMariaDB())}
+                onStart={() => wrap(() => api.startMariaDB())}
+                onStop={() => wrap(() => api.stopMariaDB())}
+                onCheckUpdates={async () => {
+                  const runtime = await api.checkMariaDBUpdates();
+                  setMariaDB(runtime);
+                }}
               />
             )}
             {activeTab === "settings" && (

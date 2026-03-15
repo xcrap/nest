@@ -24,7 +24,7 @@ func New(socketPath string) *Client {
 
 	return &Client{
 		httpClient: &http.Client{
-			Timeout:   10 * time.Second,
+			Timeout:   5 * time.Minute,
 			Transport: transport,
 		},
 	}

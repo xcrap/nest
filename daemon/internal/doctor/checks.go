@@ -39,7 +39,6 @@ func (s *Service) Run() ([]config.DoctorCheck, error) {
 		s.resolverCheck(settings),
 		s.portsCheck(settings),
 		s.frankenphpCheck(),
-		s.herdCheck(),
 	}
 
 	return checks, nil
@@ -167,23 +166,6 @@ func (s *Service) frankenphpCheck() config.DoctorCheck {
 		ID:      "frankenphp-binary",
 		Status:  "pass",
 		Message: "FrankenPHP binary is installed.",
-		FixHint: "",
-	}
-}
-
-func (s *Service) herdCheck() config.DoctorCheck {
-	if s.processRunning("Herd") || s.processRunning("herd") {
-		return config.DoctorCheck{
-			ID:      "herd-conflict",
-			Status:  "warn",
-			Message: "Herd appears to be running and may conflict with Nest.",
-			FixHint: "Quit Herd completely before starting Nest-managed sites.",
-		}
-	}
-	return config.DoctorCheck{
-		ID:      "herd-conflict",
-		Status:  "pass",
-		Message: "No running Herd process was detected.",
 		FixHint: "",
 	}
 }

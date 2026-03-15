@@ -34,6 +34,8 @@ func main() {
 		handleSite(client)
 	case "php":
 		handlePHP(client)
+	case "mariadb":
+		handleMariaDB(client)
 	case "services":
 		handleServices(client)
 	case "doctor":
@@ -101,6 +103,67 @@ func handleSite(client *api.Client) {
 		var response config.Site
 		exitOnError("stop site", client.Do(ctx, "POST", "/sites/"+os.Args[3]+"/stop", nil, &response))
 		fmt.Printf("site %s stopped\n", response.Domain)
+	default:
+		usage()
+		os.Exit(1)
+	}
+}
+
+func handleMariaDB(client *api.Client) {
+	if len(os.Args) < 3 {
+		usage()
+		os.Exit(1)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	switch os.Args[2] {
+	case "status", "info":
+		var response config.MariaDBRuntime
+		exitOnError("mariadb status", client.Do(ctx, "GET", "/mariadb", nil, &response))
+		writer := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+		fmt.Fprintln(writer, "INSTALLED\tSTATUS\tINSTALLED_VERSION\tAVAILABLE_VERSION\tUPDATE\tBUSY\tACTIVITY\tDATA_DIR")
+		fmt.Fprintf(
+			writer,
+			"%t\t%s\t%s\t%s\t%t\t%t\t%s\t%s\n",
+			response.Installed,
+			response.Status,
+			response.InstalledVersion,
+			response.AvailableVersion,
+			response.UpdateAvailable,
+			response.Busy,
+			response.Activity,
+			response.DataDir,
+		)
+		_ = writer.Flush()
+		if response.ActivityMessage != "" {
+			fmt.Println("message:", response.ActivityMessage)
+		}
+		if response.LastError != "" {
+			fmt.Println("last_error:", response.LastError)
+		}
+	case "install":
+		var response config.MariaDBRuntime
+		exitOnError("install mariadb", client.Do(ctx, "POST", "/mariadb/install", nil, &response))
+		fmt.Println("mariadb install requested")
+		if response.ActivityMessage != "" {
+			fmt.Println(response.ActivityMessage)
+		}
+	case "start":
+		var response config.MariaDBRuntime
+		exitOnError("start mariadb", client.Do(ctx, "POST", "/mariadb/start", nil, &response))
+		fmt.Println("mariadb start requested")
+		if response.ActivityMessage != "" {
+			fmt.Println(response.ActivityMessage)
+		}
+	case "stop":
+		exitOnError("stop mariadb", client.Do(ctx, "POST", "/mariadb/stop", nil, nil))
+		fmt.Println("mariadb stopped")
+	case "check-updates":
+		var response config.MariaDBRuntime
+		exitOnError("check mariadb updates", client.Do(ctx, "GET", "/mariadb/check-updates", nil, &response))
+		fmt.Printf("installed=%s available=%s update_available=%t\n", response.InstalledVersion, response.AvailableVersion, response.UpdateAvailable)
 	default:
 		usage()
 		os.Exit(1)
@@ -237,6 +300,7 @@ func usage() {
 	fmt.Println("  nestcli php list")
 	fmt.Println("  nestcli php install VERSION")
 	fmt.Println("  nestcli php activate VERSION")
+	fmt.Println("  nestcli mariadb status|install|start|stop|check-updates")
 	fmt.Println("  nestcli services start|stop|reload|status")
 	fmt.Println("  nestcli doctor")
 	fmt.Println("  nestcli shell integrate --zsh")
