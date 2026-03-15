@@ -108,7 +108,9 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
       <Card>
         <div className="divide-y divide-zinc-100">
           {sites.map((site) => (
-            <div key={site.id} className="flex items-center gap-4 px-4 py-3">
+            <div key={site.id} className="flex items-center gap-3 px-4 py-3">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${site.status === "running" ? "bg-emerald-500" : "bg-zinc-300"}`} title={site.status} />
+
               <div className="w-36 min-w-0 shrink-0">
                 <p className="truncate text-sm font-medium text-zinc-900">{site.name}</p>
                 <p className="truncate text-[13px] text-zinc-400">{site.domain}</p>
@@ -119,7 +121,6 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
               </p>
 
               <div className="flex shrink-0 items-center gap-1.5">
-                <Badge variant={site.status === "running" ? "success" : "default"}>{site.status}</Badge>
                 <Badge variant={site.type === "laravel" ? "accent" : "default"}>
                   {site.type === "laravel" ? "Laravel" : "PHP"}
                 </Badge>

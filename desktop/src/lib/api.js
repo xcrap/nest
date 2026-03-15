@@ -8,6 +8,7 @@ export const api = {
   startSite: (id) => request("POST", `/sites/${id}/start`),
   stopSite: (id) => request("POST", `/sites/${id}/stop`),
   getLogs: () => request("GET", "/logs/frankenphp"),
+  clearLogs: () => request("DELETE", "/logs/frankenphp"),
   getPHPVersions: () => request("GET", "/php/versions"),
   installPHP: (version) => request("POST", "/php/versions/install", { version }),
   activatePHP: (version) => request("POST", "/php/versions/activate", { version }),

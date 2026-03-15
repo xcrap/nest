@@ -220,16 +220,23 @@ func (s *Server) handleServicesStatus(writer http.ResponseWriter, request *http.
 }
 
 func (s *Server) handleFrankenPHPLogs(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
+	switch request.Method {
+	case http.MethodGet:
+		data, err := os.ReadFile(s.app.Paths.FrankenPHPLogPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			writeError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]string{"content": string(data)})
+	case http.MethodDelete:
+		if err := os.Truncate(s.app.Paths.FrankenPHPLogPath, 0); err != nil && !errors.Is(err, os.ErrNotExist) {
+			writeError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]string{"status": "cleared"})
+	default:
 		writer.WriteHeader(http.StatusMethodNotAllowed)
-		return
 	}
-	data, err := os.ReadFile(s.app.Paths.FrankenPHPLogPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		writeError(writer, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]string{"content": string(data)})
 }
 
 func (s *Server) handlePHPVersions(writer http.ResponseWriter, request *http.Request) {

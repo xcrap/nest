@@ -156,7 +156,7 @@ function BootstrapRow({ icon: Icon, title, body, done, doneLabel, actionLabel, v
         </div>
       </div>
       {done ? (
-        <Badge variant="success">
+        <Badge variant="success" className="gap-1.5">
           <Check className="h-3 w-3" />
           {doneLabel}
         </Badge>

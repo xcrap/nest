@@ -266,7 +266,7 @@ async function ensureDaemonStarted() {
     if (alive) {
       return;
     }
-    fs.unlinkSync(socketPath);
+    try { fs.unlinkSync(socketPath); } catch {}
   }
 
   if (!fs.existsSync(daemonPath)) {

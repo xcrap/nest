@@ -164,8 +164,9 @@ export default function App() {
       </header>
 
       {error && (
-        <div className="flex-none border-b border-red-200 bg-red-50 px-6 py-2 text-[13px] text-red-600">
-          {error}
+        <div className="flex flex-none items-center justify-between border-b border-red-200 bg-red-50 px-6 py-2 text-[13px] text-red-600">
+          <span>{error}</span>
+          <button onClick={() => setError("")} className="ml-4 font-medium text-red-400 hover:text-red-600">&times;</button>
         </div>
       )}
 
@@ -233,7 +234,12 @@ export default function App() {
                 onReload={() => api.reloadServices()}
               />
             )}
-            {activeTab === "logs" && <LogsScreen content={logs} />}
+            {activeTab === "logs" && (
+              <LogsScreen
+                content={logs}
+                onClear={() => wrap(async () => { await api.clearLogs(); setLogs(""); })}
+              />
+            )}
             {activeTab === "php" && (
               <PHPVersionsScreen
                 versions={versions}

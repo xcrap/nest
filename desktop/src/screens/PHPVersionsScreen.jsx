@@ -84,9 +84,9 @@ function PHPVersionRow({ version, onInstall, onActivate }) {
           </Button>
         )}
 
-        <Badge variant={version.active ? "success" : version.installed ? "default" : "warning"}>
-          {version.active ? "Active" : version.installed ? "Installed" : "Available"}
-        </Badge>
+        {!version.installed && (
+          <Badge variant="warning">Available</Badge>
+        )}
       </div>
     </div>
   );
