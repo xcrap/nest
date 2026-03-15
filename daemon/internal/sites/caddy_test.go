@@ -39,6 +39,9 @@ func TestGenerateCaddyfileIncludesOnlyRunningSites(t *testing.T) {
 	if strings.Contains(output, "beta.test") {
 		t.Fatalf("expected stopped site to be excluded: %s", output)
 	}
+	if !strings.Contains(output, "localhost {\n\ttls internal\n\trespond 204\n}") {
+		t.Fatalf("expected localhost tls endpoint in caddyfile: %s", output)
+	}
 }
 
 func TestGenerateCaddyfileUsesImportPattern(t *testing.T) {
@@ -91,5 +94,16 @@ func TestGenerateCaddyfileDefaultsToPhpApp(t *testing.T) {
 
 	if !strings.Contains(output, "import php-app project.test /tmp/project") {
 		t.Fatalf("expected default php-app import: %s", output)
+	}
+}
+
+func TestGenerateCaddyfileIncludesLocalhostWhenNoSitesRun(t *testing.T) {
+	output := GenerateCaddyfile(nil, "/tmp/frankenphp.log")
+
+	if !strings.Contains(output, "localhost {\n\ttls internal\n\trespond 204\n}") {
+		t.Fatalf("expected localhost tls endpoint in caddyfile: %s", output)
+	}
+	if !strings.Contains(output, "# No running sites are registered yet.") {
+		t.Fatalf("expected empty-state comment in caddyfile: %s", output)
 	}
 }

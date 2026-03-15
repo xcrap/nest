@@ -29,6 +29,10 @@ func GenerateCaddyfile(sites []config.Site, logPath string) string {
 	builder.WriteString(fmt.Sprintf("\tlog {\n\t\toutput file %q\n\t\tformat console\n\t}\n", logPath))
 	builder.WriteString("}\n\n")
 	builder.WriteString("import snippets/*\n\n")
+	builder.WriteString("localhost {\n")
+	builder.WriteString("\ttls internal\n")
+	builder.WriteString("\trespond 204\n")
+	builder.WriteString("}\n\n")
 
 	if len(runningSites) == 0 {
 		builder.WriteString("# No running sites are registered yet.\n")

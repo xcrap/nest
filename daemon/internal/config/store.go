@@ -35,7 +35,7 @@ func (s *Store) Ensure() error {
 	}
 
 	if _, err := os.Stat(s.paths.CaddyfilePath); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(s.paths.CaddyfilePath, []byte("{\n\thttp_port 8080\n\thttps_port 8443\n\tadmin localhost:2019\n\tlocal_certs\n}\n"), 0o644); err != nil {
+		if err := os.WriteFile(s.paths.CaddyfilePath, []byte("{\n\thttp_port 8080\n\thttps_port 8443\n\tadmin localhost:2019\n\tlocal_certs\n}\n\nlocalhost {\n\ttls internal\n\trespond 204\n}\n"), 0o644); err != nil {
 			return err
 		}
 	}
