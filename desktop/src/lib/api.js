@@ -37,10 +37,8 @@ export const desktop = {
   getMeta: () => window.nestDesktop?.getMeta?.() ?? Promise.resolve({ version: "dev", packaged: false }),
   checkForUpdates: () =>
     window.nestDesktop?.checkForUpdates?.() ??
-    Promise.resolve({
-      configured: false,
-      status: "unavailable",
-      message: "Release feed is not configured for this build."
-    }),
+    Promise.resolve({ status: "current" }),
+  installUpdate: () => window.nestDesktop?.installUpdate?.() ?? Promise.resolve(),
+  onUpdateStatus: (callback) => window.nestDesktop?.onUpdateStatus?.(callback) ?? (() => {}),
   openExternal: (url) => window.nestDesktop?.openExternal?.(url) ?? Promise.resolve(false)
 };

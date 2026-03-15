@@ -52,3 +52,5 @@ jobs:
           files: |
             desktop/release/*.dmg
             desktop/release/*.zip
+            desktop/release/*.blockmap
+            desktop/release/*.yml

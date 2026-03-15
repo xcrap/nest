@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, CircleAlert, DownloadCloud, Github, Loader2, RefreshCw, ShieldCheck, Stethoscope, TerminalSquare } from "lucide-react";
+import { Check, CircleAlert, Loader2, RefreshCw, RotateCcw, ShieldCheck, Stethoscope, TerminalSquare } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -13,7 +13,7 @@ const doctorVariant = {
   fail: "danger"
 };
 
-export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appMeta, settings, updateState, onCheckUpdates, onOpenUpdate }) {
+export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appMeta, settings, updateState, onCheckUpdates, onInstallUpdate }) {
   const bootstrap = settings?.bootstrap;
   const testDomainDone = bootstrap?.testDomainConfigured ?? false;
   const localCATrusted = bootstrap?.localCATrusted ?? false;
@@ -71,34 +71,54 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
               <div>
                 <p className="text-sm font-medium text-zinc-900">Updates</p>
                 <p className="text-[13px] text-zinc-500">
-                  {updateState.message || "Check for new releases."}
+                  {updateState.status === "checking" ? "Checking for updates..." :
+                   updateState.status === "downloading" ? `Downloading update... ${updateState.percent ?? 0}%` :
+                   "Check for new releases."}
                 </p>
               </div>
-              <Button size="sm" variant="outline" onClick={onCheckUpdates}>
-                <RefreshCw className="h-3.5 w-3.5" />
-                Check
-              </Button>
+              {updateState.status !== "ready" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onCheckUpdates}
+                  disabled={updateState.status === "checking" || updateState.status === "downloading"}
+                >
+                  {(updateState.status === "checking" || updateState.status === "downloading")
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <RefreshCw className="h-3.5 w-3.5" />}
+                  Check
+                </Button>
+              )}
             </div>
-            {updateState.latestVersion && (
-              <div className="rounded-md border border-zinc-200 bg-white p-3 text-[13px]">
-                <p className="font-medium text-zinc-900">v{updateState.latestVersion}</p>
-                {updateState.publishedAt && (
-                  <p className="text-xs text-zinc-400">{formatRelativeDate(updateState.publishedAt)}</p>
-                )}
-                <div className="mt-2 flex gap-2">
-                  {updateState.asset?.url && (
-                    <Button size="sm" onClick={() => onOpenUpdate(updateState.asset.url)}>
-                      <DownloadCloud className="h-3.5 w-3.5" />
-                      Download
-                    </Button>
-                  )}
-                  {updateState.htmlUrl && (
-                    <Button size="sm" variant="outline" onClick={() => onOpenUpdate(updateState.htmlUrl)}>
-                      <Github className="h-3.5 w-3.5" />
-                      Release
-                    </Button>
-                  )}
+            {updateState.status === "current" && (
+              <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-[13px]">
+                <Check className="h-4 w-4 text-emerald-600" />
+                <p className="font-medium text-emerald-800">You're on the latest version (v{appMeta.version})</p>
+              </div>
+            )}
+            {updateState.status === "downloading" && (
+              <div className="rounded-md border border-zinc-200 bg-white p-3">
+                <div className="h-1.5 overflow-hidden rounded-full bg-zinc-100">
+                  <div
+                    className="h-full rounded-full bg-zinc-900 transition-all"
+                    style={{ width: `${updateState.percent ?? 0}%` }}
+                  />
                 </div>
+              </div>
+            )}
+            {updateState.status === "ready" && (
+              <div className="flex items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-[13px]">
+                <p className="font-medium text-emerald-800">v{updateState.version} is ready to install</p>
+                <Button size="sm" onClick={onInstallUpdate}>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Restart
+                </Button>
+              </div>
+            )}
+            {updateState.status === "error" && (
+              <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-[13px]">
+                <CircleAlert className="h-4 w-4 text-red-500" />
+                <p className="font-medium text-red-700">{updateState.message || "Update check failed."}</p>
               </div>
             )}
           </CardContent>

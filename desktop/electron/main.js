@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { autoUpdater } from "electron-updater";
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -37,8 +38,11 @@ if (!hasSingleInstanceLock) {
     ipcMain.handle("dialog:export-sites", handleExportSites);
     ipcMain.handle("dialog:import-sites", handleImportSites);
     ipcMain.handle("app:get-meta", () => getAppMeta());
-    ipcMain.handle("updates:check", checkForUpdates);
+    ipcMain.handle("updates:check", handleCheckForUpdates);
+    ipcMain.handle("updates:install", () => autoUpdater.quitAndInstall());
     ipcMain.handle("shell:open-external", async (_event, url) => shell.openExternal(url));
+
+    setupAutoUpdater();
 
     await ensureDaemonStarted();
     await createWindow();
@@ -271,84 +275,65 @@ function getAppMeta() {
   };
 }
 
-async function checkForUpdates() {
-  const repository = resolveReleaseRepository();
-  if (!repository) {
-    return {
-      configured: false,
-      status: "unavailable",
-      message: "Set NEST_GITHUB_REPOSITORY to enable GitHub release checks for this build."
-    };
-  }
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
 
-  const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "Nest"
-    }
+  autoUpdater.on("update-available", (info) => {
+    mainWindow?.webContents.send("update:status", {
+      status: "available",
+      version: info.version,
+      releaseDate: info.releaseDate
+    });
   });
-  if (!response.ok) {
-    throw new Error(`Release check failed with ${response.status}`);
+
+  autoUpdater.on("update-not-available", (info) => {
+    mainWindow?.webContents.send("update:status", {
+      status: "current",
+      version: info.version
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    mainWindow?.webContents.send("update:status", {
+      status: "downloading",
+      percent: Math.round(progress.percent)
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    mainWindow?.webContents.send("update:status", {
+      status: "ready",
+      version: info.version
+    });
+  });
+
+  autoUpdater.on("error", (error) => {
+    mainWindow?.webContents.send("update:status", {
+      status: "error",
+      message: error?.message || "Update check failed."
+    });
+  });
+}
+
+async function handleCheckForUpdates() {
+  if (isDev) {
+    return { status: "current", version: app.getVersion() };
   }
 
-  const release = await response.json();
-  const latestVersion = normalizeVersion(release.tag_name || release.name || app.getVersion());
-  const currentVersion = normalizeVersion(app.getVersion());
-  const asset = pickReleaseAsset(release.assets || []);
-
-  return {
-    configured: true,
-    status: compareVersions(latestVersion, currentVersion) > 0 ? "available" : "current",
-    currentVersion,
-    latestVersion,
-    publishedAt: release.published_at,
-    notes: release.body || "",
-    htmlUrl: release.html_url,
-    asset: asset
-      ? {
-          name: asset.name,
-          url: asset.browser_download_url
-        }
-      : null
-  };
-}
-
-function resolveReleaseRepository() {
-  return process.env.NEST_GITHUB_REPOSITORY || "xcrap/nest";
-}
-
-function pickReleaseAsset(assets) {
-  const lowerArch = process.arch.toLowerCase();
-  const candidates = assets.filter((asset) => /\.(dmg|zip)$/i.test(asset.name || ""));
-  if (candidates.length === 0) {
-    return null;
+  const result = await autoUpdater.checkForUpdates();
+  if (!result) {
+    return { status: "current", version: app.getVersion() };
   }
 
-  return (
-    candidates.find((asset) => asset.name.toLowerCase().includes(lowerArch) && asset.name.toLowerCase().endsWith(".dmg")) ||
-    candidates.find((asset) => asset.name.toLowerCase().endsWith(".dmg")) ||
-    candidates.find((asset) => asset.name.toLowerCase().includes(lowerArch)) ||
-    candidates[0]
-  );
-}
+  const updateAvailable = result.updateInfo && autoUpdater.currentVersion.compare(result.updateInfo.version) < 0;
 
-function normalizeVersion(value) {
-  return String(value || "0.0.0").replace(/^v/, "");
-}
-
-function compareVersions(leftVersion, rightVersion) {
-  const left = normalizeVersion(leftVersion).split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const right = normalizeVersion(rightVersion).split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const length = Math.max(left.length, right.length);
-
-  for (let index = 0; index < length; index += 1) {
-    const diff = (left[index] || 0) - (right[index] || 0);
-    if (diff !== 0) {
-      return diff;
-    }
+  if (updateAvailable) {
+    await autoUpdater.downloadUpdate();
+    return { status: "downloading", version: result.updateInfo.version };
   }
 
-  return 0;
+  return { status: "current", version: app.getVersion() };
 }
 
 function runPrivilegedHelper(...args) {

@@ -49,11 +49,7 @@ export default function App() {
     arch: "arm64",
     releaseFeedConfigured: false
   });
-  const [updateState, setUpdateState] = useState({
-    configured: false,
-    status: "idle",
-    message: "Release checks have not been run yet."
-  });
+  const [updateState, setUpdateState] = useState({ status: "idle" });
 
   const refresh = async () => {
     try {
@@ -87,6 +83,8 @@ export default function App() {
   useEffect(() => {
     void refresh();
     void desktop.getMeta().then(setAppMeta).catch(() => null);
+    const unsubscribe = desktop.onUpdateStatus(setUpdateState);
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -114,15 +112,11 @@ export default function App() {
   const checkForUpdates = async () => {
     try {
       setError("");
-      setUpdateState((current) => ({ ...current, status: "checking", message: "Checking GitHub Releases..." }));
+      setUpdateState({ status: "checking" });
       const result = await desktop.checkForUpdates();
-      setUpdateState(result);
+      setUpdateState((current) => ({ ...current, ...result }));
     } catch (updateError) {
-      setUpdateState({
-        configured: appMeta.releaseFeedConfigured,
-        status: "error",
-        message: updateError.message
-      });
+      setUpdateState({ status: "error", message: updateError.message });
       setError(updateError.message);
     }
   };
@@ -144,7 +138,7 @@ export default function App() {
         style={{ WebkitAppRegion: "drag" }}
       >
         <div className="flex items-center gap-2">
-          <span className="text-[13px] font-semibold text-zinc-900">Nest</span>
+          <span className="text-[13px] font-semibold text-zinc-900">Nest <span className="font-normal text-zinc-400">v{appMeta.version}</span></span>
           <Badge variant={serviceVariant[serviceStatus] || "default"}>{serviceStatus}</Badge>
         </div>
 
@@ -289,7 +283,7 @@ export default function App() {
                 doctorChecks={doctorChecks}
                 onBootstrap={() => wrap(() => api.bootstrapTestDomain())}
                 onCheckUpdates={checkForUpdates}
-                onOpenUpdate={openExternal}
+                onInstallUpdate={() => desktop.installUpdate()}
                 onTrustLocalCA={() => wrap(() => api.trustLocalCA())}
                 updateState={updateState}
               />
