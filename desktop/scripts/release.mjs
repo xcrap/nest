@@ -28,6 +28,12 @@ if (fs.existsSync(dmgPath)) {
 
 run("hdiutil", ["create", "-volname", "Nest", "-srcfolder", appPath, "-ov", "-format", "UDZO", dmgPath]);
 
+const signingIdentity = process.env.CSC_NAME;
+if (signingIdentity) {
+  console.log("Signing DMG...");
+  run("codesign", ["--sign", signingIdentity, "--force", dmgPath]);
+}
+
 function run(command, args) {
   execFileSync(command, args, {
     cwd: desktopDir,

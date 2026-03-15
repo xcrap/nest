@@ -37,6 +37,11 @@ type UpdateInput struct {
 	HTTPSEnabled *bool   `json:"httpsEnabled"`
 }
 
+type ImportResult struct {
+	Imported int      `json:"imported"`
+	Skipped  []string `json:"skipped"`
+}
+
 const defaultDocumentRoot = "public"
 
 func NewService(paths state.Paths, store *config.Store) *Service {
@@ -267,6 +272,70 @@ func (s *Service) SetStatus(id, status string) (config.Site, error) {
 	}
 
 	return config.Site{}, errors.New("site not found")
+}
+
+func (s *Service) Import(inputs []CreateInput) (ImportResult, error) {
+	sites, err := s.store.LoadSites()
+	if err != nil {
+		return ImportResult{}, err
+	}
+
+	settings, err := s.store.LoadSettings()
+	if err != nil {
+		return ImportResult{}, err
+	}
+
+	domains := make(map[string]bool, len(sites))
+	for _, site := range sites {
+		domains[strings.ToLower(site.Domain)] = true
+	}
+
+	var result ImportResult
+	for _, input := range inputs {
+		domain := strings.ToLower(strings.TrimSpace(input.Domain))
+		if domain == "" || strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.RootPath) == "" {
+			result.Skipped = append(result.Skipped, domain)
+			continue
+		}
+		if domains[domain] {
+			result.Skipped = append(result.Skipped, domain)
+			continue
+		}
+
+		documentRoot := strings.TrimSpace(input.DocumentRoot)
+		if documentRoot == "" {
+			documentRoot = inferredDocumentRoot(input.RootPath)
+		}
+
+		now := time.Now().UTC()
+		site := config.Site{
+			ID:           randomID(),
+			Name:         input.Name,
+			Domain:       domain,
+			RootPath:     input.RootPath,
+			DocumentRoot: documentRoot,
+			Status:       "stopped",
+			HTTPSEnabled: input.HTTPSEnabled,
+			PHPVersion:   firstNonEmpty(input.PHPVersion, settings.ActivePHPVersion),
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+
+		sites = append(sites, site)
+		domains[domain] = true
+		result.Imported++
+	}
+
+	if result.Imported > 0 {
+		if err := s.store.SaveSites(sites); err != nil {
+			return ImportResult{}, err
+		}
+		if err := s.RewriteCaddyfile(); err != nil {
+			return ImportResult{}, err
+		}
+	}
+
+	return result, nil
 }
 
 func (s *Service) RewriteCaddyfile() error {

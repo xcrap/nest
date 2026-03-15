@@ -1,7 +1,7 @@
 {
   "name": "nest-desktop",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Nest desktop control plane for local PHP development on macOS",
   "author": "xcrap",
   "type": "module",
@@ -42,8 +42,13 @@
       "target": [
         "dir"
       ],
-      "category": "public.app-category.developer-tools"
-    }
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist"
+    },
+    "afterSign": "scripts/notarize.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -58,6 +63,7 @@
     "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "@tailwindcss/vite": "^4.2.1",
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "36.0.0",

@@ -233,6 +233,12 @@ export default function App() {
                 versions={versions}
                 onCreate={(payload) => wrap(() => api.createSite(payload))}
                 onDelete={(id) => wrap(() => api.deleteSite(id))}
+                onExport={() => desktop.exportSites()}
+                onImport={async () => {
+                  const result = await desktop.importSites();
+                  if (result.imported) await refresh();
+                  return result;
+                }}
                 onOpenUrl={openExternal}
                 onPickDirectory={() => desktop.pickDirectory()}
                 onStart={(id) => wrap(() => api.startSite(id))}

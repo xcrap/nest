@@ -60,6 +60,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sites", s.handleSites)
+	mux.HandleFunc("/sites/import", s.handleSitesImport)
 	mux.HandleFunc("/sites/", s.handleSiteActions)
 	mux.HandleFunc("/services/start", s.handleServicesStart)
 	mux.HandleFunc("/services/stop", s.handleServicesStop)
@@ -109,6 +110,24 @@ func (s *Server) handleSites(writer http.ResponseWriter, request *http.Request) 
 	default:
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleSitesImport(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var inputs []sites.CreateInput
+	if err := json.NewDecoder(request.Body).Decode(&inputs); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.app.Sites.Import(inputs)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func (s *Server) handleSiteActions(writer http.ResponseWriter, request *http.Request) {

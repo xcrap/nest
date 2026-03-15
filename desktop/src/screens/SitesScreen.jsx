@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ExternalLink, FolderSearch2, Pencil, Plus, Power, PowerOff, Shield, Trash2 } from "lucide-react";
+import { Download, ExternalLink, FolderSearch2, Pencil, Plus, Power, PowerOff, Shield, Trash2, Upload } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -26,7 +26,7 @@ const defaultForm = {
   httpsEnabled: true
 };
 
-export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onStart, onStop, onPickDirectory, onOpenUrl }) {
+export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onStart, onStop, onPickDirectory, onOpenUrl, onExport, onImport }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSiteId, setEditingSiteId] = useState(null);
   const [form, setForm] = useState(defaultForm);
@@ -100,10 +100,20 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-zinc-900">Sites</h2>
-        <Button size="sm" onClick={openCreate}>
-          <Plus className="h-3.5 w-3.5" />
-          Add site
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" variant="outline" onClick={onImport}>
+            <Upload className="h-3.5 w-3.5" />
+            Import
+          </Button>
+          <Button size="sm" variant="outline" onClick={onExport} disabled={sites.length === 0}>
+            <Download className="h-3.5 w-3.5" />
+            Export
+          </Button>
+          <Button size="sm" onClick={openCreate}>
+            <Plus className="h-3.5 w-3.5" />
+            Add site
+          </Button>
+        </div>
       </div>
 
       {sortedSites.length === 0 && (

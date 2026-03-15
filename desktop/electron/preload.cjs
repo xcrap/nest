@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld("nestAPI", {
 
 contextBridge.exposeInMainWorld("nestDesktop", {
   pickDirectory: () => ipcRenderer.invoke("dialog:pick-directory"),
+  exportSites: () => ipcRenderer.invoke("dialog:export-sites"),
+  importSites: () => ipcRenderer.invoke("dialog:import-sites"),
   getMeta: () => ipcRenderer.invoke("app:get-meta"),
   checkForUpdates: () => ipcRenderer.invoke("updates:check"),
   openExternal: (url) => ipcRenderer.invoke("shell:open-external", url)

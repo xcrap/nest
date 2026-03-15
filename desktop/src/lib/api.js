@@ -32,6 +32,8 @@ export const api = {
 
 export const desktop = {
   pickDirectory: () => window.nestDesktop?.pickDirectory?.() ?? Promise.resolve(null),
+  exportSites: () => window.nestDesktop?.exportSites?.() ?? Promise.resolve({ exported: false }),
+  importSites: () => window.nestDesktop?.importSites?.() ?? Promise.resolve({ imported: false }),
   getMeta: () => window.nestDesktop?.getMeta?.() ?? Promise.resolve({ version: "dev", packaged: false }),
   checkForUpdates: () =>
     window.nestDesktop?.checkForUpdates?.() ??

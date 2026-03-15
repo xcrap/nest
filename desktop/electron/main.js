@@ -34,6 +34,8 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     ipcMain.handle("daemon:request", async (_event, request) => requestDaemon(request));
     ipcMain.handle("dialog:pick-directory", handlePickDirectory);
+    ipcMain.handle("dialog:export-sites", handleExportSites);
+    ipcMain.handle("dialog:import-sites", handleImportSites);
     ipcMain.handle("app:get-meta", () => getAppMeta());
     ipcMain.handle("updates:check", checkForUpdates);
     ipcMain.handle("shell:open-external", async (_event, url) => shell.openExternal(url));
@@ -200,6 +202,63 @@ function handlePickDirectory() {
       buttonLabel: "Choose folder"
     })
     .then((result) => (result.canceled ? null : result.filePaths[0]));
+}
+
+async function handleExportSites() {
+  const sitesData = await requestDaemon({ method: "GET", route: "/sites" });
+  const exportPayload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    sites: sitesData.map(({ name, domain, rootPath, documentRoot, phpVersion, httpsEnabled }) => ({
+      name,
+      domain,
+      rootPath,
+      documentRoot,
+      phpVersion,
+      httpsEnabled
+    }))
+  };
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "Export sites",
+    defaultPath: path.join(os.homedir(), "nest-sites.json"),
+    filters: [{ name: "JSON", extensions: ["json"] }]
+  });
+
+  if (result.canceled) {
+    return { exported: false };
+  }
+
+  fs.writeFileSync(result.filePath, JSON.stringify(exportPayload, null, 2), "utf-8");
+  return { exported: true, count: exportPayload.sites.length, path: result.filePath };
+}
+
+async function handleImportSites() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Import sites",
+    filters: [{ name: "JSON", extensions: ["json"] }],
+    properties: ["openFile"]
+  });
+
+  if (result.canceled) {
+    return { imported: false };
+  }
+
+  const raw = fs.readFileSync(result.filePaths[0], "utf-8");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("The selected file is not valid JSON.");
+  }
+
+  const sites = Array.isArray(parsed) ? parsed : parsed.sites;
+  if (!Array.isArray(sites)) {
+    throw new Error("The selected file does not contain a valid sites array.");
+  }
+
+  const importResult = await requestDaemon({ method: "POST", route: "/sites/import", body: sites });
+  return { imported: true, ...importResult };
 }
 
 function getAppMeta() {
