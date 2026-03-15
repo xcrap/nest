@@ -11,22 +11,37 @@ const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const socketPath = process.env.NEST_SOCKET || path.join(os.homedir(), "Library", "Application Support", "Nest", "run", "nest.sock");
 const helperPath = process.env.NEST_HELPER_BIN || resolveBundledBinary("nesthelper");
 const daemonPath = process.env.NEST_DAEMON_BIN || resolveBundledBinary("nestd");
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow;
 let daemonProcess;
 let daemonStartPromise = null;
 let bundledDaemonMetaPromise = null;
 
-app.whenReady().then(async () => {
-  ipcMain.handle("daemon:request", async (_event, request) => requestDaemon(request));
-  ipcMain.handle("dialog:pick-directory", handlePickDirectory);
-  ipcMain.handle("app:get-meta", () => getAppMeta());
-  ipcMain.handle("updates:check", checkForUpdates);
-  ipcMain.handle("shell:open-external", async (_event, url) => shell.openExternal(url));
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) {
+      return;
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
+  });
 
-  await ensureDaemonStarted();
-  await createWindow();
-});
+  app.whenReady().then(async () => {
+    ipcMain.handle("daemon:request", async (_event, request) => requestDaemon(request));
+    ipcMain.handle("dialog:pick-directory", handlePickDirectory);
+    ipcMain.handle("app:get-meta", () => getAppMeta());
+    ipcMain.handle("updates:check", checkForUpdates);
+    ipcMain.handle("shell:open-external", async (_event, url) => shell.openExternal(url));
+
+    await ensureDaemonStarted();
+    await createWindow();
+  });
+}
 
 app.on("window-all-closed", () => {
   if (daemonProcess && !daemonProcess.killed) {
@@ -313,6 +328,9 @@ async function ensureDaemonStarted() {
     try { fs.unlinkSync(socketPath); } catch {}
   }
 
+  await stopStrayNestDaemons();
+  try { fs.unlinkSync(socketPath); } catch {}
+
   if (!fs.existsSync(daemonPath)) {
     throw new Error(`Nest daemon binary not found at ${daemonPath}. Build it with 'make build' before launching the desktop app.`);
   }
@@ -326,7 +344,7 @@ async function ensureDaemonStarted() {
     daemonProcess = null;
   });
 
-  await waitForSocket(socketPath, 5000);
+  await waitForDaemonReady(5000);
 }
 
 async function daemonUsesExpectedBinary() {
@@ -428,6 +446,60 @@ async function stopDaemonUsingSocket() {
   }
 }
 
+async function stopStrayNestDaemons() {
+  const pids = await findNestDaemonPids();
+  if (pids.length === 0) {
+    return;
+  }
+
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  }
+
+  for (const pid of pids) {
+    const stopped = await waitForProcessExit(pid, 3000);
+    if (!stopped) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+      await waitForProcessExit(pid, 1000);
+    }
+  }
+}
+
+function findNestDaemonPids() {
+  return new Promise((resolve) => {
+    execFile("ps", ["-axo", "pid=,command="], (error, stdout) => {
+      if (error) {
+        resolve([]);
+        return;
+      }
+
+      const pids = String(stdout)
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const match = line.match(/^(\d+)\s+(.*)$/);
+          if (!match) {
+            return null;
+          }
+          return {
+            pid: Number.parseInt(match[1], 10),
+            command: match[2]
+          };
+        })
+        .filter((entry) => entry && Number.isFinite(entry.pid))
+        .filter((entry) => /(^|\/)nestd(\s|$)/.test(entry.command))
+        .map((entry) => entry.pid);
+
+      resolve([...new Set(pids)]);
+    });
+  });
+}
+
 function pidForSocket(targetPath) {
   return new Promise((resolve) => {
     execFile("lsof", ["-t", "--", targetPath], (error, stdout) => {
@@ -497,19 +569,35 @@ function resolveBundledBinary(name) {
   return path.join(__dirname, "..", "..", "bin", name);
 }
 
-function waitForSocket(targetPath, timeoutMs) {
+function waitForDaemonReady(timeoutMs) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
+    let checking = false;
     const timer = setInterval(() => {
-      if (fs.existsSync(targetPath)) {
-        clearInterval(timer);
-        resolve();
+      if (checking) {
         return;
       }
-      if (Date.now() - startedAt > timeoutMs) {
-        clearInterval(timer);
-        reject(new Error(`Nest daemon did not create its socket at ${targetPath}`));
-      }
+      checking = true;
+
+      Promise.resolve()
+        .then(async () => {
+          if (fs.existsSync(socketPath)) {
+            const alive = await pingDaemon().catch(() => false);
+            if (alive) {
+              clearInterval(timer);
+              resolve();
+              return;
+            }
+          }
+
+          if (Date.now() - startedAt > timeoutMs) {
+            clearInterval(timer);
+            reject(new Error(`Nest daemon did not become ready on ${socketPath}`));
+          }
+        })
+        .finally(() => {
+          checking = false;
+        });
     }, 100);
   });
 }
