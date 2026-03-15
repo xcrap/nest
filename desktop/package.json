@@ -1,7 +1,7 @@
 {
   "name": "nest-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Nest desktop control plane for local PHP development on macOS",
   "author": "xcrap",
   "type": "module",
@@ -28,6 +28,10 @@
       {
         "from": "../bin/nestd",
         "to": "bin/nestd"
+      },
+      {
+        "from": "../bin/nestcli",
+        "to": "bin/nestcli"
       },
       {
         "from": "../bin/nesthelper",

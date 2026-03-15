@@ -19,7 +19,7 @@ make build
 This produces:
 
 - `./bin/nestd`
-- `./bin/nestctl`
+- `./bin/nestcli`
 - `./bin/nesthelper`
 
 ## 3. Start the app in development
@@ -51,15 +51,16 @@ npm --workspace desktop run dev
 CLI:
 
 ```bash
-sudo ./bin/nestctl bootstrap test-domain
+sudo ./bin/nestcli bootstrap test-domain
 ```
 
 Desktop:
 
 - Open the app
 - Go to `Settings`
-- Click `Install .test Routing`
+- Click `Run bootstrap`
 - Approve the macOS administrator prompt
+- The button changes to a green `Configured` badge when done
 
 This installs:
 
@@ -71,16 +72,20 @@ This installs:
 After FrankenPHP has started once and generated its local CA:
 
 ```bash
-sudo ./bin/nestctl bootstrap trust-local-ca
+sudo ./bin/nestcli bootstrap trust-local-ca
 ```
+
+Or use the desktop app: `Settings` -> `Trust CA`. Shows a green `Trusted` badge when done.
 
 ### zsh shell integration
 
 ```bash
-./bin/nestctl shell integrate --zsh
+./bin/nestcli shell integrate --zsh
 exec zsh
 which php
 ```
+
+Or use the desktop app: `Dashboard` -> click `Fix` on the `shell-path` doctor check.
 
 Expected path:
 
@@ -93,14 +98,16 @@ $HOME/Library/Application Support/Nest/bin/php
 Nest pins the official FrankenPHP macOS arm64 binary and uses its embedded PHP runtime. Install and activate PHP with:
 
 ```bash
-./bin/nestctl php install 8.5
-./bin/nestctl php activate 8.5
+./bin/nestcli php install 8.5
+./bin/nestcli php activate 8.5
 ```
+
+Or use the desktop app: `Dashboard` -> click `Fix` on the `php-symlink` doctor check, or go to the `PHP` tab.
 
 Start FrankenPHP:
 
 ```bash
-./bin/nestctl services start
+./bin/nestcli services start
 ```
 
 ## 6. Add and run a site
@@ -109,25 +116,54 @@ Start FrankenPHP:
 mkdir -p ~/Sites/example/public
 printf '<?php phpinfo();' > ~/Sites/example/public/index.php
 
-./bin/nestctl site add \
+./bin/nestcli site add \
   --name Example \
   --domain example.test \
-  --root "$HOME/Sites/example/public" \
+  --root "$HOME/Sites/example" \
+  --type php \
   --php-version 8.5 \
   --https=true
 
-./bin/nestctl site start "$(./bin/nestctl site list | awk 'NR==2 {print $1}')"
+./bin/nestcli site start "$(./bin/nestcli site list | awk 'NR==2 {print $1}')"
 ```
+
+Note: `--root` points to the project root, not the public folder. The Caddy snippets automatically serve from `{root}/public`.
+
+Site types:
+- `--type php` (default): Uses the `php-app` Caddy snippet with PHP error logging.
+- `--type laravel`: Uses the `laravel-app` Caddy snippet.
 
 Then open:
 
 - `https://example.test`
 
-## 7. Inspect health and logs
+## 7. Configuration files
+
+Nest generates a Caddyfile using the same snippet/import pattern used in production FrankenPHP deployments. The config files live in:
+
+```text
+~/Library/Application Support/Nest/config/
+├── Caddyfile          # Generated - imports snippets and lists sites
+├── security.conf      # Editable - HTTP security headers for all sites
+├── php.ini            # Editable - PHP runtime settings
+├── settings.json
+├── sites.json
+└── snippets/
+    ├── php-app        # Editable - Caddy snippet for PHP sites
+    └── laravel-app    # Editable - Caddy snippet for Laravel sites
+```
+
+Edit these files via the `Config` tab in the desktop app, or directly on disk. After editing, reload FrankenPHP:
 
 ```bash
-./bin/nestctl doctor
-./bin/nestctl services status
+./bin/nestcli services reload
+```
+
+## 8. Inspect health and logs
+
+```bash
+./bin/nestcli doctor
+./bin/nestcli services status
 ```
 
 FrankenPHP log file:
@@ -136,20 +172,20 @@ FrankenPHP log file:
 ~/Library/Application Support/Nest/logs/frankenphp.log
 ```
 
-## 8. Build the packaged desktop app
+## 9. Build the packaged desktop app
 
 ```bash
 make package
 open ./Nest.app
 ```
 
-The packaged app includes `nestd` and `nesthelper`, and it will auto-start the daemon if the Unix socket is not already present.
+The packaged app includes `nestd` and `nesthelper`, and it will auto-start the daemon if the Unix socket is not already present. It also pings the daemon on startup and restarts it if the existing instance is unresponsive.
 
-## 9. Stop development services
+## 10. Stop development services
 
 ```bash
 ./scripts/stop-dev.sh
-./bin/nestctl services stop
+./bin/nestcli services stop
 ```
 
 ## Known limits right now

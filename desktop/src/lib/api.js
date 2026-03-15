@@ -17,7 +17,11 @@ export const api = {
   startServices: () => request("POST", "/services/start"),
   stopServices: () => request("POST", "/services/stop"),
   reloadServices: () => request("POST", "/services/reload"),
-  getServiceStatus: () => request("GET", "/services/status")
+  getSettings: () => request("GET", "/settings"),
+  getServiceStatus: () => request("GET", "/services/status"),
+  fixDoctorCheck: (id) => request("POST", "/doctor/fix", { id }),
+  getConfigFiles: () => request("GET", "/config/files"),
+  saveConfigFile: (name, content) => request("PUT", `/config/files/${name}`, { content })
 };
 
 export const desktop = {

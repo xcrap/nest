@@ -38,7 +38,7 @@ Install guidance:
 
 Next steps after all prerequisites pass:
 1. npm install --workspace desktop
-2. go build ./daemon/cmd/nestd ./daemon/cmd/nestctl ./helper/cmd/nesthelper
+2. go build ./daemon/cmd/nestd ./daemon/cmd/nestcli ./helper/cmd/nesthelper
 3. make dev
 EOF
 

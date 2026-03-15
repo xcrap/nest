@@ -14,6 +14,7 @@ import (
 	"github.com/xcrap/nest/daemon/internal/doctor"
 	"github.com/xcrap/nest/daemon/internal/runtime"
 	"github.com/xcrap/nest/daemon/internal/services"
+	"github.com/xcrap/nest/daemon/internal/shell"
 	"github.com/xcrap/nest/daemon/internal/sites"
 	"github.com/xcrap/nest/daemon/internal/state"
 )
@@ -53,6 +54,9 @@ func (a *App) Bootstrap() error {
 		return err
 	}
 	if err := a.ensureComposerWrapper(); err != nil {
+		return err
+	}
+	if err := a.ensureNestcliSymlink(); err != nil {
 		return err
 	}
 	return a.Sites.RewriteCaddyfile()
@@ -111,6 +115,51 @@ func (a *App) MarkLocalCATrusted() error {
 	settings.Bootstrap.LocalCATrusted = true
 	settings.Bootstrap.LastBootstrapCompleted = time.Now().UTC()
 	return a.Store.SaveSettings(settings)
+}
+
+func (a *App) FixPHPSymlink(ctx context.Context) error {
+	if err := a.Runtime.Install(ctx, "8.5"); err != nil {
+		return err
+	}
+	return a.Runtime.Activate("8.5")
+}
+
+func (a *App) FixShellPath() error {
+	rcPath, err := shell.ResolveZshRC()
+	if err != nil {
+		return err
+	}
+	state, err := shell.EnsureZshIntegration(rcPath, a.Paths.BinDir)
+	if err != nil {
+		return err
+	}
+	settings, err := a.Store.LoadSettings()
+	if err != nil {
+		return err
+	}
+	settings.ShellIntegration = state
+	return a.Store.SaveSettings(settings)
+}
+
+func (a *App) ensureNestcliSymlink() error {
+	nestcliDst := filepath.Join(a.Paths.BinDir, "nestcli")
+
+	// Find the nestcli binary next to the running executable
+	executable, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	resolved, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		resolved = executable
+	}
+	candidate := filepath.Join(filepath.Dir(resolved), "nestcli")
+	if _, err := os.Stat(candidate); err != nil {
+		return nil
+	}
+
+	_ = os.Remove(nestcliDst)
+	return os.Symlink(candidate, nestcliDst)
 }
 
 func (a *App) ensureComposerWrapper() error {

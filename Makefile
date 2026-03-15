@@ -17,7 +17,7 @@ desktop-dev:
 
 build:
 	go build -o ./bin/nestd ./daemon/cmd/nestd
-	go build -o ./bin/nestctl ./daemon/cmd/nestctl
+	go build -o ./bin/nestcli ./daemon/cmd/nestcli
 	go build -o ./bin/nesthelper ./helper/cmd/nesthelper
 	npm --workspace desktop run build
 
@@ -25,17 +25,17 @@ test:
 	go test ./...
 
 doctor:
-	go run ./daemon/cmd/nestctl doctor
+	go run ./daemon/cmd/nestcli doctor
 
 services-start:
-	go run ./daemon/cmd/nestctl services start
+	go run ./daemon/cmd/nestcli services start
 
 services-stop:
-	go run ./daemon/cmd/nestctl services stop
+	go run ./daemon/cmd/nestcli services stop
 
 package:
 	go build -o ./bin/nestd ./daemon/cmd/nestd
-	go build -o ./bin/nestctl ./daemon/cmd/nestctl
+	go build -o ./bin/nestcli ./daemon/cmd/nestcli
 	go build -o ./bin/nesthelper ./helper/cmd/nesthelper
 	npm --workspace desktop run package
 	rm -rf ./Nest.app
@@ -44,6 +44,6 @@ package:
 
 release:
 	go build -o ./bin/nestd ./daemon/cmd/nestd
-	go build -o ./bin/nestctl ./daemon/cmd/nestctl
+	go build -o ./bin/nestcli ./daemon/cmd/nestcli
 	go build -o ./bin/nesthelper ./helper/cmd/nesthelper
 	npm --workspace desktop run release

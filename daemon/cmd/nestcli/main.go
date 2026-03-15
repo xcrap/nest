@@ -70,13 +70,15 @@ func handleSite(client *api.Client) {
 	case "add":
 		flags := flag.NewFlagSet("site add", flag.ExitOnError)
 		name := flags.String("name", "", "site name")
+		siteType := flags.String("type", "php", "site type: php or laravel")
 		domain := flags.String("domain", "", "site domain")
-		root := flags.String("root", "", "site root")
+		root := flags.String("root", "", "project root (document root is {root}/public)")
 		phpVersion := flags.String("php-version", "", "php version")
 		httpsEnabled := flags.Bool("https", true, "enable https")
 		_ = flags.Parse(os.Args[3:])
 		payload := sites.CreateInput{
 			Name:         *name,
+			Type:         *siteType,
 			Domain:       *domain,
 			RootPath:     *root,
 			PHPVersion:   *phpVersion,
@@ -226,20 +228,20 @@ func handleBootstrap(application *app.App) {
 }
 
 func usage() {
-	fmt.Println("nestctl commands:")
-	fmt.Println("  nestctl site list")
-	fmt.Println("  nestctl site add --name NAME --domain DOMAIN --root PATH [--php-version VERSION] [--https=true]")
-	fmt.Println("  nestctl site remove ID")
-	fmt.Println("  nestctl site start ID")
-	fmt.Println("  nestctl site stop ID")
-	fmt.Println("  nestctl php list")
-	fmt.Println("  nestctl php install VERSION")
-	fmt.Println("  nestctl php activate VERSION")
-	fmt.Println("  nestctl services start|stop|reload|status")
-	fmt.Println("  nestctl doctor")
-	fmt.Println("  nestctl shell integrate --zsh")
-	fmt.Println("  nestctl bootstrap test-domain")
-	fmt.Println("  sudo nestctl bootstrap trust-local-ca")
+	fmt.Println("nestcli commands:")
+	fmt.Println("  nestcli site list")
+	fmt.Println("  nestcli site add --name NAME --domain DOMAIN --root PATH [--type php|laravel] [--php-version VERSION] [--https=true]")
+	fmt.Println("  nestcli site remove ID")
+	fmt.Println("  nestcli site start ID")
+	fmt.Println("  nestcli site stop ID")
+	fmt.Println("  nestcli php list")
+	fmt.Println("  nestcli php install VERSION")
+	fmt.Println("  nestcli php activate VERSION")
+	fmt.Println("  nestcli services start|stop|reload|status")
+	fmt.Println("  nestcli doctor")
+	fmt.Println("  nestcli shell integrate --zsh")
+	fmt.Println("  nestcli bootstrap test-domain")
+	fmt.Println("  sudo nestcli bootstrap trust-local-ca")
 }
 
 func requireArgs(count int) {

@@ -20,6 +20,7 @@ import { formatRelativeDate } from "../lib/utils";
 
 const defaultForm = {
   name: "",
+  type: "php",
   domain: "",
   rootPath: "",
   phpVersion: "8.5",
@@ -50,6 +51,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
     setEditingSiteId(site.id);
     setForm({
       name: site.name,
+      type: site.type || "php",
       domain: site.domain,
       rootPath: site.rootPath,
       phpVersion: site.phpVersion,
@@ -118,6 +120,9 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
 
               <div className="flex shrink-0 items-center gap-1.5">
                 <Badge variant={site.status === "running" ? "success" : "default"}>{site.status}</Badge>
+                <Badge variant={site.type === "laravel" ? "accent" : "default"}>
+                  {site.type === "laravel" ? "Laravel" : "PHP"}
+                </Badge>
                 <Badge variant="accent">PHP {site.phpVersion}</Badge>
                 <Badge variant={site.httpsEnabled ? "success" : "warning"}>
                   {site.httpsEnabled ? "HTTPS" : "HTTP"}
@@ -177,7 +182,7 @@ function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPic
         </DialogHeader>
 
         <form className="space-y-4" onSubmit={onSubmit}>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Name">
               <Input
                 value={form.name}
@@ -185,6 +190,12 @@ function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPic
                 placeholder="My project"
                 required
               />
+            </Field>
+            <Field label="Type">
+              <Select value={form.type} onChange={(e) => onSetForm((c) => ({ ...c, type: e.target.value }))}>
+                <option value="php">PHP</option>
+                <option value="laravel">Laravel</option>
+              </Select>
             </Field>
             <Field label="Domain">
               <Input

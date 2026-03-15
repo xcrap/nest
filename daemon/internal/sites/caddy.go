@@ -28,6 +28,7 @@ func GenerateCaddyfile(sites []config.Site, logPath string) string {
 	builder.WriteString("\tlocal_certs\n")
 	builder.WriteString(fmt.Sprintf("\tlog {\n\t\toutput file %q\n\t\tformat console\n\t}\n", logPath))
 	builder.WriteString("}\n\n")
+	builder.WriteString("import snippets/*\n\n")
 
 	if len(runningSites) == 0 {
 		builder.WriteString("# No running sites are registered yet.\n")
@@ -35,16 +36,15 @@ func GenerateCaddyfile(sites []config.Site, logPath string) string {
 	}
 
 	for _, site := range runningSites {
-		builder.WriteString(site.Domain)
-		builder.WriteString(" {\n")
-		builder.WriteString(fmt.Sprintf("\troot * %q\n", site.RootPath))
-		builder.WriteString("\tencode zstd gzip\n")
-		if site.HTTPSEnabled {
-			builder.WriteString("\ttls internal\n")
+		siteType := site.Type
+		if siteType == "" {
+			siteType = "php-app"
+		} else if siteType == "php" {
+			siteType = "php-app"
+		} else if siteType == "laravel" {
+			siteType = "laravel-app"
 		}
-		builder.WriteString("\tphp_server\n")
-		builder.WriteString("\tfile_server\n")
-		builder.WriteString("}\n\n")
+		builder.WriteString(fmt.Sprintf("import %s %s %s\n", siteType, site.Domain, site.RootPath))
 	}
 
 	return builder.String()

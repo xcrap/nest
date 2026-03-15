@@ -44,6 +44,7 @@ func (s *FrankenPHPService) Start(ctx context.Context, configPath string) error 
 	}
 
 	command := exec.Command(s.paths.FrankenPHPPath(), "run", "--config", configPath, "--adapter", "caddyfile")
+	command.Env = append(os.Environ(), "PHP_INI_SCAN_DIR="+s.paths.ConfigDir)
 	command.Stdout = logFile
 	command.Stderr = logFile
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -51,7 +51,7 @@ func (s *Service) phpSymlinkCheck() config.DoctorCheck {
 			ID:      "php-symlink",
 			Status:  "fail",
 			Message: "Nest PHP symlink is missing.",
-			FixHint: "Install and activate a PHP runtime with `nestctl php install <version>` and `nestctl php activate <version>`.",
+			FixHint: "Install and activate a PHP runtime with `nestcli php install <version>` and `nestcli php activate <version>`.",
 		}
 	}
 	return config.DoctorCheck{
@@ -73,7 +73,7 @@ func (s *Service) shellPathCheck(settings config.Settings) config.DoctorCheck {
 			ID:      "shell-path",
 			Status:  "warn",
 			Message: "zsh integration file could not be read.",
-			FixHint: "Run `nestctl shell integrate --zsh` and restart your shell.",
+			FixHint: "Run `nestcli shell integrate --zsh` and restart your shell.",
 		}
 	}
 
@@ -82,7 +82,7 @@ func (s *Service) shellPathCheck(settings config.Settings) config.DoctorCheck {
 			ID:      "shell-path",
 			Status:  "warn",
 			Message: "zsh integration block does not point to Nest's bin directory.",
-			FixHint: "Re-run `nestctl shell integrate --zsh` so Nest's bin path is exported in ~/.zshrc.",
+			FixHint: "Re-run `nestcli shell integrate --zsh` so Nest's bin path is exported in ~/.zshrc.",
 		}
 	}
 	return config.DoctorCheck{
@@ -100,7 +100,7 @@ func (s *Service) resolverCheck(_ config.Settings) config.DoctorCheck {
 			ID:      "test-resolver",
 			Status:  "warn",
 			Message: "Resolver file for `.test` is missing.",
-			FixHint: "Re-run `nestctl bootstrap test-domain` to recreate `/etc/resolver/test`.",
+			FixHint: "Re-run `nestcli bootstrap test-domain` to recreate `/etc/resolver/test`.",
 		}
 	}
 	if !strings.Contains(string(data), "127.0.0.1") || !strings.Contains(string(data), "5354") {
@@ -108,7 +108,7 @@ func (s *Service) resolverCheck(_ config.Settings) config.DoctorCheck {
 			ID:      "test-resolver",
 			Status:  "warn",
 			Message: "Resolver file for `.test` does not point to Nest's local DNS server.",
-			FixHint: "Re-run `nestctl bootstrap test-domain` so the resolver points to 127.0.0.1:5354.",
+			FixHint: "Re-run `nestcli bootstrap test-domain` so the resolver points to 127.0.0.1:5354.",
 		}
 	}
 	return config.DoctorCheck{
@@ -126,7 +126,7 @@ func (s *Service) portsCheck(_ config.Settings) config.DoctorCheck {
 			ID:      "privileged-ports",
 			Status:  "warn",
 			Message: "PF configuration could not be read.",
-			FixHint: "Re-run `nestctl bootstrap test-domain` so Nest can configure local port forwarding.",
+			FixHint: "Re-run `nestcli bootstrap test-domain` so Nest can configure local port forwarding.",
 		}
 	}
 	anchor, err := os.ReadFile("/etc/pf.anchors/dev.xcrap.nest")
@@ -135,7 +135,7 @@ func (s *Service) portsCheck(_ config.Settings) config.DoctorCheck {
 			ID:      "privileged-ports",
 			Status:  "warn",
 			Message: "Nest PF anchor file is missing.",
-			FixHint: "Re-run `nestctl bootstrap test-domain` so Nest can install PF redirects to 8080/8443.",
+			FixHint: "Re-run `nestcli bootstrap test-domain` so Nest can install PF redirects to 8080/8443.",
 		}
 	}
 	if !strings.Contains(string(pfConf), `rdr-anchor "dev.xcrap.nest"`) || !strings.Contains(string(anchor), "port 8080") {
@@ -143,7 +143,7 @@ func (s *Service) portsCheck(_ config.Settings) config.DoctorCheck {
 			ID:      "privileged-ports",
 			Status:  "warn",
 			Message: "Privileged port forwarding for 80/443 is not configured correctly.",
-			FixHint: "Run `nestctl bootstrap test-domain` so Nest can install PF redirects to 8080/8443.",
+			FixHint: "Run `nestcli bootstrap test-domain` so Nest can install PF redirects to 8080/8443.",
 		}
 	}
 	return config.DoctorCheck{
@@ -160,7 +160,7 @@ func (s *Service) frankenphpCheck() config.DoctorCheck {
 			ID:      "frankenphp-binary",
 			Status:  "warn",
 			Message: "FrankenPHP binary is not installed yet.",
-			FixHint: "Run `nestctl php install 8.5` or `nestctl services start` to install the pinned FrankenPHP runtime.",
+			FixHint: "Run `nestcli php install 8.5` or `nestcli services start` to install the pinned FrankenPHP runtime.",
 		}
 	}
 	return config.DoctorCheck{

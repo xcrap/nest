@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/xcrap/nest/daemon/internal/config"
 	fpmeta "github.com/xcrap/nest/daemon/internal/frankenphp"
@@ -29,15 +31,25 @@ func (m *Manager) SupportedVersions() ([]config.PhpVersion, error) {
 		return nil, err
 	}
 
-	version := fpmeta.CurrentRelease().EmbeddedPHPVersion
+	release := fpmeta.CurrentRelease()
+	version := release.EmbeddedPHPVersion
 	binaryPath := m.binaryPathForVersion(version)
-	_, err = os.Stat(binaryPath)
+	_, statErr := os.Stat(binaryPath)
+	installed := statErr == nil
+
+	fullVersion := ""
+	if installed {
+		fullVersion = m.detectFullPHPVersion()
+	}
+
 	return []config.PhpVersion{
 		{
-			Version:   version,
-			Installed: err == nil,
-			Active:    settings.ActivePHPVersion == version,
-			Path:      binaryPath,
+			Version:           version,
+			FullVersion:       fullVersion,
+			FrankenPHPVersion: release.Version,
+			Installed:         installed,
+			Active:            settings.ActivePHPVersion == version,
+			Path:              binaryPath,
 		},
 	}, nil
 }
@@ -98,4 +110,19 @@ func (m *Manager) Activate(version string) error {
 
 func (m *Manager) binaryPathForVersion(version string) string {
 	return filepath.Join(m.paths.PHPVersionsDir, version, "bin", "php")
+}
+
+func (m *Manager) detectFullPHPVersion() string {
+	cmd := exec.Command(m.paths.FrankenPHPPath(), "php-cli", "-v")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	line := strings.SplitN(string(output), "\n", 2)[0]
+	// "PHP 8.5.1 (cli) ..." -> "8.5.1"
+	parts := strings.Fields(line)
+	if len(parts) >= 2 && parts[0] == "PHP" {
+		return parts[1]
+	}
+	return ""
 }

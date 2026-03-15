@@ -10,10 +10,10 @@ mkdir -p "${ROOT_DIR}/tmp"
 
 cd "${ROOT_DIR}"
 
-if [[ ! -x "${ROOT_DIR}/bin/nestd" || ! -x "${ROOT_DIR}/bin/nestctl" || ! -x "${ROOT_DIR}/bin/nesthelper" ]]; then
+if [[ ! -x "${ROOT_DIR}/bin/nestd" || ! -x "${ROOT_DIR}/bin/nestcli" || ! -x "${ROOT_DIR}/bin/nesthelper" ]]; then
   echo "Building Go binaries..."
   go build -o ./bin/nestd ./daemon/cmd/nestd
-  go build -o ./bin/nestctl ./daemon/cmd/nestctl
+  go build -o ./bin/nestcli ./daemon/cmd/nestcli
   go build -o ./bin/nesthelper ./helper/cmd/nesthelper
 fi
 

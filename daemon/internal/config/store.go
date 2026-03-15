@@ -40,7 +40,33 @@ func (s *Store) Ensure() error {
 		}
 	}
 
+	defaults := map[string]string{
+		s.paths.SecurityConfPath:       DefaultSecurityConf,
+		s.paths.PHPIniPath:             DefaultPHPIni,
+		s.paths.PHPAppSnippetPath():    DefaultPHPAppSnippet,
+		s.paths.LaravelAppSnippetPath(): DefaultLaravelAppSnippet,
+	}
+	for path, content := range defaults {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
+}
+
+func (s *Store) LoadConfigFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (s *Store) SaveConfigFile(path string, content string) error {
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func (s *Store) LoadSites() ([]Site, error) {
@@ -66,6 +92,59 @@ func (s *Store) LoadSettings() (Settings, error) {
 func (s *Store) SaveSettings(settings Settings) error {
 	return writeJSONFile(s.paths.SettingsPath, settings)
 }
+
+const DefaultSecurityConf = `header {
+    Referrer-Policy no-referrer-when-downgrade
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Xss-Protection "1; mode=block"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Content-Security-Policy "upgrade-insecure-requests"
+    -Server Caddy
+}
+`
+
+const DefaultPHPIni = `[PHP]
+error_reporting = E_ALL & ~E_DEPRECATED
+log_errors = On
+error_log = php_errors.log
+`
+
+const DefaultPHPAppSnippet = `(php-app) {
+    {args[0]} {
+        import ../security.conf
+
+        root * {args[1]}/public
+
+        @blocked path */.* *.sql *.log *.bak *.env
+        respond @blocked 404
+
+        encode zstd gzip
+
+        php_server {
+            env PHP_INI_log_errors 1
+        }
+        file_server
+    }
+}
+`
+
+const DefaultLaravelAppSnippet = `(laravel-app) {
+    {args[0]} {
+        import ../security.conf
+
+        root * {args[1]}/public
+
+        @blocked path */.* *.sql *.log *.bak *.env
+        respond @blocked 404
+
+        encode zstd gzip
+
+        php_server
+        file_server
+    }
+}
+`
 
 func readJSONFile(path string, target any) error {
 	data, err := os.ReadFile(path)

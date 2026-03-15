@@ -17,6 +17,7 @@ type Paths struct {
 	VersionsDir         string
 	PHPVersionsDir      string
 	ConfigDir           string
+	SnippetsDir         string
 	LogsDir             string
 	RunDir              string
 	DataDir             string
@@ -24,6 +25,8 @@ type Paths struct {
 	SitesPath           string
 	SettingsPath        string
 	CaddyfilePath       string
+	SecurityConfPath    string
+	PHPIniPath          string
 	FrankenPHPLogPath   string
 	FrankenPHPPIDPath   string
 	ComposerWrapperPath string
@@ -37,20 +40,24 @@ func DefaultPaths() (Paths, error) {
 	}
 
 	base := filepath.Join(home, "Library", "Application Support", AppName)
+	configDir := filepath.Join(base, "config")
 	paths := Paths{
 		HomeDir:             home,
 		BaseDir:             base,
 		BinDir:              filepath.Join(base, "bin"),
 		VersionsDir:         filepath.Join(base, "versions"),
 		PHPVersionsDir:      filepath.Join(base, "versions", "php"),
-		ConfigDir:           filepath.Join(base, "config"),
+		ConfigDir:           configDir,
+		SnippetsDir:         filepath.Join(configDir, "snippets"),
 		LogsDir:             filepath.Join(base, "logs"),
 		RunDir:              filepath.Join(base, "run"),
 		DataDir:             filepath.Join(base, "data"),
 		SocketPath:          filepath.Join(base, "run", SocketFilename),
-		SitesPath:           filepath.Join(base, "config", "sites.json"),
-		SettingsPath:        filepath.Join(base, "config", "settings.json"),
-		CaddyfilePath:       filepath.Join(base, "config", "Caddyfile"),
+		SitesPath:           filepath.Join(configDir, "sites.json"),
+		SettingsPath:        filepath.Join(configDir, "settings.json"),
+		CaddyfilePath:       filepath.Join(configDir, "Caddyfile"),
+		SecurityConfPath:    filepath.Join(configDir, "security.conf"),
+		PHPIniPath:          filepath.Join(configDir, "php.ini"),
 		FrankenPHPLogPath:   filepath.Join(base, "logs", "frankenphp.log"),
 		FrankenPHPPIDPath:   filepath.Join(base, "run", "frankenphp.pid"),
 		ComposerWrapperPath: filepath.Join(base, "bin", "composer"),
@@ -67,6 +74,7 @@ func (p Paths) Ensure() error {
 		p.VersionsDir,
 		p.PHPVersionsDir,
 		p.ConfigDir,
+		p.SnippetsDir,
 		p.LogsDir,
 		p.RunDir,
 		p.DataDir,
@@ -85,4 +93,12 @@ func (p Paths) ActivePHPPath() string {
 
 func (p Paths) FrankenPHPPath() string {
 	return filepath.Join(p.BinDir, "frankenphp")
+}
+
+func (p Paths) PHPAppSnippetPath() string {
+	return filepath.Join(p.SnippetsDir, "php-app")
+}
+
+func (p Paths) LaravelAppSnippetPath() string {
+	return filepath.Join(p.SnippetsDir, "laravel-app")
 }

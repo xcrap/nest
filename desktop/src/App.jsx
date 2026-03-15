@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Code2, FileText, Globe2, LayoutDashboard, Play, RefreshCw, RotateCcw, Settings2, Square } from "lucide-react";
+import { Code2, FileText, Globe2, LayoutDashboard, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Square } from "lucide-react";
 
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -10,11 +10,13 @@ import { DashboardScreen } from "./screens/DashboardScreen";
 import { LogsScreen } from "./screens/LogsScreen";
 import { PHPVersionsScreen } from "./screens/PHPVersionsScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
+import { ConfigScreen } from "./screens/ConfigScreen";
 import { SitesScreen } from "./screens/SitesScreen";
 
 const tabs = [
   { value: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { value: "sites", label: "Sites", icon: Globe2 },
+  { value: "config", label: "Config", icon: SlidersHorizontal },
   { value: "logs", label: "Logs", icon: FileText },
   { value: "php", label: "PHP", icon: Code2 },
   { value: "settings", label: "Settings", icon: Settings2 }
@@ -33,6 +35,8 @@ export default function App() {
   const [logs, setLogs] = useState("");
   const [versions, setVersions] = useState([]);
   const [serviceStatus, setServiceStatus] = useState("unknown");
+  const [settings, setSettings] = useState(null);
+  const [configs, setConfigs] = useState({});
   const [error, setError] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [appMeta, setAppMeta] = useState({
@@ -52,18 +56,22 @@ export default function App() {
     try {
       setIsRefreshing(true);
       setError("");
-      const [siteData, doctorData, logData, versionData, statusData] = await Promise.all([
+      const [siteData, doctorData, logData, versionData, statusData, settingsData, configData] = await Promise.all([
         api.getSites(),
         api.getDoctor(),
         api.getLogs(),
         api.getPHPVersions(),
-        api.getServiceStatus()
+        api.getServiceStatus(),
+        api.getSettings(),
+        api.getConfigFiles()
       ]);
       setSites(siteData);
       setDoctorChecks(doctorData);
       setLogs(logData.content);
       setVersions(versionData);
       setServiceStatus(statusData.status);
+      setSettings(settingsData);
+      setConfigs(configData);
     } catch (refreshError) {
       setError(refreshError.message);
     } finally {
@@ -113,52 +121,45 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-zinc-50 text-zinc-950">
       {/* Fixed header */}
+      <div className="h-8 flex-none bg-white" style={{ WebkitAppRegion: "drag" }} />
       <header
-        className="flex-none border-b border-zinc-200 bg-white"
+        className="flex h-11 flex-none items-center justify-between border-b border-zinc-200 bg-white pl-5 pr-4"
         style={{ WebkitAppRegion: "drag" }}
       >
-        <div
-          className="flex items-center gap-3 pr-4 pb-2.5"
-          style={{ paddingTop: "36px", paddingLeft: "80px" }}
-        >
+        <div className="flex items-center gap-2">
           <span className="text-[13px] font-semibold text-zinc-900">Nest</span>
           <Badge variant={serviceVariant[serviceStatus] || "default"}>{serviceStatus}</Badge>
+        </div>
 
-          <div className="flex-1" />
-
-          <div
-            className="flex items-center gap-1.5"
-            style={{ WebkitAppRegion: "no-drag" }}
+        <div className="flex items-center gap-1.5" style={{ WebkitAppRegion: "no-drag" }}>
+          {serviceStatus === "running" ? (
+            <Button size="sm" variant="outline" onClick={() => wrap(() => api.stopServices())}>
+              <Square className="h-3 w-3 fill-current" />
+              Stop
+            </Button>
+          ) : (
+            <Button size="sm" onClick={() => wrap(() => api.startServices())}>
+              <Play className="h-3 w-3 fill-current" />
+              Start
+            </Button>
+          )}
+          <Separator orientation="vertical" className="mx-1 h-4" />
+          <Button
+            size="iconSm"
+            variant="ghost"
+            onClick={() => wrap(() => api.reloadServices())}
+            title="Reload config"
           >
-            {serviceStatus === "running" ? (
-              <Button size="sm" variant="outline" onClick={() => wrap(() => api.stopServices())}>
-                <Square className="h-3 w-3 fill-current" />
-                Stop
-              </Button>
-            ) : (
-              <Button size="sm" onClick={() => wrap(() => api.startServices())}>
-                <Play className="h-3 w-3 fill-current" />
-                Start
-              </Button>
-            )}
-            <Separator orientation="vertical" className="mx-0.5 h-4" />
-            <Button
-              size="iconSm"
-              variant="ghost"
-              onClick={() => wrap(() => api.reloadServices())}
-              title="Reload config"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              size="iconSm"
-              variant="ghost"
-              onClick={refresh}
-              title="Refresh data"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
-            </Button>
-          </div>
+            <RotateCcw className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            size="iconSm"
+            variant="ghost"
+            onClick={refresh}
+            title="Refresh data"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
+          </Button>
         </div>
       </header>
 
@@ -205,6 +206,7 @@ export default function App() {
                 doctorChecks={doctorChecks}
                 serviceStatus={serviceStatus}
                 sites={sites}
+                onFixCheck={(id) => wrap(() => api.fixDoctorCheck(id))}
               />
             )}
             {activeTab === "sites" && (
@@ -220,6 +222,17 @@ export default function App() {
                 onUpdate={(id, payload) => wrap(() => api.updateSite(id, payload))}
               />
             )}
+            {activeTab === "config" && (
+              <ConfigScreen
+                configs={configs}
+                onSave={async (name, content) => {
+                  await api.saveConfigFile(name, content);
+                  const configData = await api.getConfigFiles();
+                  setConfigs(configData);
+                }}
+                onReload={() => api.reloadServices()}
+              />
+            )}
             {activeTab === "logs" && <LogsScreen content={logs} />}
             {activeTab === "php" && (
               <PHPVersionsScreen
@@ -231,6 +244,7 @@ export default function App() {
             {activeTab === "settings" && (
               <SettingsScreen
                 appMeta={appMeta}
+                settings={settings}
                 doctorChecks={doctorChecks}
                 onBootstrap={() => wrap(() => api.bootstrapTestDomain())}
                 onCheckUpdates={checkForUpdates}

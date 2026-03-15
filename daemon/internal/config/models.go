@@ -5,6 +5,7 @@ import "time"
 type Site struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
+	Type         string    `json:"type"`
 	Domain       string    `json:"domain"`
 	RootPath     string    `json:"rootPath"`
 	Status       string    `json:"status"`
@@ -37,10 +38,12 @@ type Settings struct {
 }
 
 type PhpVersion struct {
-	Version   string `json:"version"`
-	Installed bool   `json:"installed"`
-	Active    bool   `json:"active"`
-	Path      string `json:"path"`
+	Version          string `json:"version"`
+	FullVersion      string `json:"fullVersion"`
+	FrankenPHPVersion string `json:"frankenphpVersion"`
+	Installed        bool   `json:"installed"`
+	Active           bool   `json:"active"`
+	Path             string `json:"path"`
 }
 
 type DoctorCheck struct {

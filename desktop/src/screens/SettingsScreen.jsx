@@ -1,4 +1,5 @@
-import { DownloadCloud, Github, RefreshCw, ShieldCheck, Stethoscope, TerminalSquare } from "lucide-react";
+import { useState } from "react";
+import { Check, CircleAlert, DownloadCloud, Github, Loader2, RefreshCw, ShieldCheck, Stethoscope, TerminalSquare } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -12,7 +13,11 @@ const doctorVariant = {
   fail: "danger"
 };
 
-export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appMeta, updateState, onCheckUpdates, onOpenUpdate }) {
+export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appMeta, settings, updateState, onCheckUpdates, onOpenUpdate }) {
+  const bootstrap = settings?.bootstrap;
+  const testDomainDone = bootstrap?.testDomainConfigured ?? false;
+  const localCATrusted = bootstrap?.localCATrusted ?? false;
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 lg:grid-cols-2">
@@ -21,22 +26,30 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
             <CardTitle>Machine bootstrap</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <ActionRow
+            <BootstrapRow
               icon={TerminalSquare}
               title="Install .test routing"
               body="Creates resolver and forwarding for .test domains."
-              action={<Button size="sm" onClick={onBootstrap}>Run bootstrap</Button>}
+              done={testDomainDone}
+              doneLabel="Configured"
+              actionLabel="Run bootstrap"
+              onAction={onBootstrap}
             />
-            <ActionRow
+            <BootstrapRow
               icon={ShieldCheck}
               title="Trust local HTTPS"
               body="Adds local CA to your keychain for trusted certificates."
-              action={
-                <Button size="sm" variant="outline" onClick={onTrustLocalCA}>
-                  Trust CA
-                </Button>
-              }
+              done={localCATrusted}
+              doneLabel="Trusted"
+              actionLabel="Trust CA"
+              variant="outline"
+              onAction={onTrustLocalCA}
             />
+            {bootstrap?.lastBootstrapCompleted && (
+              <p className="text-xs text-zinc-400">
+                Last bootstrap: {formatRelativeDate(bootstrap.lastBootstrapCompleted)}
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -119,7 +132,18 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
   );
 }
 
-function ActionRow({ icon: Icon, title, body, action }) {
+function BootstrapRow({ icon: Icon, title, body, done, doneLabel, actionLabel, variant, onAction }) {
+  const [running, setRunning] = useState(false);
+
+  const handleAction = async () => {
+    setRunning(true);
+    try {
+      await onAction();
+    } finally {
+      setRunning(false);
+    }
+  };
+
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3">
       <div className="flex items-center gap-3">
@@ -131,7 +155,17 @@ function ActionRow({ icon: Icon, title, body, action }) {
           <p className="text-[13px] text-zinc-500">{body}</p>
         </div>
       </div>
-      {action}
+      {done ? (
+        <Badge variant="success">
+          <Check className="h-3 w-3" />
+          {doneLabel}
+        </Badge>
+      ) : (
+        <Button size="sm" variant={variant} onClick={handleAction} disabled={running}>
+          {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          {actionLabel}
+        </Button>
+      )}
     </div>
   );
 }

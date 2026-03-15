@@ -19,6 +19,7 @@ type Service struct {
 
 type CreateInput struct {
 	Name         string `json:"name"`
+	Type         string `json:"type"`
 	Domain       string `json:"domain"`
 	RootPath     string `json:"rootPath"`
 	PHPVersion   string `json:"phpVersion"`
@@ -27,6 +28,7 @@ type CreateInput struct {
 
 type UpdateInput struct {
 	Name         *string `json:"name"`
+	Type         *string `json:"type"`
 	Domain       *string `json:"domain"`
 	RootPath     *string `json:"rootPath"`
 	PHPVersion   *string `json:"phpVersion"`
@@ -73,10 +75,19 @@ func (s *Service) Create(input CreateInput) (config.Site, error) {
 		return config.Site{}, err
 	}
 
+	siteType := input.Type
+	if siteType == "" {
+		siteType = "php"
+	}
+	if siteType != "php" && siteType != "laravel" {
+		return config.Site{}, errors.New("type must be php or laravel")
+	}
+
 	now := time.Now().UTC()
 	site := config.Site{
 		ID:           randomID(),
 		Name:         input.Name,
+		Type:         siteType,
 		Domain:       strings.ToLower(input.Domain),
 		RootPath:     input.RootPath,
 		Status:       "stopped",
@@ -120,6 +131,13 @@ func (s *Service) Update(id string, input UpdateInput) (config.Site, error) {
 			return config.Site{}, errors.New("site name is required")
 		}
 		sites[index].Name = name
+	}
+	if input.Type != nil {
+		siteType := strings.TrimSpace(*input.Type)
+		if siteType != "php" && siteType != "laravel" {
+			return config.Site{}, errors.New("type must be php or laravel")
+		}
+		sites[index].Type = siteType
 	}
 	if input.Domain != nil {
 		domain := strings.ToLower(strings.TrimSpace(*input.Domain))

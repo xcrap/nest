@@ -76,7 +76,13 @@ async function requestDaemon({ method, route, body }) {
           data += chunk;
         });
         response.on("end", () => {
-          const parsed = data ? JSON.parse(data) : null;
+          let parsed = null;
+          try {
+            parsed = data ? JSON.parse(data) : null;
+          } catch {
+            reject(new Error(data?.trim() || `Daemon returned invalid response (${response.statusCode})`));
+            return;
+          }
           if (response.statusCode >= 400) {
             reject(new Error(parsed?.error || `Daemon request failed with ${response.statusCode}`));
             return;
@@ -256,8 +262,13 @@ function appleScriptQuote(value) {
 
 async function ensureDaemonStarted() {
   if (fs.existsSync(socketPath)) {
-    return;
+    const alive = await pingDaemon().catch(() => false);
+    if (alive) {
+      return;
+    }
+    fs.unlinkSync(socketPath);
   }
+
   if (!fs.existsSync(daemonPath)) {
     throw new Error(`Nest daemon binary not found at ${daemonPath}. Build it with 'make build' before launching the desktop app.`);
   }
@@ -272,6 +283,19 @@ async function ensureDaemonStarted() {
   });
 
   await waitForSocket(socketPath, 5000);
+}
+
+function pingDaemon() {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ method: "GET", socketPath, path: "/services/status", timeout: 2000 }, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => resolve(res.statusCode < 500));
+    });
+    req.on("error", () => reject(false));
+    req.on("timeout", () => { req.destroy(); reject(false); });
+    req.end();
+  });
 }
 
 function resolveBundledBinary(name) {

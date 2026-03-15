@@ -1,6 +1,8 @@
-import { Activity, AlertTriangle, FolderKanban, ShieldCheck } from "lucide-react";
+import { useState } from "react";
+import { Activity, AlertTriangle, FolderKanban, Loader2, ShieldCheck, Wrench } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { formatRelativeDate } from "../lib/utils";
 
@@ -10,7 +12,9 @@ const doctorVariant = {
   fail: "danger"
 };
 
-export function DashboardScreen({ sites, doctorChecks, serviceStatus }) {
+const fixableChecks = new Set(["php-symlink", "shell-path", "frankenphp-binary"]);
+
+export function DashboardScreen({ sites, doctorChecks, serviceStatus, onFixCheck }) {
   const runningSites = sites.filter((site) => site.status === "running").length;
   const doctorWarnings = doctorChecks.filter((check) => check.status !== "pass");
   const latestSites = [...sites]
@@ -36,20 +40,7 @@ export function DashboardScreen({ sites, doctorChecks, serviceStatus }) {
               <p className="py-6 text-center text-sm text-zinc-400">No checks reported yet.</p>
             )}
             {doctorChecks.map((check) => (
-              <div
-                key={check.id}
-                className="flex items-start justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3"
-              >
-                <div className="min-w-0 space-y-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <ShieldCheck className="h-3.5 w-3.5 text-zinc-400" />
-                    <span className="text-sm font-medium text-zinc-900">{check.id}</span>
-                  </div>
-                  <p className="text-[13px] text-zinc-500">{check.message}</p>
-                  {check.fixHint && <p className="text-xs text-zinc-400">{check.fixHint}</p>}
-                </div>
-                <Badge variant={doctorVariant[check.status] || "default"}>{check.status}</Badge>
-              </div>
+              <DoctorCheckRow key={check.id} check={check} onFix={onFixCheck} />
             ))}
           </CardContent>
         </Card>
@@ -79,6 +70,42 @@ export function DashboardScreen({ sites, doctorChecks, serviceStatus }) {
             ))}
           </CardContent>
         </Card>
+      </div>
+    </div>
+  );
+}
+
+function DoctorCheckRow({ check, onFix }) {
+  const [fixing, setFixing] = useState(false);
+  const canFix = check.status !== "pass" && fixableChecks.has(check.id);
+
+  const handleFix = async () => {
+    setFixing(true);
+    try {
+      await onFix(check.id);
+    } finally {
+      setFixing(false);
+    }
+  };
+
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3">
+      <div className="min-w-0 space-y-0.5">
+        <div className="flex items-center gap-1.5">
+          <ShieldCheck className="h-3.5 w-3.5 text-zinc-400" />
+          <span className="text-sm font-medium text-zinc-900">{check.id}</span>
+        </div>
+        <p className="text-[13px] text-zinc-500">{check.message}</p>
+        {check.fixHint && <p className="text-xs text-zinc-400">{check.fixHint}</p>}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {canFix && (
+          <Button size="sm" variant="outline" onClick={handleFix} disabled={fixing}>
+            {fixing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
+            Fix
+          </Button>
+        )}
+        <Badge variant={doctorVariant[check.status] || "default"}>{check.status}</Badge>
       </div>
     </div>
   );

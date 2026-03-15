@@ -132,20 +132,24 @@ func tempPaths(t *testing.T) state.Paths {
 
 	homeDir := t.TempDir()
 	base := filepath.Join(homeDir, "Library", "Application Support", "Nest")
+	configDir := filepath.Join(base, "config")
 	return state.Paths{
 		HomeDir:             homeDir,
 		BaseDir:             base,
 		BinDir:              filepath.Join(base, "bin"),
 		VersionsDir:         filepath.Join(base, "versions"),
 		PHPVersionsDir:      filepath.Join(base, "versions", "php"),
-		ConfigDir:           filepath.Join(base, "config"),
+		ConfigDir:           configDir,
+		SnippetsDir:         filepath.Join(configDir, "snippets"),
 		LogsDir:             filepath.Join(base, "logs"),
 		RunDir:              filepath.Join(base, "run"),
 		DataDir:             filepath.Join(base, "data"),
 		SocketPath:          filepath.Join(base, "run", "nest.sock"),
-		SitesPath:           filepath.Join(base, "config", "sites.json"),
-		SettingsPath:        filepath.Join(base, "config", "settings.json"),
-		CaddyfilePath:       filepath.Join(base, "config", "Caddyfile"),
+		SitesPath:           filepath.Join(configDir, "sites.json"),
+		SettingsPath:        filepath.Join(configDir, "settings.json"),
+		CaddyfilePath:       filepath.Join(configDir, "Caddyfile"),
+		SecurityConfPath:    filepath.Join(configDir, "security.conf"),
+		PHPIniPath:          filepath.Join(configDir, "php.ini"),
 		FrankenPHPLogPath:   filepath.Join(base, "logs", "frankenphp.log"),
 		FrankenPHPPIDPath:   filepath.Join(base, "run", "frankenphp.pid"),
 		ComposerWrapperPath: filepath.Join(base, "bin", "composer"),
