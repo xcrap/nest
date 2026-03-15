@@ -41,8 +41,8 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
     () =>
       [...sites].sort(
         (left, right) =>
-          right.name.localeCompare(left.name, undefined, { sensitivity: "base" }) ||
-          right.domain.localeCompare(left.domain, undefined, { sensitivity: "base" })
+          left.name.localeCompare(right.name, undefined, { sensitivity: "base" }) ||
+          left.domain.localeCompare(right.domain, undefined, { sensitivity: "base" })
       ),
     [sites]
   );

@@ -61,9 +61,9 @@ func (s *Service) List() ([]config.Site, error) {
 		left := normalized[i]
 		right := normalized[j]
 		if strings.EqualFold(left.Name, right.Name) {
-			return strings.ToLower(left.Domain) > strings.ToLower(right.Domain)
+			return strings.ToLower(left.Domain) < strings.ToLower(right.Domain)
 		}
-		return strings.ToLower(left.Name) > strings.ToLower(right.Name)
+		return strings.ToLower(left.Name) < strings.ToLower(right.Name)
 	})
 	return normalized, nil
 }
