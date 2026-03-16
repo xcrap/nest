@@ -114,7 +114,9 @@ export default function App() {
       setError("");
       setUpdateState({ status: "checking" });
       const result = await desktop.checkForUpdates();
-      setUpdateState((current) => ({ ...current, ...result }));
+      if (result) {
+        setUpdateState((current) => ({ ...current, ...result }));
+      }
     } catch (updateError) {
       setUpdateState({ status: "error", message: updateError.message });
       setError(updateError.message);

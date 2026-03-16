@@ -272,7 +272,7 @@ function getAppMeta() {
     packaged: app.isPackaged,
     platform: process.platform,
     arch: process.arch,
-    releaseFeedConfigured: Boolean(resolveReleaseRepository())
+    releaseFeedConfigured: app.isPackaged
   };
 }
 
@@ -330,8 +330,9 @@ async function handleCheckForUpdates() {
   const updateAvailable = result.updateInfo && autoUpdater.currentVersion.compare(result.updateInfo.version) < 0;
 
   if (updateAvailable) {
-    await autoUpdater.downloadUpdate();
-    return { status: "downloading", version: result.updateInfo.version };
+    // Don't await — let download-progress and update-downloaded events drive the UI
+    autoUpdater.downloadUpdate();
+    return null;
   }
 
   return { status: "current", version: app.getVersion() };
