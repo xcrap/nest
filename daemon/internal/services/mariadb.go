@@ -132,6 +132,26 @@ func (s *MariaDBService) CheckForUpdates(ctx context.Context) (config.MariaDBRun
 	return s.RuntimeStatus(ctx)
 }
 
+func (s *MariaDBService) Ready(ctx context.Context) error {
+	runtime, err := dbmeta.Detect(ctx)
+	if err != nil {
+		return err
+	}
+	if !runtime.Installed || runtime.Prefix == "" {
+		return fmt.Errorf("homebrew formula %s is not installed", runtime.Formula)
+	}
+
+	status, err := s.Status()
+	if err != nil {
+		return err
+	}
+	if status != "running" {
+		return fmt.Errorf("mariadb is %s", status)
+	}
+
+	return s.ping(ctx, runtime.Prefix)
+}
+
 func (s *MariaDBService) Install(ctx context.Context) error {
 	return s.install(ctx, nil)
 }

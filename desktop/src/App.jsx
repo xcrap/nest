@@ -36,6 +36,7 @@ export default function App() {
   const [doctorChecks, setDoctorChecks] = useState([]);
   const [logs, setLogs] = useState("");
   const [versions, setVersions] = useState([]);
+  const [composerRuntime, setComposerRuntime] = useState(null);
   const [mariaDB, setMariaDB] = useState(null);
   const [serviceStatus, setServiceStatus] = useState("unknown");
   const [settings, setSettings] = useState(null);
@@ -55,11 +56,12 @@ export default function App() {
     try {
       setIsRefreshing(true);
       setError("");
-      const [siteData, doctorData, logData, versionData, mariaDBData, statusData, settingsData, configData] = await Promise.all([
+      const [siteData, doctorData, logData, versionData, composerData, mariaDBData, statusData, settingsData, configData] = await Promise.all([
         api.getSites(),
         api.getDoctor(),
         api.getLogs(),
         api.getPHPVersions(),
+        api.getComposer(),
         api.getMariaDB(),
         api.getServiceStatus(),
         api.getSettings(),
@@ -69,6 +71,7 @@ export default function App() {
       setDoctorChecks(doctorData);
       setLogs(logData.content);
       setVersions(versionData);
+      setComposerRuntime(composerData);
       setMariaDB(mariaDBData);
       setServiceStatus(statusData.status);
       setSettings(settingsData);
@@ -260,7 +263,24 @@ export default function App() {
             )}
             {activeTab === "php" && (
               <PHPVersionsScreen
+                composerRuntime={composerRuntime}
                 versions={versions}
+                onCheckComposerUpdates={() => wrap(async () => {
+                  const runtime = await api.checkComposerUpdates();
+                  setComposerRuntime(runtime);
+                })}
+                onInstallComposer={() => wrap(async () => {
+                  const runtime = await api.installComposer();
+                  setComposerRuntime(runtime);
+                })}
+                onRollbackComposer={() => wrap(async () => {
+                  const runtime = await api.rollbackComposer();
+                  setComposerRuntime(runtime);
+                })}
+                onUpdateComposer={() => wrap(async () => {
+                  const runtime = await api.updateComposer();
+                  setComposerRuntime(runtime);
+                })}
                 onInstall={(version) => wrap(() => api.installPHP(version))}
                 onActivate={(version) => wrap(() => api.activatePHP(version))}
               />

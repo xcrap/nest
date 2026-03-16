@@ -8,13 +8,15 @@ import (
 )
 
 const (
-	ResolverPath   = "/etc/resolver/test"
-	PFAnchorPath   = "/etc/pf.anchors/dev.xcrap.nest"
-	PFConfPath     = "/etc/pf.conf"
-	PFAnchorName   = "dev.xcrap.nest"
-	ResolverIP     = "127.0.0.1"
-	ResolverPort   = "5354"
-	SystemKeychain = "/Library/Keychains/System.keychain"
+	ResolverPath       = "/etc/resolver/test"
+	PFAnchorPath       = "/etc/pf.anchors/dev.nest.app"
+	PFConfPath         = "/etc/pf.conf"
+	PFAnchorName       = "dev.nest.app"
+	LegacyPFAnchorPath = "/etc/pf.anchors/dev.xcrap.nest"
+	LegacyPFAnchorName = "dev.xcrap.nest"
+	ResolverIP         = "127.0.0.1"
+	ResolverPort       = "5354"
+	SystemKeychain     = "/Library/Keychains/System.keychain"
 )
 
 func ResolverConfigured() bool {

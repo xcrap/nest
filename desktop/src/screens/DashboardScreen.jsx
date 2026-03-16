@@ -12,7 +12,7 @@ const doctorVariant = {
   fail: "danger"
 };
 
-const fixableChecks = new Set(["php-symlink", "shell-path", "frankenphp-binary"]);
+const fixableChecks = new Set(["php-symlink", "shell-path", "frankenphp-binary", "composer-runtime"]);
 
 export function DashboardScreen({ sites, doctorChecks, serviceStatus, onFixCheck }) {
   const runningSites = sites.filter((site) => site.status === "running").length;

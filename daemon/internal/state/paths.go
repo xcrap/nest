@@ -37,6 +37,7 @@ type Paths struct {
 	MariaDBDataDir      string
 	ComposerWrapperPath string
 	ComposerPharPath    string
+	ComposerBackupPath  string
 }
 
 func DefaultPaths() (Paths, error) {
@@ -74,6 +75,7 @@ func DefaultPaths() (Paths, error) {
 		MariaDBDataDir:      filepath.Join(base, "data", "mariadb"),
 		ComposerWrapperPath: filepath.Join(base, "bin", "composer"),
 		ComposerPharPath:    filepath.Join(base, "data", "composer.phar"),
+		ComposerBackupPath:  filepath.Join(base, "data", "composer.previous.phar"),
 	}
 
 	return paths, nil

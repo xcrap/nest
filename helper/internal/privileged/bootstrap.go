@@ -28,6 +28,7 @@ func BootstrapTestDomain() error {
 	if err := os.WriteFile(bootstrapstate.PFAnchorPath, []byte(bootstrapstate.PFAnchorContents()), 0o644); err != nil {
 		return err
 	}
+	_ = os.Remove(bootstrapstate.LegacyPFAnchorPath)
 
 	if err := ensurePFConfigIncludesAnchor(); err != nil {
 		return err
@@ -60,6 +61,7 @@ func UnbootstrapTestDomain() error {
 
 	_ = os.Remove(bootstrapstate.ResolverPath)
 	_ = os.Remove(bootstrapstate.PFAnchorPath)
+	_ = os.Remove(bootstrapstate.LegacyPFAnchorPath)
 
 	if err := removePFConfigAnchor(); err != nil {
 		return err
@@ -129,19 +131,18 @@ func ensurePFConfigIncludesAnchor() error {
 		return err
 	}
 
-	rdrAnchorLine := `rdr-anchor "` + bootstrapstate.PFAnchorName + `"`
-	anchorLine := `anchor "` + bootstrapstate.PFAnchorName + `"`
-	loadLine := `load anchor "` + bootstrapstate.PFAnchorName + `" from "` + bootstrapstate.PFAnchorPath + `"`
 	lines := strings.Split(string(data), "\n")
 	filtered := make([]string, 0, len(lines)+3)
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == rdrAnchorLine || trimmed == anchorLine || trimmed == loadLine {
+		if matchesAnchorConfigLine(trimmed, bootstrapstate.PFAnchorName, bootstrapstate.PFAnchorPath) ||
+			matchesAnchorConfigLine(trimmed, bootstrapstate.LegacyPFAnchorName, bootstrapstate.LegacyPFAnchorPath) {
 			continue
 		}
 		filtered = append(filtered, line)
 	}
 
+	rdrAnchorLine, anchorLine, loadLine := anchorConfigLines(bootstrapstate.PFAnchorName, bootstrapstate.PFAnchorPath)
 	updated := make([]string, 0, len(filtered)+3)
 	insertedRDR := false
 	insertedAnchor := false
@@ -174,20 +175,29 @@ func removePFConfigAnchor() error {
 		return err
 	}
 
-	rdrAnchorLine := `rdr-anchor "` + bootstrapstate.PFAnchorName + `"`
-	anchorLine := `anchor "` + bootstrapstate.PFAnchorName + `"`
-	loadLine := `load anchor "` + bootstrapstate.PFAnchorName + `" from "` + bootstrapstate.PFAnchorPath + `"`
 	lines := strings.Split(string(data), "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == rdrAnchorLine || trimmed == anchorLine || trimmed == loadLine {
+		if matchesAnchorConfigLine(trimmed, bootstrapstate.PFAnchorName, bootstrapstate.PFAnchorPath) ||
+			matchesAnchorConfigLine(trimmed, bootstrapstate.LegacyPFAnchorName, bootstrapstate.LegacyPFAnchorPath) {
 			continue
 		}
 		filtered = append(filtered, line)
 	}
 
 	return os.WriteFile(bootstrapstate.PFConfPath, []byte(strings.Join(filtered, "\n")), 0o644)
+}
+
+func anchorConfigLines(name, path string) (string, string, string) {
+	return `rdr-anchor "` + name + `"`,
+		`anchor "` + name + `"`,
+		`load anchor "` + name + `" from "` + path + `"`
+}
+
+func matchesAnchorConfigLine(line, name, path string) bool {
+	rdrAnchorLine, anchorLine, loadLine := anchorConfigLines(name, path)
+	return line == rdrAnchorLine || line == anchorLine || line == loadLine
 }
 
 func verifyPFAnchorLoaded() error {

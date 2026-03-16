@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
-const launchAgentLabel = "dev.xcrap.nestd";
+const launchAgentLabel = "dev.nest.nestd";
 const launchAgentPath = path.join(os.homedir(), "Library", "LaunchAgents", `${launchAgentLabel}.plist`);
 const launchAgentDomain = `gui/${process.getuid()}`;
 const launchAgentTarget = `${launchAgentDomain}/${launchAgentLabel}`;

@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,6 +39,65 @@ func TestDoctorDetectsMissingShellPath(t *testing.T) {
 	}
 }
 
+func TestDoctorDetectsMissingComposer(t *testing.T) {
+	paths := tempPaths(t)
+	store := config.NewStore(paths)
+	if err := store.Ensure(); err != nil {
+		t.Fatalf("ensure store: %v", err)
+	}
+
+	checks, err := NewService(paths, store).Run()
+	if err != nil {
+		t.Fatalf("run doctor: %v", err)
+	}
+
+	var found bool
+	for _, check := range checks {
+		if check.ID == "composer-runtime" {
+			found = true
+			if check.Status != "warn" {
+				t.Fatalf("expected composer-runtime warn, got %+v", check)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected composer-runtime check")
+	}
+}
+
+func TestLaunchAgentHealthy(t *testing.T) {
+	if !launchAgentHealthy("type = LaunchAgent\nstate = running\n") {
+		t.Fatal("expected launch agent output to be healthy")
+	}
+	if launchAgentHealthy("type = LaunchAgent\nstate = exited\n") {
+		t.Fatal("expected non-running launch agent output to be unhealthy")
+	}
+}
+
+func TestContainsLoopbackAddress(t *testing.T) {
+	if !containsLoopbackAddress([]net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}) {
+		t.Fatal("expected loopback address to be accepted")
+	}
+	if containsLoopbackAddress([]net.IPAddr{{IP: net.ParseIP("192.168.1.20")}}) {
+		t.Fatal("expected non-loopback address to be rejected")
+	}
+}
+
+func TestValidLocalHTTPRoute(t *testing.T) {
+	if !validLocalHTTPRoute(308, "https://localhost/") {
+		t.Fatal("expected localhost https redirect to be valid")
+	}
+	if !validLocalHTTPRoute(204, "") {
+		t.Fatal("expected direct 204 response to be valid")
+	}
+	if validLocalHTTPRoute(200, "") {
+		t.Fatal("expected arbitrary 200 response to be invalid")
+	}
+	if validLocalHTTPRoute(308, "https://example.com/") {
+		t.Fatal("expected non-local redirect to be invalid")
+	}
+}
+
 func tempPaths(t *testing.T) state.Paths {
 	t.Helper()
 
@@ -71,5 +131,6 @@ func tempPaths(t *testing.T) state.Paths {
 		MariaDBDataDir:      filepath.Join(base, "data", "mariadb"),
 		ComposerWrapperPath: filepath.Join(base, "bin", "composer"),
 		ComposerPharPath:    filepath.Join(base, "data", "composer.phar"),
+		ComposerBackupPath:  filepath.Join(base, "data", "composer.previous.phar"),
 	}
 }

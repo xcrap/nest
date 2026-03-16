@@ -63,6 +63,25 @@ type MariaDBRuntime struct {
 	LastError        string `json:"lastError"`
 }
 
+type ComposerRuntime struct {
+	Installed         bool      `json:"installed"`
+	Status            string    `json:"status"`
+	InstalledVersion  string    `json:"installedVersion"`
+	LatestVersion     string    `json:"latestVersion"`
+	InstalledChecksum string    `json:"installedChecksum"`
+	LatestChecksum    string    `json:"latestChecksum"`
+	SourceURL         string    `json:"sourceURL"`
+	ChecksumURL       string    `json:"checksumURL"`
+	PharPath          string    `json:"pharPath"`
+	WrapperPath       string    `json:"wrapperPath"`
+	BackupPath        string    `json:"backupPath"`
+	InstalledAt       time.Time `json:"installedAt"`
+	WrapperPresent    bool      `json:"wrapperPresent"`
+	BackupAvailable   bool      `json:"backupAvailable"`
+	UpdateAvailable   bool      `json:"updateAvailable"`
+	LastError         string    `json:"lastError"`
+}
+
 type DoctorCheck struct {
 	ID      string `json:"id"`
 	Status  string `json:"status"`

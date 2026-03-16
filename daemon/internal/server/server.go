@@ -71,6 +71,11 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/php/versions", s.handlePHPVersions)
 	mux.HandleFunc("/php/versions/install", s.handlePHPInstall)
 	mux.HandleFunc("/php/versions/activate", s.handlePHPActivate)
+	mux.HandleFunc("/composer", s.handleComposerStatus)
+	mux.HandleFunc("/composer/check-updates", s.handleComposerCheckUpdates)
+	mux.HandleFunc("/composer/install", s.handleComposerInstall)
+	mux.HandleFunc("/composer/update", s.handleComposerUpdate)
+	mux.HandleFunc("/composer/rollback", s.handleComposerRollback)
 	mux.HandleFunc("/mariadb", s.handleMariaDBStatus)
 	mux.HandleFunc("/mariadb/check-updates", s.handleMariaDBCheckUpdates)
 	mux.HandleFunc("/mariadb/install", s.handleMariaDBInstall)
@@ -332,6 +337,71 @@ func (s *Server) handlePHPActivate(writer http.ResponseWriter, request *http.Req
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "active"})
 }
 
+func (s *Server) handleComposerStatus(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := s.app.ComposerRuntime(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
+}
+
+func (s *Server) handleComposerCheckUpdates(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := s.app.CheckComposerUpdates(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
+}
+
+func (s *Server) handleComposerInstall(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := s.app.InstallComposer(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
+}
+
+func (s *Server) handleComposerUpdate(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := s.app.InstallComposer(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
+}
+
+func (s *Server) handleComposerRollback(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	status, err := s.app.RollbackComposer(request.Context())
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
+}
+
 func (s *Server) handleMariaDBStatus(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
@@ -451,6 +521,8 @@ func (s *Server) handleDoctorFix(writer http.ResponseWriter, request *http.Reque
 		err = s.app.FixShellPath()
 	case "frankenphp-binary":
 		err = s.app.FixPHPSymlink(request.Context())
+	case "composer-runtime":
+		err = s.app.FixComposerRuntime(request.Context())
 	default:
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("no auto-fix available for %q", payload.ID))
 		return

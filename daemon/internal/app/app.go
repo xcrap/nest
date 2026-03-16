@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/xcrap/nest/daemon/internal/composer"
 	"github.com/xcrap/nest/daemon/internal/config"
 	"github.com/xcrap/nest/daemon/internal/dns"
 	"github.com/xcrap/nest/daemon/internal/doctor"
@@ -178,6 +179,53 @@ func (a *App) FixShellPath() error {
 	}
 	settings.ShellIntegration = state
 	return a.Store.SaveSettings(settings)
+}
+
+func (a *App) ComposerRuntime(ctx context.Context) (config.ComposerRuntime, error) {
+	return composer.Detect(ctx, a.Paths)
+}
+
+func (a *App) CheckComposerUpdates(ctx context.Context) (config.ComposerRuntime, error) {
+	return composer.CheckForUpdates(ctx, a.Paths)
+}
+
+func (a *App) InstallComposer(ctx context.Context) (config.ComposerRuntime, error) {
+	runtime, err := composer.Install(ctx, a.Paths)
+	if err != nil {
+		return runtime, err
+	}
+	if err := a.ensureComposerWrapper(); err != nil {
+		return config.ComposerRuntime{}, err
+	}
+	detected, err := composer.Detect(ctx, a.Paths)
+	if err != nil {
+		return detected, err
+	}
+	detected.LatestVersion = runtime.LatestVersion
+	detected.LatestChecksum = runtime.LatestChecksum
+	detected.UpdateAvailable = false
+	return detected, nil
+}
+
+func (a *App) RollbackComposer(ctx context.Context) (config.ComposerRuntime, error) {
+	runtime, err := composer.Rollback(ctx, a.Paths)
+	if err != nil {
+		return runtime, err
+	}
+	if err := a.ensureComposerWrapper(); err != nil {
+		return config.ComposerRuntime{}, err
+	}
+	return composer.Detect(ctx, a.Paths)
+}
+
+func (a *App) FixComposerRuntime(ctx context.Context) error {
+	if _, err := os.Stat(a.Paths.ActivePHPPath()); err != nil {
+		if err := a.FixPHPSymlink(ctx); err != nil {
+			return err
+		}
+	}
+	_, err := a.InstallComposer(ctx)
+	return err
 }
 
 func (a *App) ensureNestcliSymlink() error {

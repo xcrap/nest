@@ -34,6 +34,8 @@ func main() {
 		handleSite(client)
 	case "php":
 		handlePHP(client)
+	case "composer":
+		handleComposer(client)
 	case "mariadb":
 		handleMariaDB(client)
 	case "services":
@@ -198,6 +200,42 @@ func handlePHP(client *api.Client) {
 	}
 }
 
+func handleComposer(client *api.Client) {
+	if len(os.Args) < 3 {
+		usage()
+		os.Exit(1)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	switch os.Args[2] {
+	case "status", "info":
+		var response config.ComposerRuntime
+		exitOnError("composer status", client.Do(ctx, "GET", "/composer", nil, &response))
+		printComposerRuntime(response)
+	case "check-updates":
+		var response config.ComposerRuntime
+		exitOnError("check composer updates", client.Do(ctx, "GET", "/composer/check-updates", nil, &response))
+		printComposerRuntime(response)
+	case "install":
+		var response config.ComposerRuntime
+		exitOnError("install composer", client.Do(ctx, "POST", "/composer/install", nil, &response))
+		printComposerRuntime(response)
+	case "update":
+		var response config.ComposerRuntime
+		exitOnError("update composer", client.Do(ctx, "POST", "/composer/update", nil, &response))
+		printComposerRuntime(response)
+	case "rollback":
+		var response config.ComposerRuntime
+		exitOnError("rollback composer", client.Do(ctx, "POST", "/composer/rollback", nil, &response))
+		printComposerRuntime(response)
+	default:
+		usage()
+		os.Exit(1)
+	}
+}
+
 func handleServices(client *api.Client) {
 	if len(os.Args) < 3 {
 		usage()
@@ -316,6 +354,7 @@ func usage() {
 	fmt.Println("  nestcli php list")
 	fmt.Println("  nestcli php install VERSION")
 	fmt.Println("  nestcli php activate VERSION")
+	fmt.Println("  nestcli composer status|install|update|rollback|check-updates")
 	fmt.Println("  nestcli mariadb status|install|start|stop|check-updates")
 	fmt.Println("  nestcli services start|stop|reload|status")
 	fmt.Println("  nestcli doctor")
@@ -324,6 +363,50 @@ func usage() {
 	fmt.Println("  sudo nestcli bootstrap unbootstrap-test-domain")
 	fmt.Println("  sudo nestcli bootstrap trust-local-ca")
 	fmt.Println("  sudo nestcli bootstrap untrust-local-ca")
+}
+
+func printComposerRuntime(runtime config.ComposerRuntime) {
+	writer := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "INSTALLED\tSTATUS\tINSTALLED_VERSION\tLATEST_VERSION\tUPDATE_AVAILABLE\tWRAPPER\tBACKUP")
+	fmt.Fprintf(
+		writer,
+		"%t\t%s\t%s\t%s\t%t\t%t\t%t\n",
+		runtime.Installed,
+		runtime.Status,
+		runtime.InstalledVersion,
+		runtime.LatestVersion,
+		runtime.UpdateAvailable,
+		runtime.WrapperPresent,
+		runtime.BackupAvailable,
+	)
+	_ = writer.Flush()
+	if runtime.SourceURL != "" {
+		fmt.Println("source:", runtime.SourceURL)
+	}
+	if runtime.ChecksumURL != "" {
+		fmt.Println("checksum:", runtime.ChecksumURL)
+	}
+	if runtime.InstalledChecksum != "" {
+		fmt.Println("installed_checksum:", runtime.InstalledChecksum)
+	}
+	if runtime.LatestChecksum != "" {
+		fmt.Println("latest_checksum:", runtime.LatestChecksum)
+	}
+	if runtime.PharPath != "" {
+		fmt.Println("phar:", runtime.PharPath)
+	}
+	if runtime.WrapperPath != "" {
+		fmt.Println("wrapper:", runtime.WrapperPath)
+	}
+	if runtime.BackupPath != "" {
+		fmt.Println("backup:", runtime.BackupPath)
+	}
+	if !runtime.InstalledAt.IsZero() {
+		fmt.Println("installed_at:", runtime.InstalledAt.Format(time.RFC3339))
+	}
+	if runtime.LastError != "" {
+		fmt.Println("last_error:", runtime.LastError)
+	}
 }
 
 func requireArgs(count int) {
