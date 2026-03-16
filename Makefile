@@ -65,6 +65,6 @@ endif
 		} \
 	'
 	git add package.json desktop/package.json
-	git commit -m "Bump version to $(VERSION)"
-	git tag v$(VERSION)
-	@echo "Bumped to $(VERSION) — run 'git push origin main && git push origin v$(VERSION)' to publish"
+	@echo "Version files updated to $(VERSION). Stage any other changes, then commit and tag manually."
+	@echo "  git commit -m 'Your release description'"
+	@echo "  git tag v$(VERSION)"
