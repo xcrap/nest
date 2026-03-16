@@ -48,6 +48,20 @@ Do not assume Homebrew-managed runtimes are present or required.
 - Keep documentation centralized in `README.md`.
 - Avoid introducing repo instructions that need constant feature-by-feature maintenance.
 
+## Versioning
+
+The app version lives in `package.json` (root) and `desktop/package.json`. Both must stay in sync. Use the bump target to update them together:
+
+```bash
+make bump VERSION=x.y.z
+```
+
+- The Makefile reads the root `package.json` version and injects it into the Go daemon via `-ldflags`.
+- Electron reads `desktop/package.json` via `app.getVersion()`.
+- Git tags use the `vX.Y.Z` format (e.g. `v0.3.5`).
+
+Running `make bump` updates both files, commits, and creates the git tag locally. Pushing a `v*` tag triggers the GitHub release workflow — only push the tag when ready to publish a release. Always push the commit (`git push origin main`) separately from the tag (`git push origin vX.Y.Z`).
+
 ## Common Commands
 
 Bootstrap:
