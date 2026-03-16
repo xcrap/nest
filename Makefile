@@ -51,3 +51,17 @@ release:
 	go build -ldflags "$(GO_LDFLAGS)" -o ./bin/nestcli ./daemon/cmd/nestcli
 	go build -o ./bin/nesthelper ./helper/cmd/nesthelper
 	npm --workspace desktop run release
+
+bump:
+ifndef VERSION
+	$(error Usage: make bump VERSION=x.y.z)
+endif
+	node -e ' \
+		const fs = require("fs"); \
+		for (const f of ["package.json", "desktop/package.json"]) { \
+			const pkg = JSON.parse(fs.readFileSync(f, "utf8")); \
+			pkg.version = "$(VERSION)"; \
+			fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n"); \
+		} \
+		console.log("Bumped to $(VERSION)"); \
+	'

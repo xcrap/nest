@@ -43,7 +43,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [appMeta, setAppMeta] = useState({
-    version: "0.1.0",
+    version: "...",
     packaged: false,
     platform: "macOS",
     arch: "arm64",
