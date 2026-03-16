@@ -1,126 +1,182 @@
-import { useState } from "react";
-import { Activity, AlertTriangle, FolderKanban, Loader2, ShieldCheck, Wrench } from "lucide-react";
+import { Activity, ArrowRight, FolderKanban, ShieldCheck } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { formatRelativeDate } from "../lib/utils";
 
-const doctorVariant = {
-  pass: "success",
-  warn: "warning",
-  fail: "danger"
-};
-
-const fixableChecks = new Set(["php-symlink", "shell-path", "frankenphp-binary", "composer-runtime"]);
-
-export function DashboardScreen({ sites, doctorChecks, serviceStatus, onFixCheck }) {
+export function DashboardScreen({ sites, doctorChecks, serviceStatus, onOpenSettings }) {
   const runningSites = sites.filter((site) => site.status === "running").length;
-  const doctorWarnings = doctorChecks.filter((check) => check.status !== "pass");
-  const latestSites = [...sites]
-    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())
-    .slice(0, 5);
+  const issues = doctorChecks.filter((check) => check.status !== "pass");
+  const passCount = Math.max(doctorChecks.length - issues.length, 0);
+  const checksLoading = doctorChecks.length === 0 && serviceStatus === "unknown";
+
+  const statusById = new Map(doctorChecks.map((check) => [check.id, check.status]));
+  const routingHealthy = statusById.get("test-resolver") === "pass" && statusById.get("privileged-ports") === "pass";
+  const httpsHealthy = statusById.get("local-ca") === "pass" && statusById.get("https-localhost") === "pass";
+  const runtimesHealthy = [
+    "php-symlink",
+    "frankenphp-binary",
+    "frankenphp-admin",
+    "composer-runtime",
+    "mariadb-runtime",
+    "mariadb-ready"
+  ].every((id) => statusById.get(id) === "pass");
+
+  const overallTone = checksLoading
+    ? "default"
+    : issues.length > 0
+      ? "warning"
+      : serviceStatus === "running"
+        ? "success"
+        : "default";
+  const overallLabel = checksLoading
+    ? "Checking"
+    : issues.length > 0
+      ? "Attention needed"
+      : serviceStatus === "running"
+        ? "Healthy"
+        : "Stopped";
+  const headline = checksLoading
+    ? "Checking the local stack."
+    : issues.length > 0
+      ? "Nest needs review."
+      : serviceStatus === "running"
+        ? "Nest is ready."
+        : "Nest is configured.";
+  const message = checksLoading
+    ? "Nest is still reading runtime, routing, and certificate state."
+    : issues.length > 0
+      ? `${issues.length} machine check${issues.length === 1 ? "" : "s"} need attention. Open Settings to review and repair them.`
+      : serviceStatus === "running"
+        ? "Routing, HTTPS, and runtimes are healthy."
+        : "The machine state is healthy, but the web service is not currently running.";
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-4 gap-3">
-        <StatCard icon={Activity} label="Service" value={serviceStatus} />
-        <StatCard icon={FolderKanban} label="Total sites" value={String(sites.length)} />
-        <StatCard icon={FolderKanban} label="Running" value={String(runningSites)} />
-        <StatCard icon={AlertTriangle} label="Alerts" value={String(doctorWarnings.length)} />
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Doctor checks</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {doctorChecks.length === 0 && (
-              <p className="py-6 text-center text-sm text-zinc-400">No checks reported yet.</p>
-            )}
-            {doctorChecks.map((check) => (
-              <DoctorCheckRow key={check.id} check={check} onFix={onFixCheck} />
-            ))}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent sites</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {latestSites.length === 0 && (
-              <p className="py-6 text-center text-sm text-zinc-400">No sites registered yet.</p>
-            )}
-            {latestSites.map((site) => (
-              <div
-                key={site.id}
-                className="flex items-center justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-zinc-900">{site.name}</p>
-                  <p className="text-[13px] text-zinc-500">{site.domain}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={site.status === "running" ? "success" : "default"}>{site.status}</Badge>
-                  <span className="whitespace-nowrap text-xs text-zinc-400">{formatRelativeDate(site.updatedAt)}</span>
-                </div>
+      <Card className="rounded-3xl border-zinc-200 shadow-[0_18px_50px_-40px_rgba(24,24,27,0.35)]">
+        <CardHeader className="pb-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-2">
+              <Badge variant={badgeVariant(overallTone)}>{overallLabel}</Badge>
+              <div>
+                <h2 className="text-3xl font-semibold tracking-[-0.04em] text-zinc-950">{headline}</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-500">{message}</p>
               </div>
-            ))}
-          </CardContent>
-        </Card>
+            </div>
+            {issues.length > 0 && (
+              <Button variant="outline" onClick={onOpenSettings}>
+                Review in Settings
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 md:grid-cols-3">
+            <OverviewStat
+              icon={Activity}
+              label="Service"
+              value={serviceStatus}
+              detail={serviceStatus === "running" ? "FrankenPHP is serving traffic." : serviceStatus === "unknown" ? "Service state is still loading." : "Start the service when you need it."}
+            />
+            <OverviewStat
+              icon={FolderKanban}
+              label="Sites"
+              value={`${runningSites}/${sites.length}`}
+              detail={sites.length === 0 ? "No sites registered yet." : `${runningSites} running, ${sites.length - runningSites} stopped.`}
+            />
+            <OverviewStat
+              icon={ShieldCheck}
+              label="Checks"
+              value={`${passCount}/${doctorChecks.length || 0}`}
+              detail={checksLoading ? "Verification is still loading." : issues.length === 0 ? "All checks are passing." : `${issues.length} need attention.`}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <StateCard
+          title="Routing"
+          status={checksLoading ? "pending" : routingHealthy ? "pass" : "warn"}
+          body={checksLoading
+            ? "Checking .test resolution and port forwarding."
+            : routingHealthy
+              ? ".test resolution and ports 80/443 are working."
+              : "Routing is not fully healthy. Review Settings for details."}
+        />
+        <StateCard
+          title="HTTPS"
+          status={checksLoading ? "pending" : httpsHealthy ? "pass" : "warn"}
+          body={checksLoading
+            ? "Checking local CA trust and localhost HTTPS."
+            : httpsHealthy
+              ? "Certificates are trusted and localhost HTTPS is working."
+              : "HTTPS trust or localhost certificate validation needs review."}
+        />
+        <StateCard
+          title="Runtimes"
+          status={checksLoading ? "pending" : runtimesHealthy ? "pass" : "warn"}
+          body={checksLoading
+            ? "Checking PHP, FrankenPHP, Composer, and MariaDB."
+            : runtimesHealthy
+              ? "PHP, Composer, FrankenPHP, and MariaDB are healthy."
+              : "One or more managed runtimes need attention."}
+        />
       </div>
     </div>
   );
 }
 
-function DoctorCheckRow({ check, onFix }) {
-  const [fixing, setFixing] = useState(false);
-  const canFix = check.status !== "pass" && fixableChecks.has(check.id);
-
-  const handleFix = async () => {
-    setFixing(true);
-    try {
-      await onFix(check.id);
-    } finally {
-      setFixing(false);
-    }
-  };
-
+function OverviewStat({ icon: Icon, label, value, detail }) {
   return (
-    <div className="flex items-start justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3">
-      <div className="min-w-0 space-y-0.5">
-        <div className="flex items-center gap-1.5">
-          <ShieldCheck className="h-3.5 w-3.5 text-zinc-400" />
-          <span className="text-sm font-medium text-zinc-900">{check.id}</span>
-        </div>
-        <p className="text-[13px] text-zinc-500">{check.message}</p>
-        {check.fixHint && <p className="text-xs text-zinc-400">{check.fixHint}</p>}
+    <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+      <div className="flex items-center gap-2 text-zinc-500">
+        <Icon className="h-4 w-4" />
+        <span className="text-xs font-medium uppercase tracking-[0.18em]">{label}</span>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {canFix && (
-          <Button size="sm" variant="outline" onClick={handleFix} disabled={fixing}>
-            {fixing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
-            Fix
-          </Button>
-        )}
-        <Badge variant={doctorVariant[check.status] || "default"}>{check.status}</Badge>
-      </div>
+      <p className="mt-3 text-2xl font-semibold capitalize tracking-[-0.04em] text-zinc-950">{value}</p>
+      <p className="mt-1 text-[13px] leading-5 text-zinc-500">{detail}</p>
     </div>
   );
 }
 
-function StatCard({ icon: Icon, label, value }) {
+function StateCard({ title, status, body }) {
   return (
     <Card>
-      <div className="p-4">
-        <div className="flex items-center gap-1.5 text-zinc-500">
-          <Icon className="h-3.5 w-3.5" />
-          <span className="text-xs font-medium">{label}</span>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle>{title}</CardTitle>
+          <Badge variant={statusBadge(status)}>
+            {status === "pending" ? "Checking" : status === "pass" ? "OK" : "Needs review"}
+          </Badge>
         </div>
-        <p className="mt-1.5 text-2xl font-semibold capitalize text-zinc-900">{value}</p>
-      </div>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm leading-6 text-zinc-500">{body}</p>
+      </CardContent>
     </Card>
   );
+}
+
+function badgeVariant(tone) {
+  switch (tone) {
+    case "success":
+      return "success";
+    case "warning":
+      return "warning";
+    default:
+      return "default";
+  }
+}
+
+function statusBadge(status) {
+  switch (status) {
+    case "pass":
+      return "success";
+    case "warn":
+      return "warning";
+    default:
+      return "default";
+  }
 }

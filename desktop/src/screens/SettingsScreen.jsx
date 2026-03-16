@@ -4,6 +4,7 @@ import { Check, CircleAlert, Loader2, RefreshCw, RotateCcw, ShieldCheck, Stethos
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { doctorCheckHelpText, doctorCheckLabel, fixableDoctorChecks } from "../lib/doctor";
 import { Separator } from "../components/ui/separator";
 import { formatRelativeDate } from "../lib/utils";
 
@@ -13,10 +14,18 @@ const doctorVariant = {
   fail: "danger"
 };
 
-export function SettingsScreen({ doctorChecks, onBootstrap, onUnbootstrap, onTrustLocalCA, onUntrustLocalCA, appMeta, settings, updateState, onCheckUpdates, onInstallUpdate }) {
+export function SettingsScreen({ doctorChecks, onBootstrap, onUnbootstrap, onTrustLocalCA, onUntrustLocalCA, onFixCheck, appMeta, settings, updateState, onCheckUpdates, onInstallUpdate }) {
   const bootstrap = settings?.bootstrap;
-  const testDomainDone = bootstrap?.testDomainConfigured ?? false;
-  const localCATrusted = bootstrap?.localCATrusted ?? false;
+  const doctorStatus = new Map(doctorChecks.map((check) => [check.id, check.status]));
+  const hasDoctorChecks = doctorChecks.length > 0;
+  const doctorIssues = doctorChecks.filter((check) => check.status !== "pass");
+  const verifiedChecks = doctorChecks.filter((check) => check.status === "pass");
+  const testDomainDone = hasDoctorChecks
+    ? doctorStatus.get("test-resolver") === "pass" && doctorStatus.get("privileged-ports") === "pass"
+    : (bootstrap?.testDomainConfigured ?? false);
+  const localCATrusted = hasDoctorChecks
+    ? doctorStatus.get("local-ca") === "pass" && doctorStatus.get("https-localhost") === "pass"
+    : (bootstrap?.localCATrusted ?? false);
 
   return (
     <div className="space-y-6">
@@ -29,7 +38,7 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onUnbootstrap, onTru
             <BootstrapRow
               icon={TerminalSquare}
               title="Install .test routing"
-              body="Creates resolver and forwarding for .test domains."
+              body="Creates the resolver and privileged forwarding for .test domains."
               done={testDomainDone}
               doneLabel="Configured"
               actionLabel="Run bootstrap"
@@ -40,7 +49,7 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onUnbootstrap, onTru
             <BootstrapRow
               icon={ShieldCheck}
               title="Trust local HTTPS"
-              body="Adds local CA to your keychain for trusted certificates."
+              body="Adds Nest's local CA to the keychain so certificates are trusted."
               done={localCATrusted}
               doneLabel="Trusted"
               actionLabel="Trust CA"
@@ -129,29 +138,55 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onUnbootstrap, onTru
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Doctor checks</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {doctorChecks.map((check) => (
-            <div
-              key={check.id}
-              className="flex items-start justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3"
-            >
-              <div className="min-w-0 space-y-0.5">
-                <div className="flex items-center gap-1.5">
-                  <Stethoscope className="h-3.5 w-3.5 text-zinc-400" />
-                  <span className="text-sm font-medium text-zinc-900">{check.id}</span>
-                </div>
-                <p className="text-[13px] text-zinc-500">{check.message}</p>
-                {check.fixHint && <p className="text-xs text-zinc-400">{check.fixHint}</p>}
-              </div>
-              <Badge variant={doctorVariant[check.status] || "default"}>{check.status}</Badge>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle>Verification</CardTitle>
+              <Badge variant={doctorIssues.length === 0 ? "success" : "warning"}>
+                {doctorIssues.length === 0 ? "Healthy" : `${doctorIssues.length} open`}
+              </Badge>
             </div>
-          ))}
-        </CardContent>
-      </Card>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {doctorChecks.length === 0 ? (
+              <div className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+                <p className="text-sm font-medium text-zinc-900">Verification is still loading.</p>
+                <p className="mt-1 text-[13px] text-zinc-500">Nest has not finished reporting the current machine checks yet.</p>
+              </div>
+            ) : doctorIssues.length === 0 ? (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-sm font-medium text-emerald-900">All behavioral checks are passing.</p>
+                <p className="mt-1 text-[13px] text-emerald-700">Routing, certificates, runtimes, and database health are all verified right now.</p>
+              </div>
+            ) : (
+              doctorIssues.map((check) => (
+                <DoctorCheckRow key={check.id} check={check} onFix={onFixCheck} />
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Verified checks</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {verifiedChecks.length === 0 ? (
+              <p className="text-sm text-zinc-500">No checks have passed yet.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {verifiedChecks.map((check) => (
+                  <Badge key={check.id} variant="success" className="gap-1.5 py-1">
+                    <Check className="h-3 w-3" />
+                    {doctorCheckLabel(check.id)}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -198,6 +233,43 @@ function BootstrapRow({ icon: Icon, title, body, done, doneLabel, actionLabel, u
           {actionLabel}
         </Button>
       )}
+    </div>
+  );
+}
+
+function DoctorCheckRow({ check, onFix }) {
+  const [fixing, setFixing] = useState(false);
+  const canFix = check.status !== "pass" && fixableDoctorChecks.has(check.id);
+  const helpText = doctorCheckHelpText(check);
+
+  const handleFix = async () => {
+    setFixing(true);
+    try {
+      await onFix(check.id);
+    } finally {
+      setFixing(false);
+    }
+  };
+
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-md border border-zinc-100 bg-zinc-50 p-3">
+      <div className="min-w-0 space-y-0.5">
+        <div className="flex items-center gap-1.5">
+          <Stethoscope className="h-3.5 w-3.5 text-zinc-400" />
+          <span className="text-sm font-medium text-zinc-900">{doctorCheckLabel(check.id)}</span>
+        </div>
+        <p className="text-[13px] text-zinc-500">{check.message}</p>
+        {helpText && <p className="text-xs text-zinc-400">{helpText}</p>}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {canFix && (
+          <Button size="sm" variant="outline" onClick={handleFix} disabled={fixing}>
+            {fixing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Fix
+          </Button>
+        )}
+        <Badge variant={doctorVariant[check.status] || "default"}>{check.status}</Badge>
+      </div>
     </div>
   );
 }

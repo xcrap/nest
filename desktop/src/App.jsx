@@ -112,6 +112,51 @@ export default function App() {
     }
   };
 
+  const fixDoctorCheck = async (id) => {
+    const statusFor = (checkId) => doctorChecks.find((check) => check.id === checkId)?.status;
+
+    switch (id) {
+      case "test-resolver":
+        await api.bootstrapTestDomain();
+        return;
+      case "privileged-ports":
+        if (statusFor("test-resolver") !== "pass") {
+          await api.bootstrapTestDomain();
+        }
+        if (serviceStatus === "running" && statusFor("frankenphp-admin") !== "pass") {
+          await api.reloadServices();
+        } else if (serviceStatus !== "running" || statusFor("frankenphp-admin") !== "pass") {
+          await api.startServices();
+        }
+        if (statusFor("test-resolver") === "pass" && statusFor("frankenphp-admin") === "pass") {
+          await api.bootstrapTestDomain();
+        }
+        return;
+      case "local-ca":
+        await api.trustLocalCA();
+        return;
+      case "https-localhost":
+        if (statusFor("local-ca") !== "pass") {
+          await api.trustLocalCA();
+        }
+        if (serviceStatus === "running" && statusFor("frankenphp-admin") !== "pass") {
+          await api.reloadServices();
+        } else if (serviceStatus !== "running" || statusFor("frankenphp-admin") !== "pass") {
+          await api.startServices();
+        }
+        return;
+      case "frankenphp-admin":
+        if (serviceStatus === "running") {
+          await api.reloadServices();
+        } else {
+          await api.startServices();
+        }
+        return;
+      default:
+        await api.fixDoctorCheck(id);
+    }
+  };
+
   const checkForUpdates = async () => {
     try {
       setError("");
@@ -223,7 +268,7 @@ export default function App() {
                 doctorChecks={doctorChecks}
                 serviceStatus={serviceStatus}
                 sites={sites}
-                onFixCheck={(id) => wrap(() => api.fixDoctorCheck(id))}
+                onOpenSettings={() => setActiveTab("settings")}
               />
             )}
             {activeTab === "sites" && (
@@ -304,6 +349,7 @@ export default function App() {
                 doctorChecks={doctorChecks}
                 onBootstrap={() => wrap(() => api.bootstrapTestDomain())}
                 onUnbootstrap={() => wrap(() => api.unbootstrapTestDomain())}
+                onFixCheck={(id) => wrap(() => fixDoctorCheck(id))}
                 onCheckUpdates={checkForUpdates}
                 onInstallUpdate={() => desktop.installUpdate()}
                 onTrustLocalCA={() => wrap(() => api.trustLocalCA())}

@@ -1,7 +1,7 @@
 {
   "name": "nest-desktop",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Nest desktop control plane for local PHP development on macOS",
   "author": "Nest",
   "type": "module",
