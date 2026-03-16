@@ -26,11 +26,23 @@ if (fs.existsSync(dmgPath)) {
   fs.rmSync(dmgPath, { force: true });
 }
 
-run("hdiutil", ["create", "-volname", "Nest", "-srcfolder", appPath, "-ov", "-format", "UDZO", dmgPath]);
+runWithRetry("hdiutil", ["create", "-volname", "Nest", "-srcfolder", appPath, "-ov", "-format", "UDZO", dmgPath], 3, 5000);
 
 function run(command, args) {
   execFileSync(command, args, {
     cwd: desktopDir,
     stdio: "inherit"
   });
+}
+
+function runWithRetry(command, args, maxAttempts, delayMs) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return run(command, args);
+    } catch (error) {
+      if (attempt === maxAttempts) throw error;
+      console.log(`Attempt ${attempt} failed (${error.message}), retrying in ${delayMs / 1000}s...`);
+      execFileSync("sleep", [String(delayMs / 1000)]);
+    }
+  }
 }
