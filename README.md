@@ -112,6 +112,28 @@ nestcli bootstrap test-domain
 sudo nestcli bootstrap trust-local-ca
 ```
 
+## Versioning
+
+Bump the version, commit, and create a `vx.y.z` git tag locally:
+
+```bash
+make bump VERSION=x.y.z
+```
+
+Push the commit:
+
+```bash
+git push origin main
+```
+
+Optionally, push the tag to trigger a GitHub release:
+
+```bash
+git push origin vx.y.z
+```
+
+Pushing a `v*` tag triggers the GitHub release workflow. Only do this when you want to publish a release.
+
 ## Packaging
 
 `make package` builds:

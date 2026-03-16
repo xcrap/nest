@@ -63,5 +63,8 @@ endif
 			pkg.version = "$(VERSION)"; \
 			fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n"); \
 		} \
-		console.log("Bumped to $(VERSION)"); \
 	'
+	git add package.json desktop/package.json
+	git commit -m "Bump version to $(VERSION)"
+	git tag v$(VERSION)
+	@echo "Bumped to $(VERSION) — run 'git push origin main && git push origin v$(VERSION)' to publish"
