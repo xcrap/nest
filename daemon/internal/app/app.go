@@ -63,6 +63,9 @@ func (a *App) Bootstrap() error {
 	if err := a.ensureNestcliSymlink(); err != nil {
 		return err
 	}
+	if err := a.ensureShellIntegration(); err != nil {
+		return err
+	}
 	return a.Sites.RewriteCaddyfile()
 }
 
@@ -226,6 +229,23 @@ func (a *App) FixComposerRuntime(ctx context.Context) error {
 	}
 	_, err := a.InstallComposer(ctx)
 	return err
+}
+
+func (a *App) ensureShellIntegration() error {
+	rcPath, err := shell.ResolveZshRC()
+	if err != nil {
+		return err
+	}
+	state, err := shell.EnsureZshIntegration(rcPath, a.Paths.BinDir)
+	if err != nil {
+		return err
+	}
+	settings, err := a.Store.LoadSettings()
+	if err != nil {
+		return err
+	}
+	settings.ShellIntegration = state
+	return a.Store.SaveSettings(settings)
 }
 
 func (a *App) ensureNestcliSymlink() error {
