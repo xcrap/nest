@@ -24,8 +24,6 @@ type CreateInput struct {
 	Domain       string `json:"domain"`
 	RootPath     string `json:"rootPath"`
 	DocumentRoot string `json:"documentRoot"`
-	PHPVersion   string `json:"phpVersion"`
-	HTTPSEnabled bool   `json:"httpsEnabled"`
 }
 
 type UpdateInput struct {
@@ -33,8 +31,6 @@ type UpdateInput struct {
 	Domain       *string `json:"domain"`
 	RootPath     *string `json:"rootPath"`
 	DocumentRoot *string `json:"documentRoot"`
-	PHPVersion   *string `json:"phpVersion"`
-	HTTPSEnabled *bool   `json:"httpsEnabled"`
 }
 
 type ImportResult struct {
@@ -97,10 +93,6 @@ func (s *Service) Create(input CreateInput) (config.Site, error) {
 		}
 	}
 
-	settings, err := s.store.LoadSettings()
-	if err != nil {
-		return config.Site{}, err
-	}
 	documentRoot, err := validateDocumentRoot(input.RootPath, input.DocumentRoot)
 	if err != nil {
 		return config.Site{}, err
@@ -114,8 +106,6 @@ func (s *Service) Create(input CreateInput) (config.Site, error) {
 		RootPath:     input.RootPath,
 		DocumentRoot: documentRoot,
 		Status:       "stopped",
-		HTTPSEnabled: input.HTTPSEnabled,
-		PHPVersion:   firstNonEmpty(input.PHPVersion, settings.ActivePHPVersion),
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -185,16 +175,6 @@ func (s *Service) Update(id string, input UpdateInput) (config.Site, error) {
 	}
 	if input.DocumentRoot != nil {
 		sites[index].DocumentRoot = strings.TrimSpace(*input.DocumentRoot)
-	}
-	if input.PHPVersion != nil {
-		phpVersion := strings.TrimSpace(*input.PHPVersion)
-		if phpVersion == "" {
-			return config.Site{}, errors.New("php version is required")
-		}
-		sites[index].PHPVersion = phpVersion
-	}
-	if input.HTTPSEnabled != nil {
-		sites[index].HTTPSEnabled = *input.HTTPSEnabled
 	}
 	documentRoot, err := validateDocumentRoot(sites[index].RootPath, sites[index].DocumentRoot)
 	if err != nil {
@@ -280,11 +260,6 @@ func (s *Service) Import(inputs []CreateInput) (ImportResult, error) {
 		return ImportResult{}, err
 	}
 
-	settings, err := s.store.LoadSettings()
-	if err != nil {
-		return ImportResult{}, err
-	}
-
 	domains := make(map[string]bool, len(sites))
 	for _, site := range sites {
 		domains[strings.ToLower(site.Domain)] = true
@@ -315,8 +290,6 @@ func (s *Service) Import(inputs []CreateInput) (ImportResult, error) {
 			RootPath:     input.RootPath,
 			DocumentRoot: documentRoot,
 			Status:       "stopped",
-			HTTPSEnabled: input.HTTPSEnabled,
-			PHPVersion:   firstNonEmpty(input.PHPVersion, settings.ActivePHPVersion),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -359,15 +332,6 @@ func randomID() string {
 		return time.Now().UTC().Format("20060102150405")
 	}
 	return hex.EncodeToString(buffer)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func normalizeSites(sites []config.Site) ([]config.Site, bool) {

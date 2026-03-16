@@ -17,8 +17,7 @@ func TestDoctorDetectsMissingShellPath(t *testing.T) {
 	}
 
 	service := NewService(paths, store).
-		WithLookPath(func(string) (string, error) { return "", os.ErrNotExist }).
-		WithProcessRunning(func(string) bool { return false })
+		WithLookPath(func(string) (string, error) { return "", os.ErrNotExist })
 
 	checks, err := service.Run()
 	if err != nil {

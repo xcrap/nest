@@ -17,6 +17,7 @@ import (
 	"github.com/xcrap/nest/daemon/internal/shell"
 	"github.com/xcrap/nest/daemon/internal/sites"
 	"github.com/xcrap/nest/daemon/internal/state"
+	"github.com/xcrap/nest/internal/bootstrapstate"
 )
 
 type App struct {
@@ -84,14 +85,7 @@ func (a *App) BootstrapTestDomain(ctx context.Context) error {
 }
 
 func (a *App) MarkTestDomainBootstrapped() error {
-	settings, err := a.Store.LoadSettings()
-	if err != nil {
-		return err
-	}
-	settings.Bootstrap.TestDomainConfigured = true
-	settings.Bootstrap.PrivilegedPortsReady = true
-	settings.Bootstrap.LastBootstrapCompleted = time.Now().UTC()
-	return a.Store.SaveSettings(settings)
+	return a.syncBootstrapState(true)
 }
 
 func (a *App) TrustLocalCA(ctx context.Context) error {
@@ -110,13 +104,56 @@ func (a *App) TrustLocalCA(ctx context.Context) error {
 }
 
 func (a *App) MarkLocalCATrusted() error {
-	settings, err := a.Store.LoadSettings()
+	return a.syncBootstrapState(true)
+}
+
+func (a *App) RefreshBootstrapState() error {
+	return a.syncBootstrapState(false)
+}
+
+func (a *App) UnbootstrapTestDomain(ctx context.Context) error {
+	helperPath, err := resolveHelperBinary()
 	if err != nil {
 		return err
 	}
-	settings.Bootstrap.LocalCATrusted = true
-	settings.Bootstrap.LastBootstrapCompleted = time.Now().UTC()
-	return a.Store.SaveSettings(settings)
+
+	command := exec.CommandContext(ctx, helperPath, "unbootstrap", "test-domain")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(output))
+	}
+
+	return a.syncBootstrapState(false)
+}
+
+func (a *App) UntrustLocalCA(ctx context.Context) error {
+	helperPath, err := resolveHelperBinary()
+	if err != nil {
+		return err
+	}
+
+	command := exec.CommandContext(ctx, helperPath, "untrust", "local-ca")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(output))
+	}
+
+	return a.syncBootstrapState(false)
+}
+
+func (a *App) ResolvedSettings() (config.Settings, error) {
+	settings, err := a.Store.LoadSettings()
+	if err != nil {
+		return config.Settings{}, err
+	}
+	updated, changed := a.bootstrapState(settings)
+	if !changed {
+		return updated, nil
+	}
+	if err := a.Store.SaveSettings(updated); err != nil {
+		return config.Settings{}, err
+	}
+	return updated, nil
 }
 
 func (a *App) FixPHPSymlink(ctx context.Context) error {
@@ -173,6 +210,14 @@ func (a *App) ensureNestcliSymlink() error {
 }
 
 func (a *App) ensureComposerWrapper() error {
+	if _, err := os.Stat(a.Paths.ComposerPharPath); err != nil {
+		if os.IsNotExist(err) {
+			_ = os.Remove(a.Paths.ComposerWrapperPath)
+			return nil
+		}
+		return err
+	}
+
 	content := "#!/usr/bin/env bash\n" +
 		"set -euo pipefail\n" +
 		"PHP_BIN=\"$(cd \"$(dirname \"$0\")\" && pwd)/php\"\n" +
@@ -223,4 +268,55 @@ func samePath(left, right string) bool {
 		rightResolved = right
 	}
 	return filepath.Clean(leftResolved) == filepath.Clean(rightResolved)
+}
+
+func (a *App) syncBootstrapState(markCompletion bool) error {
+	settings, err := a.Store.LoadSettings()
+	if err != nil {
+		return err
+	}
+
+	updated, changed := a.bootstrapState(settings)
+	if markCompletion && (updated.Bootstrap.TestDomainConfigured || updated.Bootstrap.LocalCATrusted) {
+		updated.Bootstrap.LastBootstrapCompleted = time.Now().UTC()
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return a.Store.SaveSettings(updated)
+}
+
+func (a *App) bootstrapState(settings config.Settings) (config.Settings, bool) {
+	updated := settings
+	changed := false
+
+	if updated.Bootstrap.ResolverIPAddress != bootstrapstate.ResolverIP {
+		updated.Bootstrap.ResolverIPAddress = bootstrapstate.ResolverIP
+		changed = true
+	}
+	if updated.Bootstrap.ResolverPort != 5354 {
+		updated.Bootstrap.ResolverPort = 5354
+		changed = true
+	}
+
+	testDomainConfigured := bootstrapstate.ResolverConfigured()
+	if updated.Bootstrap.TestDomainConfigured != testDomainConfigured {
+		updated.Bootstrap.TestDomainConfigured = testDomainConfigured
+		changed = true
+	}
+
+	privilegedPortsReady := bootstrapstate.PrivilegedPortsConfigured()
+	if updated.Bootstrap.PrivilegedPortsReady != privilegedPortsReady {
+		updated.Bootstrap.PrivilegedPortsReady = privilegedPortsReady
+		changed = true
+	}
+
+	localCATrusted := bootstrapstate.LocalCATrusted(a.Paths.HomeDir)
+	if updated.Bootstrap.LocalCATrusted != localCATrusted {
+		updated.Bootstrap.LocalCATrusted = localCATrusted
+		changed = true
+	}
+
+	return updated, changed
 }

@@ -226,7 +226,6 @@ export default function App() {
             {activeTab === "sites" && (
               <SitesScreen
                 sites={sites}
-                versions={versions}
                 onCreate={(payload) => wrap(() => api.createSite(payload))}
                 onDelete={(id) => wrap(() => api.deleteSite(id))}
                 onExport={() => desktop.exportSites()}
@@ -284,9 +283,11 @@ export default function App() {
                 settings={settings}
                 doctorChecks={doctorChecks}
                 onBootstrap={() => wrap(() => api.bootstrapTestDomain())}
+                onUnbootstrap={() => wrap(() => api.unbootstrapTestDomain())}
                 onCheckUpdates={checkForUpdates}
                 onInstallUpdate={() => desktop.installUpdate()}
                 onTrustLocalCA={() => wrap(() => api.trustLocalCA())}
+                onUntrustLocalCA={() => wrap(() => api.untrustLocalCA())}
                 updateState={updateState}
               />
             )}

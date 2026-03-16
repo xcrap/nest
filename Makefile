@@ -10,8 +10,7 @@ bootstrap:
 	./scripts/bootstrap-macos.sh
 
 dev:
-	go run -ldflags "$(GO_LDFLAGS)" ./daemon/cmd/nestd &
-	npm --workspace desktop run dev
+	./scripts/run-dev.sh
 
 run-daemon:
 	go run -ldflags "$(GO_LDFLAGS)" ./daemon/cmd/nestd

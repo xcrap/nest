@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import electronUpdater from "electron-updater";
 const { autoUpdater } = electronUpdater;
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -10,13 +10,16 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+const launchAgentLabel = "dev.xcrap.nestd";
+const launchAgentPath = path.join(os.homedir(), "Library", "LaunchAgents", `${launchAgentLabel}.plist`);
+const launchAgentDomain = `gui/${process.getuid()}`;
+const launchAgentTarget = `${launchAgentDomain}/${launchAgentLabel}`;
 const socketPath = process.env.NEST_SOCKET || path.join(os.homedir(), "Library", "Application Support", "Nest", "run", "nest.sock");
 const helperPath = process.env.NEST_HELPER_BIN || resolveBundledBinary("nesthelper");
 const daemonPath = process.env.NEST_DAEMON_BIN || resolveBundledBinary("nestd");
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow;
-let daemonProcess;
 let daemonStartPromise = null;
 let bundledDaemonMetaPromise = null;
 
@@ -51,9 +54,6 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on("window-all-closed", () => {
-  if (daemonProcess && !daemonProcess.killed) {
-    daemonProcess.kill("SIGTERM");
-  }
   if (process.platform !== "darwin") {
     app.quit();
   }
@@ -70,9 +70,17 @@ async function requestDaemon({ method, route, body }) {
     await runPrivilegedHelper("bootstrap", "test-domain");
     return requestDaemon({ method: "POST", route: "/bootstrap/test-domain?skipHelper=1" });
   }
+  if (route === "/bootstrap/test-domain/uninstall" && method === "POST") {
+    await runPrivilegedHelper("unbootstrap", "test-domain");
+    return requestDaemon({ method: "POST", route: "/bootstrap/test-domain/uninstall?skipHelper=1" });
+  }
   if (route === "/bootstrap/trust-local-ca" && method === "POST") {
     await runPrivilegedHelper("trust", "local-ca");
     return requestDaemon({ method: "POST", route: "/bootstrap/trust-local-ca?skipHelper=1" });
+  }
+  if (route === "/bootstrap/trust-local-ca/uninstall" && method === "POST") {
+    await runPrivilegedHelper("untrust", "local-ca");
+    return requestDaemon({ method: "POST", route: "/bootstrap/trust-local-ca/uninstall?skipHelper=1" });
   }
 
   const payload = body ? JSON.stringify(body) : null;
@@ -214,13 +222,11 @@ async function handleExportSites() {
   const exportPayload = {
     version: 1,
     exportedAt: new Date().toISOString(),
-    sites: sitesData.map(({ name, domain, rootPath, documentRoot, phpVersion, httpsEnabled }) => ({
+    sites: sitesData.map(({ name, domain, rootPath, documentRoot }) => ({
       name,
       domain,
       rootPath,
-      documentRoot,
-      phpVersion,
-      httpsEnabled
+      documentRoot
     }))
   };
 
@@ -362,33 +368,17 @@ function appleScriptQuote(value) {
 }
 
 async function ensureDaemonStarted() {
-  if (fs.existsSync(socketPath)) {
-    const alive = await pingDaemon().catch(() => false);
-    if (alive) {
-      const compatible = await daemonMatchesCurrentBundle().catch(() => false);
-      if (compatible) {
-        return;
-      }
-      await stopDaemonUsingSocket();
-    }
-    try { fs.unlinkSync(socketPath); } catch {}
-  }
-
-  await stopStrayNestDaemons();
-  try { fs.unlinkSync(socketPath); } catch {}
-
   if (!fs.existsSync(daemonPath)) {
     throw new Error(`Nest daemon binary not found at ${daemonPath}. Build it with 'make build' before launching the desktop app.`);
   }
 
-  daemonProcess = spawn(daemonPath, [], {
-    stdio: "ignore",
-    detached: false
-  });
+  const agentChanged = ensureLaunchAgentConfig();
+  const alive = fs.existsSync(socketPath) ? await pingDaemon().catch(() => false) : false;
+  const compatible = alive ? await daemonMatchesCurrentBundle().catch(() => false) : false;
 
-  daemonProcess.on("exit", () => {
-    daemonProcess = null;
-  });
+  if (agentChanged || !alive || !compatible) {
+    await restartLaunchAgent();
+  }
 
   await waitForDaemonReady(5000);
 }
@@ -471,81 +461,6 @@ function bundledDaemonMeta() {
   return bundledDaemonMetaPromise;
 }
 
-async function stopDaemonUsingSocket() {
-  const pid = await pidForSocket(socketPath);
-  if (!pid) {
-    return;
-  }
-
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    return;
-  }
-
-  const stopped = await waitForProcessExit(pid, 3000);
-  if (!stopped) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {}
-    await waitForProcessExit(pid, 1000);
-  }
-}
-
-async function stopStrayNestDaemons() {
-  const pids = await findNestDaemonPids();
-  if (pids.length === 0) {
-    return;
-  }
-
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {}
-  }
-
-  for (const pid of pids) {
-    const stopped = await waitForProcessExit(pid, 3000);
-    if (!stopped) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
-      await waitForProcessExit(pid, 1000);
-    }
-  }
-}
-
-function findNestDaemonPids() {
-  return new Promise((resolve) => {
-    execFile("ps", ["-axo", "pid=,command="], (error, stdout) => {
-      if (error) {
-        resolve([]);
-        return;
-      }
-
-      const pids = String(stdout)
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const match = line.match(/^(\d+)\s+(.*)$/);
-          if (!match) {
-            return null;
-          }
-          return {
-            pid: Number.parseInt(match[1], 10),
-            command: match[2]
-          };
-        })
-        .filter((entry) => entry && Number.isFinite(entry.pid))
-        .filter((entry) => /(^|\/)nestd(\s|$)/.test(entry.command))
-        .map((entry) => entry.pid);
-
-      resolve([...new Set(pids)]);
-    });
-  });
-}
-
 function pidForSocket(targetPath) {
   return new Promise((resolve) => {
     execFile("lsof", ["-t", "--", targetPath], (error, stdout) => {
@@ -576,26 +491,6 @@ function executablePathForPid(pid) {
   });
 }
 
-function waitForProcessExit(pid, timeoutMs) {
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-    const timer = setInterval(() => {
-      try {
-        process.kill(pid, 0);
-      } catch {
-        clearInterval(timer);
-        resolve(true);
-        return;
-      }
-
-      if (Date.now() - startedAt > timeoutMs) {
-        clearInterval(timer);
-        resolve(false);
-      }
-    }, 100);
-  });
-}
-
 function pingDaemon() {
   return new Promise((resolve, reject) => {
     const req = http.request({ method: "GET", socketPath, path: "/services/status", timeout: 2000 }, (res) => {
@@ -613,6 +508,94 @@ function resolveBundledBinary(name) {
     return path.join(process.resourcesPath, "bin", name);
   }
   return path.join(__dirname, "..", "..", "bin", name);
+}
+
+function ensureLaunchAgentConfig() {
+  const logsDir = path.join(os.homedir(), "Library", "Application Support", "Nest", "logs");
+  fs.mkdirSync(path.dirname(launchAgentPath), { recursive: true });
+  fs.mkdirSync(logsDir, { recursive: true });
+
+  const content = renderLaunchAgentPlist(path.join(logsDir, "nestd.log"));
+  const current = fs.existsSync(launchAgentPath) ? fs.readFileSync(launchAgentPath, "utf-8") : "";
+  if (current === content) {
+    return false;
+  }
+
+  fs.writeFileSync(launchAgentPath, content, { mode: 0o600 });
+  return true;
+}
+
+async function restartLaunchAgent() {
+  try {
+    await runLaunchctl("bootout", launchAgentTarget);
+  } catch {}
+
+  try {
+    if (fs.existsSync(socketPath)) {
+      fs.unlinkSync(socketPath);
+    }
+  } catch {}
+
+  await runLaunchctl("bootstrap", launchAgentDomain, launchAgentPath);
+  await runLaunchctl("enable", launchAgentTarget).catch(() => {});
+  await runLaunchctl("kickstart", "-k", launchAgentTarget);
+}
+
+function runLaunchctl(...args) {
+  return new Promise((resolve, reject) => {
+    execFile("launchctl", args, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error((stderr || stdout || error.message).trim()));
+        return;
+      }
+      resolve(String(stdout).trim());
+    });
+  });
+}
+
+function renderLaunchAgentPlist(logPath) {
+  const environment = [];
+  if (process.env.NEST_SOCKET) {
+    environment.push(`<key>NEST_SOCKET</key><string>${escapePlist(process.env.NEST_SOCKET)}</string>`);
+  }
+
+  const environmentBlock = environment.length > 0
+    ? `<key>EnvironmentVariables</key><dict>${environment.join("")}</dict>`
+    : "";
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${launchAgentLabel}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${escapePlist(daemonPath)}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>${escapePlist(path.dirname(daemonPath))}</string>
+  <key>StandardOutPath</key>
+  <string>${escapePlist(logPath)}</string>
+  <key>StandardErrorPath</key>
+  <string>${escapePlist(logPath)}</string>
+  ${environmentBlock}
+</dict>
+</plist>
+`;
+}
+
+function escapePlist(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 function waitForDaemonReady(timeoutMs) {

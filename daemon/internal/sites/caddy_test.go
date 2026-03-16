@@ -20,7 +20,6 @@ func TestGenerateCaddyfileIncludesOnlyRunningSites(t *testing.T) {
 			RootPath:     "/tmp/alpha",
 			DocumentRoot: "public",
 			Status:       "running",
-			HTTPSEnabled: true,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		},
@@ -30,7 +29,6 @@ func TestGenerateCaddyfileIncludesOnlyRunningSites(t *testing.T) {
 			RootPath:     "/tmp/beta",
 			DocumentRoot: "public",
 			Status:       "stopped",
-			HTTPSEnabled: true,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		},
@@ -56,8 +54,8 @@ func TestGenerateCaddyfileUsesImportPattern(t *testing.T) {
 			RootPath:     "/tmp/php-project",
 			DocumentRoot: "public",
 			Status:       "running",
-			CreatedAt: now,
-			UpdatedAt: now,
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		},
 		{
 			ID:           "two",
@@ -65,8 +63,8 @@ func TestGenerateCaddyfileUsesImportPattern(t *testing.T) {
 			RootPath:     "/tmp/root-project",
 			DocumentRoot: ".",
 			Status:       "running",
-			CreatedAt: now,
-			UpdatedAt: now,
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		},
 	}, "/tmp/frankenphp.log")
 
@@ -89,10 +87,10 @@ func TestGenerateCaddyfileDefaultsToPhpApp(t *testing.T) {
 	}
 	output := GenerateCaddyfile([]config.Site{
 		{
-			ID:       "one",
-			Domain:   "project.test",
-			RootPath: rootPath,
-			Status:   "running",
+			ID:        "one",
+			Domain:    "project.test",
+			RootPath:  rootPath,
+			Status:    "running",
 			CreatedAt: now,
 			UpdatedAt: now,
 		},

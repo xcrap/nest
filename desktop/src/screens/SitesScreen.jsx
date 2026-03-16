@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Download, ExternalLink, FolderSearch2, Pencil, Plus, Power, PowerOff, Shield, Trash2, Upload } from "lucide-react";
+import { Download, ExternalLink, FolderSearch2, Pencil, Plus, Power, PowerOff, Trash2, Upload } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -14,28 +14,19 @@ import {
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { Select } from "../components/ui/select";
-import { Switch } from "../components/ui/switch";
 
 const defaultForm = {
   name: "",
   domain: "",
   rootPath: "",
-  documentRoot: "public",
-  phpVersion: "8.5",
-  httpsEnabled: true
+  documentRoot: "public"
 };
 
-export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onStart, onStop, onPickDirectory, onOpenUrl, onExport, onImport }) {
+export function SitesScreen({ sites, onCreate, onUpdate, onDelete, onStart, onStop, onPickDirectory, onOpenUrl, onExport, onImport }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSiteId, setEditingSiteId] = useState(null);
   const [form, setForm] = useState(defaultForm);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const phpOptions = useMemo(() => {
-    if (versions.length > 0) return versions;
-    return [{ version: "8.5", installed: false, active: false, path: "" }];
-  }, [versions]);
 
   const sortedSites = useMemo(
     () =>
@@ -49,10 +40,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
 
   const openCreate = () => {
     setEditingSiteId(null);
-    setForm({
-      ...defaultForm,
-      phpVersion: phpOptions.find((v) => v.active)?.version || phpOptions[0]?.version || "8.5"
-    });
+    setForm(defaultForm);
     setDialogOpen(true);
   };
 
@@ -62,9 +50,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
       name: site.name,
       domain: site.domain,
       rootPath: site.rootPath,
-      documentRoot: site.documentRoot || "public",
-      phpVersion: site.phpVersion,
-      httpsEnabled: site.httpsEnabled
+      documentRoot: site.documentRoot || "public"
     });
     setDialogOpen(true);
   };
@@ -140,11 +126,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
               </p>
 
               <div className="flex shrink-0 items-center gap-1.5">
-                <Badge variant="default">PHP</Badge>
-                <Badge variant="accent">PHP {site.phpVersion}</Badge>
-                <Badge variant={site.httpsEnabled ? "success" : "warning"}>
-                  {site.httpsEnabled ? "HTTPS" : "HTTP"}
-                </Badge>
+                <Badge variant="success">HTTPS</Badge>
               </div>
 
               <div className="flex shrink-0 items-center gap-0.5">
@@ -160,7 +142,7 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
                 <Button size="iconSm" variant="ghost" onClick={() => openEdit(site)} title="Edit">
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
-                <Button size="iconSm" variant="ghost" onClick={() => onOpenUrl(site.httpsEnabled ? `https://${site.domain}` : `http://${site.domain}`)} title="Open in browser">
+                <Button size="iconSm" variant="ghost" onClick={() => onOpenUrl(`https://${site.domain}`)} title="Open in browser">
                   <ExternalLink className="h-3.5 w-3.5" />
                 </Button>
                 <Button size="iconSm" variant="ghost" onClick={() => deleteSite(site)} title="Delete">
@@ -184,13 +166,12 @@ export function SitesScreen({ sites, versions, onCreate, onUpdate, onDelete, onS
         onSetForm={setForm}
         onSubmit={handleSubmit}
         open={dialogOpen}
-        versions={phpOptions}
       />
     </div>
   );
 }
 
-function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPickDirectory, versions, isSubmitting }) {
+function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPickDirectory, isSubmitting }) {
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => (nextOpen ? null : onClose())}>
       <DialogContent>
@@ -245,30 +226,8 @@ function SiteDialog({ open, onClose, isEditing, form, onSetForm, onSubmit, onPic
             <p className="text-xs text-zinc-400">Use `public` for `/public`, or `.` to serve the project folder directly.</p>
           </Field>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="PHP version">
-              <Select value={form.phpVersion} onChange={(e) => onSetForm((current) => ({ ...current, phpVersion: e.target.value }))}>
-                {versions.map((v) => (
-                  <option key={v.version} value={v.version}>
-                    PHP {v.version}{v.active ? " (active)" : ""}{v.installed ? "" : " (not installed)"}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            <div className="flex items-center justify-between gap-3 rounded-md border border-zinc-200 px-3 py-2">
-              <div>
-                <Label className="flex items-center gap-1.5">
-                  <Shield className="h-3.5 w-3.5 text-emerald-600" />
-                  HTTPS
-                </Label>
-                <p className="mt-0.5 text-xs text-zinc-400">Local certificates</p>
-              </div>
-              <Switch
-                checked={form.httpsEnabled}
-                onCheckedChange={(checked) => onSetForm((current) => ({ ...current, httpsEnabled: checked }))}
-              />
-            </div>
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-800">
+            Nest serves sites over HTTPS using the shared local certificate setup.
           </div>
 
           <DialogFooter>

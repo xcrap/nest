@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, Database, Download, Loader2, Play, RefreshCw, Server, Square } from "lucide-react";
+import { CheckCircle2, Database, Download, Loader2, Pin, Play, RefreshCw, Server, Square } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -42,9 +42,11 @@ export function MariaDBScreen({ runtime, onInstall, onStart, onStop, onCheckUpda
           </CardHeader>
           <CardContent className="space-y-4">
             <InfoRow label="Installed version" value={runtime?.installedVersion || "Not installed"} />
-            <InfoRow label="Available version" value={runtime?.availableVersion || "Unknown"} />
+            <InfoRow label="Formula" value={runtime?.formula || "mariadb@10.11"} />
+            <InfoRow label="Pinned" value={runtime?.pinned ? "Yes" : "No"} />
             <InfoRow label="Socket" value={runtime?.socketPath || "Not configured"} mono />
             <InfoRow label="Data directory" value={runtime?.dataDir || "Not configured"} mono />
+            <InfoRow label="Homebrew prefix" value={runtime?.prefix || "Not configured"} mono />
             <InfoRow label="Port" value={runtime?.port ? String(runtime.port) : "3306"} />
             <InfoRow label="Root access" value="root / no password" />
           </CardContent>
@@ -60,8 +62,8 @@ export function MariaDBScreen({ runtime, onInstall, onStart, onStop, onCheckUpda
               onClick={() => run("install", onInstall)}
               disabled={loading !== "" || busy}
             >
-              {loading === "install" || (busy && runtime?.activity === "install") ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : installed ? <RefreshCw className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
-              {installed ? "Reinstall MariaDB" : "Install MariaDB"}
+                  {loading === "install" || (busy && runtime?.activity === "install") ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : installed ? <RefreshCw className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
+                  {installed ? "Repair Homebrew runtime" : "Install with Homebrew"}
             </Button>
 
             {status === "running" ? (
@@ -92,8 +94,8 @@ export function MariaDBScreen({ runtime, onInstall, onStart, onStop, onCheckUpda
               onClick={() => run("updates", onCheckUpdates)}
               disabled={loading !== "" || busy}
             >
-              {loading === "updates" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              Check for updates
+              {loading === "updates" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pin className="h-3.5 w-3.5" />}
+              Verify formula and pin
             </Button>
 
             {busy && (
@@ -112,9 +114,9 @@ export function MariaDBScreen({ runtime, onInstall, onStart, onStop, onCheckUpda
               </div>
             )}
 
-            {runtime?.updateAvailable && (
-              <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-[13px] text-emerald-700">
-                Update available: MariaDB {runtime.availableVersion}
+            {!busy && installed && runtime && !runtime.pinned && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-700">
+                Homebrew formula is installed but not pinned yet.
               </div>
             )}
           </CardContent>

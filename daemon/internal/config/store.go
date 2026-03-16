@@ -35,7 +35,7 @@ func (s *Store) Ensure() error {
 	}
 
 	if _, err := os.Stat(s.paths.CaddyfilePath); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(s.paths.CaddyfilePath, []byte("{\n\thttp_port 8080\n\thttps_port 8443\n\tadmin localhost:2019\n\tlocal_certs\n}\n\nlocalhost {\n\ttls internal\n\trespond 204\n}\n"), 0o644); err != nil {
+		if err := os.WriteFile(s.paths.CaddyfilePath, []byte("{\n\thttp_port 8080\n\thttps_port 8443\n\tadmin localhost:2019\n\tlocal_certs\n}\n\nlocalhost {\n\ttls internal\n\trespond 204\n}\n"), 0o600); err != nil {
 			return err
 		}
 	}
@@ -67,7 +67,7 @@ func (s *Store) LoadConfigFile(path string) (string, error) {
 }
 
 func (s *Store) SaveConfigFile(path string, content string) error {
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 func (s *Store) LoadSites() ([]Site, error) {
@@ -166,7 +166,7 @@ func writeJSONFile(path string, value any) error {
 	data = append(data, '\n')
 
 	tempFile := path + ".tmp"
-	if err := os.WriteFile(tempFile, data, 0o644); err != nil {
+	if err := os.WriteFile(tempFile, data, 0o600); err != nil {
 		return err
 	}
 
@@ -176,7 +176,7 @@ func writeJSONFile(path string, value any) error {
 func ensureManagedFile(path, content string, legacyContents ...string) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return os.WriteFile(path, []byte(content), 0o644)
+		return os.WriteFile(path, []byte(content), 0o600)
 	}
 	if err != nil {
 		return err
@@ -188,7 +188,7 @@ func ensureManagedFile(path, content string, legacyContents ...string) error {
 	}
 	for _, legacy := range legacyContents {
 		if current == legacy {
-			return os.WriteFile(path, []byte(content), 0o644)
+			return os.WriteFile(path, []byte(content), 0o600)
 		}
 	}
 	return nil

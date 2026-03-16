@@ -75,16 +75,12 @@ func handleSite(client *api.Client) {
 		domain := flags.String("domain", "", "site domain")
 		root := flags.String("root", "", "project folder")
 		documentRoot := flags.String("document-root", "", "document root relative to the project folder (default: public, use . for project folder)")
-		phpVersion := flags.String("php-version", "", "php version")
-		httpsEnabled := flags.Bool("https", true, "enable https")
 		_ = flags.Parse(os.Args[3:])
 		payload := sites.CreateInput{
 			Name:         *name,
 			Domain:       *domain,
 			RootPath:     *root,
 			DocumentRoot: *documentRoot,
-			PHPVersion:   *phpVersion,
-			HTTPSEnabled: *httpsEnabled,
 		}
 		var response config.Site
 		exitOnError("add site", client.Do(ctx, "POST", "/sites", payload, &response))
@@ -123,15 +119,15 @@ func handleMariaDB(client *api.Client) {
 		var response config.MariaDBRuntime
 		exitOnError("mariadb status", client.Do(ctx, "GET", "/mariadb", nil, &response))
 		writer := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "INSTALLED\tSTATUS\tINSTALLED_VERSION\tAVAILABLE_VERSION\tUPDATE\tBUSY\tACTIVITY\tDATA_DIR")
+		fmt.Fprintln(writer, "INSTALLED\tSTATUS\tVERSION\tFORMULA\tPINNED\tBUSY\tACTIVITY\tDATA_DIR")
 		fmt.Fprintf(
 			writer,
 			"%t\t%s\t%s\t%s\t%t\t%t\t%s\t%s\n",
 			response.Installed,
 			response.Status,
 			response.InstalledVersion,
-			response.AvailableVersion,
-			response.UpdateAvailable,
+			response.Formula,
+			response.Pinned,
 			response.Busy,
 			response.Activity,
 			response.DataDir,
@@ -163,7 +159,7 @@ func handleMariaDB(client *api.Client) {
 	case "check-updates":
 		var response config.MariaDBRuntime
 		exitOnError("check mariadb updates", client.Do(ctx, "GET", "/mariadb/check-updates", nil, &response))
-		fmt.Printf("installed=%s available=%s update_available=%t\n", response.InstalledVersion, response.AvailableVersion, response.UpdateAvailable)
+		fmt.Printf("formula=%s version=%s pinned=%t installed=%t\n", response.Formula, response.InstalledVersion, response.Pinned, response.Installed)
 	default:
 		usage()
 		os.Exit(1)
@@ -267,23 +263,43 @@ func handleBootstrap(application *app.App) {
 		os.Exit(1)
 	}
 
-	if os.Geteuid() != 0 {
-		exitOnError("bootstrap test-domain", fmt.Errorf("re-run with sudo or use the desktop app so Nest can invoke nesthelper with administrator privileges"))
-	}
-
 	switch os.Args[2] {
 	case "test-domain":
+		if os.Geteuid() != 0 {
+			exitOnError("bootstrap test-domain", fmt.Errorf("re-run with sudo or use the desktop app so Nest can invoke nesthelper with administrator privileges"))
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		exitOnError("bootstrap test-domain", application.BootstrapTestDomain(ctx))
 		fmt.Println("test-domain bootstrap completed")
+	case "unbootstrap-test-domain":
+		if os.Geteuid() != 0 {
+			exitOnError("unbootstrap test-domain", fmt.Errorf("re-run with sudo or use the desktop app so Nest can invoke nesthelper with administrator privileges"))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		exitOnError("unbootstrap test-domain", application.UnbootstrapTestDomain(ctx))
+		fmt.Println("test-domain bootstrap removed")
 	case "trust-local-ca":
+		if os.Geteuid() != 0 {
+			exitOnError("bootstrap trust-local-ca", fmt.Errorf("re-run with sudo or use the desktop app so Nest can invoke nesthelper with administrator privileges"))
+		}
 		helperPath, err := app.ResolveHelperBinaryForCLI()
 		exitOnError("resolve helper", err)
 		command := exec.Command(helperPath, "trust", "local-ca")
 		command.Stdout = os.Stdout
 		command.Stderr = os.Stderr
 		exitOnError("bootstrap trust-local-ca", command.Run())
+	case "untrust-local-ca":
+		if os.Geteuid() != 0 {
+			exitOnError("bootstrap untrust-local-ca", fmt.Errorf("re-run with sudo or use the desktop app so Nest can invoke nesthelper with administrator privileges"))
+		}
+		helperPath, err := app.ResolveHelperBinaryForCLI()
+		exitOnError("resolve helper", err)
+		command := exec.Command(helperPath, "untrust", "local-ca")
+		command.Stdout = os.Stdout
+		command.Stderr = os.Stderr
+		exitOnError("bootstrap untrust-local-ca", command.Run())
 	default:
 		usage()
 		os.Exit(1)
@@ -293,7 +309,7 @@ func handleBootstrap(application *app.App) {
 func usage() {
 	fmt.Println("nestcli commands:")
 	fmt.Println("  nestcli site list")
-	fmt.Println("  nestcli site add --name NAME --domain DOMAIN --root PATH [--document-root public|.|web] [--php-version VERSION] [--https=true]")
+	fmt.Println("  nestcli site add --name NAME --domain DOMAIN --root PATH [--document-root public|.|web]")
 	fmt.Println("  nestcli site remove ID")
 	fmt.Println("  nestcli site start ID")
 	fmt.Println("  nestcli site stop ID")
@@ -304,8 +320,10 @@ func usage() {
 	fmt.Println("  nestcli services start|stop|reload|status")
 	fmt.Println("  nestcli doctor")
 	fmt.Println("  nestcli shell integrate --zsh")
-	fmt.Println("  nestcli bootstrap test-domain")
+	fmt.Println("  sudo nestcli bootstrap test-domain")
+	fmt.Println("  sudo nestcli bootstrap unbootstrap-test-domain")
 	fmt.Println("  sudo nestcli bootstrap trust-local-ca")
+	fmt.Println("  sudo nestcli bootstrap untrust-local-ca")
 }
 
 func requireArgs(count int) {

@@ -1,6 +1,6 @@
 # Nest
 
-Nest is a macOS local PHP development app with a desktop UI, Nest-managed PHP and MariaDB runtimes, local `.test` domains, HTTPS bootstrap, and site management.
+Nest is a macOS local PHP development app with a desktop UI, a Nest-managed FrankenPHP runtime, a Homebrew-managed MariaDB runtime, local `.test` domains, HTTPS bootstrap, and site management.
 
 ## What You Run
 
@@ -10,11 +10,13 @@ Typical flow:
 
 1. Open `Nest.app`.
 2. Install PHP from the `PHP` screen.
-3. Install MariaDB from the `MariaDB` screen if your project needs a database.
+3. Install MariaDB from the `MariaDB` screen if your project needs a database. Nest installs and pins `mariadb@10.11` with Homebrew.
 4. Start services from the header controls.
 5. In `Settings`, run `Install .test Routing` and `Trust Local HTTPS`.
 6. Add sites in `Sites`.
 7. Open `https://your-site.test`.
+
+Nest runs `nestd` as a per-user background service. The desktop app is a client and can be opened or closed independently.
 
 ## Managed Runtime Layout
 
@@ -25,7 +27,6 @@ Nest manages its own runtime state under:
 Important paths:
 
 - `versions/php`: installed PHP runtimes
-- `versions/mariadb`: installed MariaDB runtimes
 - `data/mariadb`: MariaDB data directory
 - `config/mariadb.cnf`: MariaDB config file
 - `run/mariadb.sock`: MariaDB socket
@@ -34,10 +35,13 @@ Important paths:
 
 MariaDB defaults:
 
+- formula: `mariadb@10.11` via Homebrew
 - host: `127.0.0.1`
 - port: `3306`
 - user: `root`
 - password: none
+
+Nest uses Homebrew to install and pin MariaDB, but Nest still manages the process, config, data dir, socket, and shell wrappers itself. Nest does not use `brew services`.
 
 ## Repository Layout
 
@@ -56,7 +60,7 @@ Bootstrap:
 make bootstrap
 ```
 
-Run the daemon and desktop app in development:
+Run the desktop app in development:
 
 ```bash
 make dev
@@ -86,7 +90,7 @@ Main commands:
 
 ```bash
 nestcli site list
-nestcli site add --name NAME --domain DOMAIN --root PATH [--document-root public|.|web] [--php-version VERSION] [--https=true]
+nestcli site add --name NAME --domain DOMAIN --root PATH [--document-root public|.|web]
 nestcli site remove ID
 nestcli site start ID
 nestcli site stop ID
@@ -108,8 +112,10 @@ nestcli services status
 
 nestcli doctor
 nestcli shell integrate --zsh
-nestcli bootstrap test-domain
+sudo nestcli bootstrap test-domain
+sudo nestcli bootstrap unbootstrap-test-domain
 sudo nestcli bootstrap trust-local-ca
+sudo nestcli bootstrap untrust-local-ca
 ```
 
 ## Versioning
@@ -146,6 +152,7 @@ Pushing a `v*` tag triggers the GitHub release workflow. Only do this when you w
 
 ## Notes
 
-- Nest runtime binaries are app-managed and do not require Homebrew runtime packages.
+- Nest manages one active PHP runtime through FrankenPHP.
+- Nest installs MariaDB through Homebrew and pins the supported formula automatically.
 - The root `Nest.app` in this repo is the main packaged output to test.
 - This repository keeps project documentation in this `README.md`.

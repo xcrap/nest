@@ -13,7 +13,7 @@ const doctorVariant = {
   fail: "danger"
 };
 
-export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appMeta, settings, updateState, onCheckUpdates, onInstallUpdate }) {
+export function SettingsScreen({ doctorChecks, onBootstrap, onUnbootstrap, onTrustLocalCA, onUntrustLocalCA, appMeta, settings, updateState, onCheckUpdates, onInstallUpdate }) {
   const bootstrap = settings?.bootstrap;
   const testDomainDone = bootstrap?.testDomainConfigured ?? false;
   const localCATrusted = bootstrap?.localCATrusted ?? false;
@@ -34,6 +34,8 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
               doneLabel="Configured"
               actionLabel="Run bootstrap"
               onAction={onBootstrap}
+              onUndo={onUnbootstrap}
+              undoLabel="Remove"
             />
             <BootstrapRow
               icon={ShieldCheck}
@@ -44,6 +46,8 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
               actionLabel="Trust CA"
               variant="outline"
               onAction={onTrustLocalCA}
+              onUndo={onUntrustLocalCA}
+              undoLabel="Untrust"
             />
             {bootstrap?.lastBootstrapCompleted && (
               <p className="text-xs text-zinc-400">
@@ -152,13 +156,13 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onTrustLocalCA, appM
   );
 }
 
-function BootstrapRow({ icon: Icon, title, body, done, doneLabel, actionLabel, variant, onAction }) {
+function BootstrapRow({ icon: Icon, title, body, done, doneLabel, actionLabel, undoLabel, variant, onAction, onUndo }) {
   const [running, setRunning] = useState(false);
 
-  const handleAction = async () => {
+  const run = async (action) => {
     setRunning(true);
     try {
-      await onAction();
+      await action();
     } finally {
       setRunning(false);
     }
@@ -176,12 +180,20 @@ function BootstrapRow({ icon: Icon, title, body, done, doneLabel, actionLabel, v
         </div>
       </div>
       {done ? (
-        <Badge variant="success" className="gap-1.5">
-          <Check className="h-3 w-3" />
-          {doneLabel}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="success" className="gap-1.5">
+            <Check className="h-3 w-3" />
+            {doneLabel}
+          </Badge>
+          {onUndo && (
+            <Button size="sm" variant="outline" onClick={() => run(onUndo)} disabled={running}>
+              {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {undoLabel}
+            </Button>
+          )}
+        </div>
       ) : (
-        <Button size="sm" variant={variant} onClick={handleAction} disabled={running}>
+        <Button size="sm" variant={variant} onClick={() => run(onAction)} disabled={running}>
           {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
           {actionLabel}
         </Button>

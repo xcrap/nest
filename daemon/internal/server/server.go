@@ -34,7 +34,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	defer listener.Close()
 
-	if err := os.Chmod(s.app.Paths.SocketPath, 0o666); err != nil {
+	if err := os.Chmod(s.app.Paths.SocketPath, 0o600); err != nil {
 		return err
 	}
 
@@ -79,7 +79,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/settings", s.handleSettings)
 	mux.HandleFunc("/doctor", s.handleDoctor)
 	mux.HandleFunc("/bootstrap/test-domain", s.handleBootstrapTestDomain)
+	mux.HandleFunc("/bootstrap/test-domain/uninstall", s.handleUnbootstrapTestDomain)
 	mux.HandleFunc("/bootstrap/trust-local-ca", s.handleTrustLocalCA)
+	mux.HandleFunc("/bootstrap/trust-local-ca/uninstall", s.handleUntrustLocalCA)
 	mux.HandleFunc("/doctor/fix", s.handleDoctorFix)
 	mux.HandleFunc("/config/files", s.handleConfigFiles)
 	mux.HandleFunc("/config/files/", s.handleConfigFile)
@@ -177,7 +179,10 @@ func (s *Server) handleSiteActions(writer http.ResponseWriter, request *http.Req
 			writeError(writer, http.StatusBadRequest, err)
 			return
 		}
-		_ = s.app.FrankenPHP.Reload()
+		if err := s.app.FrankenPHP.Reload(); err != nil {
+			writeError(writer, http.StatusBadRequest, err)
+			return
+		}
 		writeJSON(writer, http.StatusOK, site)
 	case "stop":
 		site, err := s.app.Sites.SetStatus(id, "stopped")
@@ -185,7 +190,10 @@ func (s *Server) handleSiteActions(writer http.ResponseWriter, request *http.Req
 			writeError(writer, http.StatusBadRequest, err)
 			return
 		}
-		_ = s.app.FrankenPHP.Reload()
+		if err := s.app.FrankenPHP.Reload(); err != nil {
+			writeError(writer, http.StatusBadRequest, err)
+			return
+		}
 		writeJSON(writer, http.StatusOK, site)
 	default:
 		writer.WriteHeader(http.StatusNotFound)
@@ -401,7 +409,7 @@ func (s *Server) handleSettings(writer http.ResponseWriter, request *http.Reques
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	settings, err := s.app.Store.LoadSettings()
+	settings, err := s.app.ResolvedSettings()
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err)
 		return
@@ -488,6 +496,44 @@ func (s *Server) handleTrustLocalCA(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]string{"status": "trusted"})
+}
+
+func (s *Server) handleUnbootstrapTestDomain(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var err error
+	if request.URL.Query().Get("skipHelper") == "1" {
+		err = s.app.RefreshBootstrapState()
+	} else {
+		err = s.app.UnbootstrapTestDomain(request.Context())
+	}
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "unbootstrapped"})
+}
+
+func (s *Server) handleUntrustLocalCA(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var err error
+	if request.URL.Query().Get("skipHelper") == "1" {
+		err = s.app.RefreshBootstrapState()
+	} else {
+		err = s.app.UntrustLocalCA(request.Context())
+	}
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"status": "untrusted"})
 }
 
 func (s *Server) configFileMap() map[string]string {

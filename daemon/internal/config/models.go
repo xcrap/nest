@@ -9,8 +9,6 @@ type Site struct {
 	RootPath     string    `json:"rootPath"`
 	DocumentRoot string    `json:"documentRoot"`
 	Status       string    `json:"status"`
-	HTTPSEnabled bool      `json:"httpsEnabled"`
-	PHPVersion   string    `json:"phpVersion"`
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
@@ -50,8 +48,9 @@ type MariaDBRuntime struct {
 	Installed        bool   `json:"installed"`
 	Status           string `json:"status"`
 	InstalledVersion string `json:"installedVersion"`
-	AvailableVersion string `json:"availableVersion"`
-	UpdateAvailable  bool   `json:"updateAvailable"`
+	Formula          string `json:"formula"`
+	Pinned           bool   `json:"pinned"`
+	Prefix           string `json:"prefix"`
 	BinaryPath       string `json:"binaryPath"`
 	DataDir          string `json:"dataDir"`
 	SocketPath       string `json:"socketPath"`

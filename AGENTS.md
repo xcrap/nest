@@ -16,8 +16,8 @@ Core responsibilities:
 
 ## High-Level Architecture
 
-- `daemon/`: Go backend, local API, runtime management, site/service orchestration, `nestcli`
-- `desktop/`: Electron + React desktop app
+- `daemon/`: Go backend, local API, runtime management, site/service orchestration, `nestcli`, and the persistent per-user background service used by the desktop app
+- `desktop/`: Electron + React desktop app client for the daemon
 - `helper/`: privileged macOS helper for system-level setup tasks
 - `scripts/`: bootstrap and release helpers
 - `bin/`: local build outputs
@@ -38,7 +38,9 @@ Common locations:
 - `run/`: sockets and pid files
 - `bin/`: active runtime symlinks and wrappers
 
-Do not assume Homebrew-managed runtimes are present or required.
+Nest requires Homebrew for MariaDB. Nest installs and pins the supported MariaDB formula, but still manages the MariaDB process, config, data dir, socket, logs, and wrappers itself.
+
+Do not assume Homebrew is used for other runtimes unless the source or `README.md` says so.
 
 ## Working Style
 

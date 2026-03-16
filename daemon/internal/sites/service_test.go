@@ -23,10 +23,9 @@ func TestCreateAndDeleteSite(t *testing.T) {
 
 	service := NewService(paths, store)
 	site, err := service.Create(CreateInput{
-		Name:         "Project",
-		Domain:       "project.test",
-		RootPath:     rootPath,
-		HTTPSEnabled: true,
+		Name:     "Project",
+		Domain:   "project.test",
+		RootPath: rootPath,
 	})
 	if err != nil {
 		t.Fatalf("create site: %v", err)
@@ -74,21 +73,17 @@ func TestUpdateValidatesAndPersistsSite(t *testing.T) {
 
 	service := NewService(paths, store)
 	firstSite, err := service.Create(CreateInput{
-		Name:         "Project A",
-		Domain:       "project-a.test",
-		RootPath:     firstRoot,
-		PHPVersion:   "8.5",
-		HTTPSEnabled: true,
+		Name:     "Project A",
+		Domain:   "project-a.test",
+		RootPath: firstRoot,
 	})
 	if err != nil {
 		t.Fatalf("create first site: %v", err)
 	}
 	if _, err := service.Create(CreateInput{
-		Name:         "Project B",
-		Domain:       "project-b.test",
-		RootPath:     secondRoot,
-		PHPVersion:   "8.5",
-		HTTPSEnabled: false,
+		Name:     "Project B",
+		Domain:   "project-b.test",
+		RootPath: secondRoot,
 	}); err != nil {
 		t.Fatalf("create second site: %v", err)
 	}
@@ -96,21 +91,17 @@ func TestUpdateValidatesAndPersistsSite(t *testing.T) {
 	newName := "Project A Prime"
 	newDomain := "project-prime.test"
 	newRoot := secondRoot
-	newVersion := "8.4"
-	httpsEnabled := false
 
 	updated, err := service.Update(firstSite.ID, UpdateInput{
-		Name:         &newName,
-		Domain:       &newDomain,
-		RootPath:     &newRoot,
-		PHPVersion:   &newVersion,
-		HTTPSEnabled: &httpsEnabled,
+		Name:     &newName,
+		Domain:   &newDomain,
+		RootPath: &newRoot,
 	})
 	if err != nil {
 		t.Fatalf("update site: %v", err)
 	}
 
-	if updated.Name != newName || updated.Domain != newDomain || updated.RootPath != newRoot || updated.PHPVersion != newVersion || updated.HTTPSEnabled != httpsEnabled {
+	if updated.Name != newName || updated.Domain != newDomain || updated.RootPath != newRoot {
 		t.Fatalf("unexpected updated site: %+v", updated)
 	}
 
@@ -148,7 +139,6 @@ func TestCreateSupportsProjectRootDocumentRoot(t *testing.T) {
 		Domain:       "rooted.test",
 		RootPath:     rootPath,
 		DocumentRoot: ".",
-		HTTPSEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create site: %v", err)
