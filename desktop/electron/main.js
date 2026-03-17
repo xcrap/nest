@@ -14,26 +14,23 @@ const launchAgentLabel = "dev.nest.nestd";
 const launchAgentPath = path.join(os.homedir(), "Library", "LaunchAgents", `${launchAgentLabel}.plist`);
 const launchAgentDomain = `gui/${process.getuid()}`;
 const launchAgentTarget = `${launchAgentDomain}/${launchAgentLabel}`;
+const dnsPort = 5354;
 const socketPath = process.env.NEST_SOCKET || path.join(os.homedir(), "Library", "Application Support", "Nest", "run", "nest.sock");
 const helperPath = process.env.NEST_HELPER_BIN || resolveBundledBinary("nesthelper");
 const daemonPath = process.env.NEST_DAEMON_BIN || resolveBundledBinary("nestd");
+const rendererEntryPath = path.join(__dirname, "..", "dist", "index.html");
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
-let mainWindow;
+let mainWindow = null;
 let daemonStartPromise = null;
 let bundledDaemonMetaPromise = null;
+let lastDaemonStartupError = null;
 
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (!mainWindow) {
-      return;
-    }
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore();
-    }
-    mainWindow.focus();
+    void restoreOrCreateWindow();
   });
 
   app.whenReady().then(async () => {
@@ -48,8 +45,8 @@ if (!hasSingleInstanceLock) {
 
     setupAutoUpdater();
 
-    await ensureDaemonStarted();
     await createWindow();
+    void ensureDaemonAvailable().catch(() => null);
   });
 }
 
@@ -60,9 +57,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    app.whenReady().then(() => createWindow());
-  }
+  void restoreOrCreateWindow();
 });
 
 async function requestDaemon({ method, route, body }) {
@@ -88,7 +83,11 @@ async function requestDaemon({ method, route, body }) {
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (!fs.existsSync(socketPath)) {
-      await ensureDaemonAvailable();
+      try {
+        await ensureDaemonAvailable();
+      } catch (error) {
+        throw normalizeDaemonRequestError(error);
+      }
     }
 
     try {
@@ -96,14 +95,18 @@ async function requestDaemon({ method, route, body }) {
     } catch (error) {
       lastError = error;
       if (attempt === 0 && shouldRetryDaemonRequest(error)) {
-        await ensureDaemonAvailable();
+        try {
+          await ensureDaemonAvailable();
+        } catch (startError) {
+          throw normalizeDaemonRequestError(startError);
+        }
         continue;
       }
-      throw error;
+      throw normalizeDaemonRequestError(error);
     }
   }
 
-  throw lastError ?? new Error("Nest daemon request failed");
+  throw normalizeDaemonRequestError(lastError ?? new Error("Nest daemon request failed"));
 }
 
 function performDaemonRequest({ method, route, payload }) {
@@ -171,7 +174,11 @@ function ensureDaemonAvailable() {
 }
 
 async function createWindow() {
-  mainWindow = new BrowserWindow({
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return mainWindow;
+  }
+
+  const window = new BrowserWindow({
     width: 1520,
     height: 980,
     minWidth: 1240,
@@ -184,28 +191,106 @@ async function createWindow() {
       nodeIntegration: false
     }
   });
+  mainWindow = window;
+
+  window.on("closed", () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
+  });
+
+  window.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (process.env.NEST_DEBUG === "1") {
+      console.error("[nest] did-fail-load", { errorCode, errorDescription, validatedURL, isMainFrame });
+    }
+    if (!isMainFrame || window.isDestroyed()) {
+      return;
+    }
+    void loadRecoveryContent(window, `Nest failed to load its interface (${errorDescription || errorCode}). Close and reopen the app.`);
+  });
+
+  window.webContents.on("render-process-gone", (_event, details) => {
+    if (process.env.NEST_DEBUG === "1") {
+      console.error("[nest] render-process-gone", details);
+    }
+    if (window.isDestroyed()) {
+      return;
+    }
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
+    window.destroy();
+    void createWindow();
+  });
 
   if (process.env.NEST_DEBUG === "1") {
-    mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-      console.error("[nest] did-fail-load", { errorCode, errorDescription, validatedURL });
-    });
-    mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    window.webContents.on("console-message", (_event, level, message, line, sourceId) => {
       console.error("[nest] console-message", { level, message, line, sourceId });
     });
-    mainWindow.webContents.on("render-process-gone", (_event, details) => {
-      console.error("[nest] render-process-gone", details);
-    });
   }
 
-  if (isDev) {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-  } else {
-    await mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
-  }
+  await loadRenderer(window);
 
   if (process.env.NEST_DEBUG === "1") {
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+    window.webContents.openDevTools({ mode: "detach" });
   }
+
+  return window;
+}
+
+async function restoreOrCreateWindow() {
+  const window = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow
+    : BrowserWindow.getAllWindows()[0];
+
+  if (!window) {
+    await createWindow();
+    return;
+  }
+
+  mainWindow = window;
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  if (!window.isVisible()) {
+    window.show();
+  }
+  if (window.webContents.isCrashed()) {
+    await loadRenderer(window).catch(() =>
+      loadRecoveryContent(window, "Nest recovered from a renderer crash. Retry the last action.")
+    );
+  }
+  window.focus();
+}
+
+async function loadRenderer(window) {
+  if (isDev) {
+    await window.loadURL(process.env.VITE_DEV_SERVER_URL);
+    return;
+  }
+
+  await window.loadFile(rendererEntryPath);
+}
+
+async function loadRecoveryContent(window, message) {
+  if (window.isDestroyed()) {
+    return;
+  }
+
+  const html = `<!doctype html>
+<html lang="en">
+  <body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f4;color:#18181b;">
+    <main style="display:flex;min-height:100vh;align-items:center;justify-content:center;padding:32px;">
+      <section style="max-width:560px;border:1px solid #e4e4e7;background:#fff;border-radius:24px;padding:32px;box-shadow:0 18px 50px -40px rgba(24,24,27,0.35);">
+        <p style="margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#dc2626;">Nest Error</p>
+        <h1 style="margin:0 0 12px;font-size:28px;line-height:1.2;">Nest couldn't render its interface.</h1>
+        <p style="margin:0;font-size:15px;line-height:1.6;color:#52525b;">${escapeHTML(message)}</p>
+      </section>
+    </main>
+  </body>
+</html>`;
+
+  await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 }
 
 function handlePickDirectory() {
@@ -367,20 +452,77 @@ function appleScriptQuote(value) {
   return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+function normalizeDaemonRequestError(error) {
+  const message = String(error?.message || error || "").trim();
+  if (!message) {
+    return new Error("Nest request failed.");
+  }
+  if (message.includes("Nest couldn't start its background daemon")) {
+    return new Error(message);
+  }
+  if (message.includes("Nest daemon did not become ready")) {
+    return new Error("Nest couldn't start its background daemon. PHP, Composer, MariaDB, site actions, and bootstrap stay unavailable until that is fixed.");
+  }
+  if (lastDaemonStartupError?.message && message.includes("connect: no such file or directory")) {
+    return new Error(lastDaemonStartupError.message);
+  }
+  return error instanceof Error ? error : new Error(message);
+}
+
 async function ensureDaemonStarted() {
   if (!fs.existsSync(daemonPath)) {
     throw new Error(`Nest daemon binary not found at ${daemonPath}. Build it with 'make build' before launching the desktop app.`);
   }
 
-  const agentChanged = ensureLaunchAgentConfig();
+  ensureLaunchAgentConfig();
   const alive = fs.existsSync(socketPath) ? await pingDaemon().catch(() => false) : false;
   const compatible = alive ? await daemonMatchesCurrentBundle().catch(() => false) : false;
 
-  if (agentChanged || !alive || !compatible) {
-    await restartLaunchAgent();
+  if (alive && compatible) {
+    lastDaemonStartupError = null;
+    return;
   }
 
-  await waitForDaemonReady(5000);
+  if (alive && !compatible) {
+    await stopConflictingDaemon();
+  }
+
+  await restartLaunchAgent();
+
+  try {
+    await waitForDaemonReady(5000);
+    lastDaemonStartupError = null;
+  } catch (error) {
+    const stoppedConflict = await stopConflictingDaemon().catch(() => false);
+    if (stoppedConflict) {
+      await restartLaunchAgent();
+      await waitForDaemonReady(5000);
+      lastDaemonStartupError = null;
+      return;
+    }
+
+    lastDaemonStartupError = await formatDaemonStartupError(error);
+    throw lastDaemonStartupError;
+  }
+}
+
+async function formatDaemonStartupError(error) {
+  const conflict = await describeUDPPortOwner(dnsPort);
+  if (conflict?.path) {
+    if (path.basename(conflict.path) === "nestd" && !sameRealPath(conflict.path, daemonPath)) {
+      return new Error(`Nest couldn't start its background daemon because another Nest build is already running (${conflict.path}). Quit the older Nest app and retry.`);
+    }
+    if (path.basename(conflict.path) !== "nestd") {
+      return new Error(`Nest couldn't start its background daemon because UDP port ${dnsPort} is already in use by ${conflict.path}.`);
+    }
+  }
+
+  const message = String(error?.message || error || "").trim();
+  if (message.includes("Nest daemon did not become ready")) {
+    return new Error("Nest couldn't start its background daemon. Check ~/Library/Application Support/Nest/logs/nestd.log and retry.");
+  }
+
+  return error instanceof Error ? error : new Error(message || "Nest daemon failed to start.");
 }
 
 async function daemonUsesExpectedBinary() {
@@ -491,6 +633,116 @@ function executablePathForPid(pid) {
   });
 }
 
+function pidForUDPPort(port) {
+  return new Promise((resolve) => {
+    execFile("lsof", ["-nP", "-t", `-iUDP:${port}`], (error, stdout) => {
+      if (error) {
+        resolve(null);
+        return;
+      }
+      const pid = Number.parseInt(String(stdout).trim().split("\n")[0], 10);
+      resolve(Number.isFinite(pid) ? pid : null);
+    });
+  });
+}
+
+async function describeUDPPortOwner(port) {
+  const pid = await pidForUDPPort(port);
+  if (!pid) {
+    return null;
+  }
+
+  const actualPath = await executablePathForPid(pid);
+  return {
+    pid,
+    path: actualPath || `pid ${pid}`
+  };
+}
+
+async function stopConflictingDaemon() {
+  const candidatePIDs = new Set();
+  const socketPID = await pidForSocket(socketPath);
+  if (socketPID) {
+    candidatePIDs.add(socketPID);
+  }
+  const udpPID = await pidForUDPPort(dnsPort);
+  if (udpPID) {
+    candidatePIDs.add(udpPID);
+  }
+
+  let stopped = false;
+  for (const pid of candidatePIDs) {
+    if (await terminateConflictingDaemon(pid)) {
+      stopped = true;
+    }
+  }
+
+  return stopped;
+}
+
+async function terminateConflictingDaemon(pid) {
+  const actualPath = await executablePathForPid(pid);
+  if (!actualPath || path.basename(actualPath) !== "nestd") {
+    return false;
+  }
+  if (sameRealPath(actualPath, daemonPath)) {
+    return false;
+  }
+
+  await terminatePID(pid);
+  return true;
+}
+
+function terminatePID(pid) {
+  return new Promise((resolve, reject) => {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (error) {
+      if (error.code === "ESRCH") {
+        resolve(false);
+        return;
+      }
+      reject(error);
+      return;
+    }
+
+    const softDeadline = Date.now() + 3000;
+    const hardDeadline = Date.now() + 6000;
+    let escalated = false;
+
+    const timer = setInterval(() => {
+      try {
+        process.kill(pid, 0);
+
+        if (!escalated && Date.now() >= softDeadline) {
+          escalated = true;
+          process.kill(pid, "SIGKILL");
+        }
+
+        if (Date.now() >= hardDeadline) {
+          clearInterval(timer);
+          reject(new Error(`Timed out waiting for daemon process ${pid} to exit`));
+        }
+      } catch (error) {
+        clearInterval(timer);
+        if (error.code === "ESRCH") {
+          resolve(true);
+          return;
+        }
+        reject(error);
+      }
+    }, 100);
+  });
+}
+
+function sameRealPath(left, right) {
+  try {
+    return fs.realpathSync(left) === fs.realpathSync(right);
+  } catch {
+    return path.resolve(left) === path.resolve(right);
+  }
+}
+
 function pingDaemon() {
   return new Promise((resolve, reject) => {
     const req = http.request({ method: "GET", socketPath, path: "/services/status", timeout: 2000 }, (res) => {
@@ -596,6 +848,15 @@ function escapePlist(value) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+function escapeHTML(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function waitForDaemonReady(timeoutMs) {

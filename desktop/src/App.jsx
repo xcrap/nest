@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Code2, Database, FileText, Globe2, LayoutDashboard, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Square } from "lucide-react";
+import { CircleAlert, Code2, Database, FileText, Globe2, LayoutDashboard, Play, RefreshCw, RotateCcw, Settings2, SlidersHorizontal, Square } from "lucide-react";
 
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -30,6 +30,23 @@ const serviceVariant = {
   unknown: "default"
 };
 
+function formatAppError(error) {
+  const message = String(error?.message || error || "")
+    .replace(/^Error invoking remote method '[^']+':\s*/, "")
+    .trim();
+
+  if (!message) {
+    return "Nest request failed.";
+  }
+  if (message.includes("Nest couldn't start its background daemon")) {
+    return message;
+  }
+  if (message.includes("Nest daemon did not become ready")) {
+    return "Nest couldn't start its background daemon. PHP, Composer, MariaDB, site actions, and bootstrap stay unavailable until that is fixed.";
+  }
+  return message;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [sites, setSites] = useState([]);
@@ -43,6 +60,8 @@ export default function App() {
   const [configs, setConfigs] = useState({});
   const [error, setError] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [hasLoadedData, setHasLoadedData] = useState(false);
+  const [daemonState, setDaemonState] = useState({ status: "loading", message: "" });
   const [appMeta, setAppMeta] = useState({
     version: "...",
     packaged: false,
@@ -56,6 +75,9 @@ export default function App() {
     try {
       setIsRefreshing(true);
       setError("");
+      if (!hasLoadedData) {
+        setDaemonState({ status: "loading", message: "" });
+      }
       const [siteData, doctorData, logData, versionData, composerData, mariaDBData, statusData, settingsData, configData] = await Promise.all([
         api.getSites(),
         api.getDoctor(),
@@ -76,8 +98,14 @@ export default function App() {
       setServiceStatus(statusData.status);
       setSettings(settingsData);
       setConfigs(configData);
+      setHasLoadedData(true);
+      setDaemonState({ status: "ready", message: "" });
     } catch (refreshError) {
-      setError(refreshError.message);
+      const message = formatAppError(refreshError);
+      setError(message);
+      if (!hasLoadedData) {
+        setDaemonState({ status: "error", message });
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -108,7 +136,7 @@ export default function App() {
       await action();
       await refresh();
     } catch (actionError) {
-      setError(actionError.message);
+      setError(formatAppError(actionError));
     }
   };
 
@@ -166,8 +194,9 @@ export default function App() {
         setUpdateState((current) => ({ ...current, ...result }));
       }
     } catch (updateError) {
-      setUpdateState({ status: "error", message: updateError.message });
-      setError(updateError.message);
+      const message = formatAppError(updateError);
+      setUpdateState({ status: "error", message });
+      setError(message);
     }
   };
 
@@ -175,9 +204,11 @@ export default function App() {
     try {
       await desktop.openExternal(url);
     } catch (openError) {
-      setError(openError.message);
+      setError(formatAppError(openError));
     }
   };
+
+  const daemonUnavailable = daemonState.status === "error" && !hasLoadedData;
 
   return (
     <div className="flex h-screen flex-col bg-zinc-50 text-zinc-950">
@@ -194,12 +225,12 @@ export default function App() {
 
         <div className="flex items-center gap-1.5" style={{ WebkitAppRegion: "no-drag" }}>
           {serviceStatus === "running" ? (
-            <Button size="sm" variant="outline" onClick={() => wrap(() => api.stopServices())}>
+            <Button size="sm" variant="outline" onClick={() => wrap(() => api.stopServices())} disabled={daemonUnavailable}>
               <Square className="h-3 w-3 fill-current" />
               Stop
             </Button>
           ) : (
-            <Button size="sm" onClick={() => wrap(() => api.startServices())}>
+            <Button size="sm" onClick={() => wrap(() => api.startServices())} disabled={daemonUnavailable}>
               <Play className="h-3 w-3 fill-current" />
               Start
             </Button>
@@ -210,6 +241,7 @@ export default function App() {
             variant="ghost"
             onClick={() => wrap(() => api.reloadServices())}
             title="Reload config"
+            disabled={daemonUnavailable}
           >
             <RotateCcw className="h-3.5 w-3.5" />
           </Button>
@@ -263,102 +295,132 @@ export default function App() {
 
         <main className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-5xl p-6">
-            {activeTab === "dashboard" && (
-              <DashboardScreen
-                doctorChecks={doctorChecks}
-                serviceStatus={serviceStatus}
-                sites={sites}
-                onOpenSettings={() => setActiveTab("settings")}
-              />
-            )}
-            {activeTab === "sites" && (
-              <SitesScreen
-                sites={sites}
-                onCreate={(payload) => wrap(() => api.createSite(payload))}
-                onDelete={(id) => wrap(() => api.deleteSite(id))}
-                onExport={() => desktop.exportSites()}
-                onImport={async () => {
-                  const result = await desktop.importSites();
-                  if (result.imported) await refresh();
-                  return result;
-                }}
-                onOpenUrl={openExternal}
-                onPickDirectory={() => desktop.pickDirectory()}
-                onStart={(id) => wrap(() => api.startSite(id))}
-                onStop={(id) => wrap(() => api.stopSite(id))}
-                onUpdate={(id, payload) => wrap(() => api.updateSite(id, payload))}
-              />
-            )}
-            {activeTab === "config" && (
-              <ConfigScreen
-                configs={configs}
-                onSave={async (name, content) => {
-                  await api.saveConfigFile(name, content);
-                  const configData = await api.getConfigFiles();
-                  setConfigs(configData);
-                }}
-                onReload={() => api.reloadServices()}
-              />
-            )}
-            {activeTab === "logs" && (
-              <LogsScreen
-                content={logs}
-                onClear={() => wrap(async () => { await api.clearLogs(); setLogs(""); })}
-              />
-            )}
-            {activeTab === "php" && (
-              <PHPVersionsScreen
-                composerRuntime={composerRuntime}
-                versions={versions}
-                onCheckComposerUpdates={() => wrap(async () => {
-                  const runtime = await api.checkComposerUpdates();
-                  setComposerRuntime(runtime);
-                })}
-                onInstallComposer={() => wrap(async () => {
-                  const runtime = await api.installComposer();
-                  setComposerRuntime(runtime);
-                })}
-                onRollbackComposer={() => wrap(async () => {
-                  const runtime = await api.rollbackComposer();
-                  setComposerRuntime(runtime);
-                })}
-                onUpdateComposer={() => wrap(async () => {
-                  const runtime = await api.updateComposer();
-                  setComposerRuntime(runtime);
-                })}
-                onInstall={(version) => wrap(() => api.installPHP(version))}
-                onActivate={(version) => wrap(() => api.activatePHP(version))}
-              />
-            )}
-            {activeTab === "mariadb" && (
-              <MariaDBScreen
-                runtime={mariaDB}
-                onInstall={() => wrap(() => api.installMariaDB())}
-                onStart={() => wrap(() => api.startMariaDB())}
-                onStop={() => wrap(() => api.stopMariaDB())}
-                onCheckUpdates={async () => {
-                  const runtime = await api.checkMariaDBUpdates();
-                  setMariaDB(runtime);
-                }}
-              />
-            )}
-            {activeTab === "settings" && (
-              <SettingsScreen
-                appMeta={appMeta}
-                settings={settings}
-                doctorChecks={doctorChecks}
-                onBootstrap={() => wrap(() => api.bootstrapTestDomain())}
-                onUnbootstrap={() => wrap(() => api.unbootstrapTestDomain())}
-                onFixCheck={(id) => wrap(() => fixDoctorCheck(id))}
-                onCheckUpdates={checkForUpdates}
-                onInstallUpdate={() => desktop.installUpdate()}
-                onTrustLocalCA={() => wrap(() => api.trustLocalCA())}
-                onUntrustLocalCA={() => wrap(() => api.untrustLocalCA())}
-                updateState={updateState}
-              />
+            {daemonUnavailable ? (
+              <DaemonUnavailableState message={daemonState.message} onRetry={refresh} />
+            ) : (
+              <>
+                {activeTab === "dashboard" && (
+                  <DashboardScreen
+                    doctorChecks={doctorChecks}
+                    serviceStatus={serviceStatus}
+                    sites={sites}
+                    onOpenSettings={() => setActiveTab("settings")}
+                  />
+                )}
+                {activeTab === "sites" && (
+                  <SitesScreen
+                    sites={sites}
+                    onCreate={(payload) => wrap(() => api.createSite(payload))}
+                    onDelete={(id) => wrap(() => api.deleteSite(id))}
+                    onExport={() => desktop.exportSites()}
+                    onImport={async () => {
+                      const result = await desktop.importSites();
+                      if (result.imported) await refresh();
+                      return result;
+                    }}
+                    onOpenUrl={openExternal}
+                    onPickDirectory={() => desktop.pickDirectory()}
+                    onStart={(id) => wrap(() => api.startSite(id))}
+                    onStop={(id) => wrap(() => api.stopSite(id))}
+                    onUpdate={(id, payload) => wrap(() => api.updateSite(id, payload))}
+                  />
+                )}
+                {activeTab === "config" && (
+                  <ConfigScreen
+                    configs={configs}
+                    onSave={async (name, content) => {
+                      await api.saveConfigFile(name, content);
+                      const configData = await api.getConfigFiles();
+                      setConfigs(configData);
+                    }}
+                    onReload={() => api.reloadServices()}
+                  />
+                )}
+                {activeTab === "logs" && (
+                  <LogsScreen
+                    content={logs}
+                    onClear={() => wrap(async () => { await api.clearLogs(); setLogs(""); })}
+                  />
+                )}
+                {activeTab === "php" && (
+                  <PHPVersionsScreen
+                    composerRuntime={composerRuntime}
+                    versions={versions}
+                    onCheckComposerUpdates={() => wrap(async () => {
+                      const runtime = await api.checkComposerUpdates();
+                      setComposerRuntime(runtime);
+                    })}
+                    onInstallComposer={() => wrap(async () => {
+                      const runtime = await api.installComposer();
+                      setComposerRuntime(runtime);
+                    })}
+                    onRollbackComposer={() => wrap(async () => {
+                      const runtime = await api.rollbackComposer();
+                      setComposerRuntime(runtime);
+                    })}
+                    onUpdateComposer={() => wrap(async () => {
+                      const runtime = await api.updateComposer();
+                      setComposerRuntime(runtime);
+                    })}
+                    onInstall={(version) => wrap(() => api.installPHP(version))}
+                    onActivate={(version) => wrap(() => api.activatePHP(version))}
+                  />
+                )}
+                {activeTab === "mariadb" && (
+                  <MariaDBScreen
+                    runtime={mariaDB}
+                    onInstall={() => wrap(() => api.installMariaDB())}
+                    onStart={() => wrap(() => api.startMariaDB())}
+                    onStop={() => wrap(() => api.stopMariaDB())}
+                    onCheckUpdates={async () => {
+                      const runtime = await api.checkMariaDBUpdates();
+                      setMariaDB(runtime);
+                    }}
+                  />
+                )}
+                {activeTab === "settings" && (
+                  <SettingsScreen
+                    appMeta={appMeta}
+                    settings={settings}
+                    doctorChecks={doctorChecks}
+                    onBootstrap={() => wrap(() => api.bootstrapTestDomain())}
+                    onUnbootstrap={() => wrap(() => api.unbootstrapTestDomain())}
+                    onFixCheck={(id) => wrap(() => fixDoctorCheck(id))}
+                    onCheckUpdates={checkForUpdates}
+                    onInstallUpdate={() => desktop.installUpdate()}
+                    onTrustLocalCA={() => wrap(() => api.trustLocalCA())}
+                    onUntrustLocalCA={() => wrap(() => api.untrustLocalCA())}
+                    updateState={updateState}
+                  />
+                )}
+              </>
             )}
           </div>
         </main>
+      </div>
+    </div>
+  );
+}
+
+function DaemonUnavailableState({ message, onRetry }) {
+  return (
+    <div className="rounded-3xl border border-red-200 bg-white p-8 shadow-[0_18px_50px_-40px_rgba(24,24,27,0.35)]">
+      <Badge variant="danger" className="gap-1.5">
+        <CircleAlert className="h-3.5 w-3.5" />
+        Daemon unavailable
+      </Badge>
+      <h2 className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-zinc-950">Nest couldn't start its background daemon.</h2>
+      <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-500">
+        PHP, Composer, MariaDB, site actions, and machine bootstrap all depend on the daemon. When it fails, a clean machine can look empty even though the install options are not actually gone.
+      </p>
+      <div className="mt-6 rounded-2xl border border-red-100 bg-red-50 px-4 py-3">
+        <p className="text-[13px] font-medium text-red-700">{message}</p>
+      </div>
+      <div className="mt-6 flex items-center gap-2">
+        <Button onClick={onRetry}>
+          <RefreshCw className="h-3.5 w-3.5" />
+          Retry daemon startup
+        </Button>
       </div>
     </div>
   );
