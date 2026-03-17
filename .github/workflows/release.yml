@@ -48,5 +48,7 @@ jobs:
       - name: Publish GitHub release assets
         uses: ncipollo/release-action@v1
         with:
+          allowUpdates: true
           generateReleaseNotes: true
+          removeArtifacts: true
           artifacts: "desktop/release/*.dmg,desktop/release/*.zip,desktop/release/*.blockmap,desktop/release/*.yml"

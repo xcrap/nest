@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/xcrap/nest/daemon/internal/state"
@@ -54,6 +55,41 @@ func TestEnsurePreservesCustomizedPHPAppSnippet(t *testing.T) {
 	}
 	if string(content) != customSnippet {
 		t.Fatalf("expected custom snippet to be preserved, got %q", string(content))
+	}
+}
+
+func TestSaveSettingsConcurrentWritesDoNotRace(t *testing.T) {
+	paths := tempPaths(t)
+	store := NewStore(paths)
+	if err := store.Ensure(); err != nil {
+		t.Fatalf("ensure store: %v", err)
+	}
+
+	var waitGroup sync.WaitGroup
+	errs := make(chan error, 24)
+	for i := 0; i < 24; i++ {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+
+			settings := DefaultSettings()
+			settings.ActivePHPVersion = "8.5"
+			settings.Bootstrap.ResolverPort = 5354 + index
+			errs <- store.SaveSettings(settings)
+		}(i)
+	}
+
+	waitGroup.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent SaveSettings returned error: %v", err)
+		}
+	}
+
+	if _, err := store.LoadSettings(); err != nil {
+		t.Fatalf("load settings after concurrent writes: %v", err)
 	}
 }
 

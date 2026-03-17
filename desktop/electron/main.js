@@ -1,6 +1,4 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import electronUpdater from "electron-updater";
-const { autoUpdater } = electronUpdater;
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -25,6 +23,7 @@ let mainWindow = null;
 let daemonStartPromise = null;
 let bundledDaemonMetaPromise = null;
 let lastDaemonStartupError = null;
+let autoUpdaterPromise = null;
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -40,10 +39,16 @@ if (!hasSingleInstanceLock) {
     ipcMain.handle("dialog:import-sites", handleImportSites);
     ipcMain.handle("app:get-meta", () => getAppMeta());
     ipcMain.handle("updates:check", handleCheckForUpdates);
-    ipcMain.handle("updates:install", () => autoUpdater.quitAndInstall());
+    ipcMain.handle("updates:install", async () => {
+      const autoUpdater = await loadAutoUpdater();
+      if (!autoUpdater) {
+        throw new Error("Updates are unavailable in this build.");
+      }
+      autoUpdater.quitAndInstall();
+    });
     ipcMain.handle("shell:open-external", async (_event, url) => shell.openExternal(url));
 
-    setupAutoUpdater();
+    void setupAutoUpdater();
 
     await createWindow();
     void ensureDaemonAvailable().catch(() => null);
@@ -68,14 +73,6 @@ async function requestDaemon({ method, route, body }) {
   if (route === "/bootstrap/test-domain/uninstall" && method === "POST") {
     await runPrivilegedHelper("unbootstrap", "test-domain");
     return requestDaemon({ method: "POST", route: "/bootstrap/test-domain/uninstall?skipHelper=1" });
-  }
-  if (route === "/bootstrap/trust-local-ca" && method === "POST") {
-    await runPrivilegedHelper("trust", "local-ca");
-    return requestDaemon({ method: "POST", route: "/bootstrap/trust-local-ca?skipHelper=1" });
-  }
-  if (route === "/bootstrap/trust-local-ca/uninstall" && method === "POST") {
-    await runPrivilegedHelper("untrust", "local-ca");
-    return requestDaemon({ method: "POST", route: "/bootstrap/trust-local-ca/uninstall?skipHelper=1" });
   }
 
   const payload = body ? JSON.stringify(body) : null;
@@ -367,7 +364,12 @@ function getAppMeta() {
   };
 }
 
-function setupAutoUpdater() {
+async function setupAutoUpdater() {
+  const autoUpdater = await loadAutoUpdater();
+  if (!autoUpdater) {
+    return;
+  }
+
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
 
@@ -413,6 +415,14 @@ async function handleCheckForUpdates() {
     return { status: "current", version: app.getVersion() };
   }
 
+  const autoUpdater = await loadAutoUpdater();
+  if (!autoUpdater) {
+    return {
+      status: "error",
+      message: "Updates are unavailable in this build."
+    };
+  }
+
   const result = await autoUpdater.checkForUpdates();
   if (!result) {
     return { status: "current", version: app.getVersion() };
@@ -427,6 +437,25 @@ async function handleCheckForUpdates() {
   }
 
   return { status: "current", version: app.getVersion() };
+}
+
+function loadAutoUpdater() {
+  if (!app.isPackaged) {
+    return Promise.resolve(null);
+  }
+
+  if (!autoUpdaterPromise) {
+    autoUpdaterPromise = import("electron-updater")
+      .then((module) => module.default?.autoUpdater ?? module.autoUpdater ?? null)
+      .catch((error) => {
+        if (process.env.NEST_DEBUG === "1") {
+          console.error("[nest] electron-updater unavailable", error);
+        }
+        return null;
+      });
+  }
+
+  return autoUpdaterPromise;
 }
 
 function runPrivilegedHelper(...args) {

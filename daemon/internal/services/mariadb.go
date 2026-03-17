@@ -137,6 +137,10 @@ func (s *MariaDBService) Ready(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return s.ReadyWithRuntime(ctx, runtime)
+}
+
+func (s *MariaDBService) ReadyWithRuntime(ctx context.Context, runtime dbmeta.Runtime) error {
 	if !runtime.Installed || runtime.Prefix == "" {
 		return fmt.Errorf("homebrew formula %s is not installed", runtime.Formula)
 	}
@@ -201,7 +205,8 @@ func (s *MariaDBService) start(ctx context.Context, progress func(string)) error
 	if progress != nil {
 		progress("Initializing MariaDB data directory")
 	}
-	if err := s.ensureInitialized(ctx, runtime.Prefix); err != nil {
+	freshInit, err := s.ensureInitialized(ctx, runtime.Prefix)
+	if err != nil {
 		return err
 	}
 
@@ -249,18 +254,29 @@ func (s *MariaDBService) start(ctx context.Context, progress func(string)) error
 		return err
 	}
 
-	if progress != nil {
-		progress("Running MariaDB upgrade checks")
-	}
-	if err := s.runUpgrade(readyCtx, runtime.Prefix); err != nil {
+	runUpgrade, err := s.shouldRunUpgrade(runtime.InstalledVersion, freshInit)
+	if err != nil {
 		_ = s.Stop()
 		return err
+	}
+	if runUpgrade {
+		if progress != nil {
+			progress("Running MariaDB upgrade checks")
+		}
+		if err := s.runUpgrade(readyCtx, runtime.Prefix); err != nil {
+			_ = s.Stop()
+			return err
+		}
 	}
 
 	if progress != nil {
 		progress("Configuring root access")
 	}
 	if err := s.ensurePasswordlessRoot(readyCtx, runtime.Prefix); err != nil {
+		_ = s.Stop()
+		return err
+	}
+	if err := s.markUpgradeComplete(runtime.InstalledVersion); err != nil {
 		_ = s.Stop()
 		return err
 	}
@@ -374,13 +390,13 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-func (s *MariaDBService) ensureInitialized(ctx context.Context, prefix string) error {
+func (s *MariaDBService) ensureInitialized(ctx context.Context, prefix string) (bool, error) {
 	if _, err := os.Stat(filepath.Join(s.paths.MariaDBDataDir, "mysql", "db.opt")); err == nil {
-		return nil
+		return false, nil
 	}
 
 	if err := os.MkdirAll(s.paths.MariaDBDataDir, 0o700); err != nil {
-		return err
+		return false, err
 	}
 
 	command := exec.CommandContext(
@@ -398,10 +414,10 @@ func (s *MariaDBService) ensureInitialized(ctx context.Context, prefix string) e
 
 	output, err := command.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("mariadb-install-db failed: %s", strings.TrimSpace(string(output)))
+		return false, fmt.Errorf("mariadb-install-db failed: %s", strings.TrimSpace(string(output)))
 	}
 
-	return nil
+	return true, nil
 }
 
 func (s *MariaDBService) waitUntilReady(ctx context.Context, prefix string) error {
@@ -481,6 +497,65 @@ func (s *MariaDBService) runUpgrade(ctx context.Context, prefix string) error {
 		return fmt.Errorf("mariadb-upgrade failed: %s", strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func (s *MariaDBService) shouldRunUpgrade(version string, freshInit bool) (bool, error) {
+	if freshInit {
+		return false, nil
+	}
+	if strings.TrimSpace(version) == "" {
+		return true, nil
+	}
+
+	recordedVersion, err := s.readUpgradeVersionMarker()
+	if err == nil {
+		return !versionMatchesRecordedUpgrade(version, recordedVersion), nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+
+	data, err := os.ReadFile(s.upgradeStampPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return strings.TrimSpace(string(data)) != version, nil
+}
+
+func (s *MariaDBService) markUpgradeComplete(version string) error {
+	if strings.TrimSpace(version) == "" {
+		return nil
+	}
+	return os.WriteFile(s.upgradeStampPath(), []byte(version+"\n"), 0o600)
+}
+
+func (s *MariaDBService) upgradeStampPath() string {
+	return filepath.Join(s.paths.MariaDBDataDir, ".nest-upgraded-version")
+}
+
+func (s *MariaDBService) upgradeInfoPath() string {
+	return filepath.Join(s.paths.MariaDBDataDir, "mysql_upgrade_info")
+}
+
+func (s *MariaDBService) readUpgradeVersionMarker() (string, error) {
+	data, err := os.ReadFile(s.upgradeInfoPath())
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+func versionMatchesRecordedUpgrade(version, recorded string) bool {
+	version = strings.TrimSpace(version)
+	recorded = strings.TrimSpace(recorded)
+	if version == "" || recorded == "" {
+		return false
+	}
+	return recorded == version || strings.HasPrefix(recorded, version+"-")
 }
 
 func (s *MariaDBService) writeConfig(prefix string) error {

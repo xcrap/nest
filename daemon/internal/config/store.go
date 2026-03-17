@@ -165,12 +165,30 @@ func writeJSONFile(path string, value any) error {
 	}
 	data = append(data, '\n')
 
-	tempFile := path + ".tmp"
-	if err := os.WriteFile(tempFile, data, 0o600); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tempFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp.*")
+	if err != nil {
+		return err
+	}
+	tempPath := tempFile.Name()
+	defer func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+	}()
+	if err := tempFile.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := tempFile.Write(data); err != nil {
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
 		return err
 	}
 
-	return os.Rename(tempFile, filepath.Clean(path))
+	return os.Rename(tempPath, filepath.Clean(path))
 }
 
 func ensureManagedFile(path, content string, legacyContents ...string) error {

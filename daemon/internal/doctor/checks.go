@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xcrap/nest/daemon/internal/composer"
@@ -43,21 +44,32 @@ func (s *Service) Run() ([]config.DoctorCheck, error) {
 		return nil, err
 	}
 
-	checks := []config.DoctorCheck{
-		s.daemonSocketCheck(),
-		s.launchAgentCheck(),
-		s.phpSymlinkCheck(),
-		s.shellPathCheck(settings),
-		s.resolverCheck(),
-		s.portsCheck(),
-		s.httpsLocalhostCheck(),
-		s.localCACheck(),
-		s.frankenphpCheck(),
-		s.frankenphpAdminCheck(),
-		s.composerCheck(),
-		s.mariaDBInstallCheck(),
-		s.mariaDBReadyCheck(),
+	builders := []func() config.DoctorCheck{
+		s.daemonSocketCheck,
+		s.launchAgentCheck,
+		s.phpSymlinkCheck,
+		func() config.DoctorCheck { return s.shellPathCheck(settings) },
+		s.resolverCheck,
+		s.portsCheck,
+		s.httpsLocalhostCheck,
+		s.localCACheck,
+		s.frankenphpCheck,
+		s.frankenphpAdminCheck,
+		s.composerCheck,
+		s.mariaDBInstallCheck,
+		s.mariaDBReadyCheck,
 	}
+
+	checks := make([]config.DoctorCheck, len(builders))
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(len(builders))
+	for index, build := range builders {
+		go func(index int, build func() config.DoctorCheck) {
+			defer waitGroup.Done()
+			checks[index] = build()
+		}(index, build)
+	}
+	waitGroup.Wait()
 
 	return checks, nil
 }
@@ -417,10 +429,10 @@ func (s *Service) mariaDBInstallCheck() config.DoctorCheck {
 }
 
 func (s *Service) mariaDBReadyCheck() config.DoctorCheck {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	runtimeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	runtime, err := dbmeta.Detect(ctx)
+	runtime, err := dbmeta.Detect(runtimeCtx)
 	if err != nil {
 		return config.DoctorCheck{
 			ID:      "mariadb-ready",
@@ -439,7 +451,9 @@ func (s *Service) mariaDBReadyCheck() config.DoctorCheck {
 	}
 
 	service := services.NewMariaDBService(s.paths)
-	if err := service.Ready(ctx); err != nil {
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer readyCancel()
+	if err := service.ReadyWithRuntime(readyCtx, runtime); err != nil {
 		return config.DoctorCheck{
 			ID:      "mariadb-ready",
 			Status:  "warn",

@@ -4,11 +4,11 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 
-export function DashboardScreen({ sites, doctorChecks, serviceStatus, onOpenSettings }) {
+export function DashboardScreen({ sites, doctorChecks, doctorLoading, serviceStatus, onOpenSettings }) {
   const runningSites = sites.filter((site) => site.status === "running").length;
   const issues = doctorChecks.filter((check) => check.status !== "pass");
   const passCount = Math.max(doctorChecks.length - issues.length, 0);
-  const checksLoading = doctorChecks.length === 0 && serviceStatus === "unknown";
+  const checksLoading = doctorLoading && doctorChecks.length === 0;
 
   const statusById = new Map(doctorChecks.map((check) => [check.id, check.status]));
   const routingHealthy = statusById.get("test-resolver") === "pass" && statusById.get("privileged-ports") === "pass";

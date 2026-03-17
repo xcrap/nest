@@ -14,6 +14,8 @@ const defaultFormula = "mariadb@10.11"
 
 var versionPattern = regexp.MustCompile(`\b(\d+\.\d+\.\d+)\b`)
 
+var detectRuntime = Detect
+
 type Runtime struct {
 	Formula          string
 	Prefix           string
@@ -69,9 +71,13 @@ func EnsureInstalled(ctx context.Context, progress func(string)) (Runtime, error
 		return Runtime{Formula: Formula()}, fmt.Errorf("homebrew is required to manage MariaDB")
 	}
 
-	runtime, err := Detect(ctx)
+	runtime, err := detectRuntime(ctx)
 	if err != nil {
 		return runtime, err
+	}
+
+	if runtime.Installed && runtime.Pinned {
+		return runtime, nil
 	}
 
 	if !runtime.Installed {
@@ -79,18 +85,24 @@ func EnsureInstalled(ctx context.Context, progress func(string)) (Runtime, error
 			progress("Installing Homebrew formula " + runtime.Formula)
 		}
 		if err := runBrew(ctx, brewPath, "install", runtime.Formula); err != nil {
+			recoveredRuntime, detectErr := detectRuntime(ctx)
+			if detectErr != nil || !recoveredRuntime.Installed {
+				return runtime, err
+			}
+			runtime = recoveredRuntime
+		}
+	}
+
+	if !runtime.Pinned {
+		if progress != nil {
+			progress("Pinning Homebrew formula " + runtime.Formula)
+		}
+		if err := runBrew(ctx, brewPath, "pin", runtime.Formula); err != nil {
 			return runtime, err
 		}
 	}
 
-	if progress != nil {
-		progress("Pinning Homebrew formula " + runtime.Formula)
-	}
-	if err := runBrew(ctx, brewPath, "pin", runtime.Formula); err != nil {
-		return runtime, err
-	}
-
-	return Detect(ctx)
+	return detectRuntime(ctx)
 }
 
 func ServerPath(prefix string) string {
@@ -144,6 +156,10 @@ func LibraryDir(prefix string) string {
 
 func runBrew(ctx context.Context, brewPath string, args ...string) error {
 	command := exec.CommandContext(ctx, brewPath, args...)
+	command.Env = append(os.Environ(),
+		"HOMEBREW_NO_AUTO_UPDATE=1",
+		"HOMEBREW_NO_ENV_HINTS=1",
+	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("brew %s failed: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))

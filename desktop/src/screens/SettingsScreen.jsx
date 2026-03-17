@@ -24,7 +24,7 @@ export function SettingsScreen({ doctorChecks, onBootstrap, onUnbootstrap, onTru
     ? doctorStatus.get("test-resolver") === "pass" && doctorStatus.get("privileged-ports") === "pass"
     : (bootstrap?.testDomainConfigured ?? false);
   const localCATrusted = hasDoctorChecks
-    ? doctorStatus.get("local-ca") === "pass" && doctorStatus.get("https-localhost") === "pass"
+    ? doctorStatus.get("local-ca") === "pass"
     : (bootstrap?.localCATrusted ?? false);
 
   return (

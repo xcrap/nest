@@ -4,6 +4,8 @@ const fixableDoctorCheckIds = [
   "frankenphp-binary",
   "frankenphp-admin",
   "composer-runtime",
+  "mariadb-runtime",
+  "mariadb-ready",
   "test-resolver",
   "privileged-ports",
   "local-ca",

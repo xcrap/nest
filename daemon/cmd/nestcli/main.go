@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"text/tabwriter"
 	"time"
 
@@ -319,25 +318,15 @@ func handleBootstrap(application *app.App) {
 		exitOnError("unbootstrap test-domain", application.UnbootstrapTestDomain(ctx))
 		fmt.Println("test-domain bootstrap removed")
 	case "trust-local-ca":
-		if os.Geteuid() != 0 {
-			exitOnError("bootstrap trust-local-ca", fmt.Errorf("re-run with sudo or use the desktop app so Nest can invoke nesthelper with administrator privileges"))
-		}
-		helperPath, err := app.ResolveHelperBinaryForCLI()
-		exitOnError("resolve helper", err)
-		command := exec.Command(helperPath, "trust", "local-ca")
-		command.Stdout = os.Stdout
-		command.Stderr = os.Stderr
-		exitOnError("bootstrap trust-local-ca", command.Run())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		exitOnError("bootstrap trust-local-ca", application.TrustLocalCA(ctx))
+		fmt.Println("local CA trusted in the login keychain")
 	case "untrust-local-ca":
-		if os.Geteuid() != 0 {
-			exitOnError("bootstrap untrust-local-ca", fmt.Errorf("re-run with sudo or use the desktop app so Nest can invoke nesthelper with administrator privileges"))
-		}
-		helperPath, err := app.ResolveHelperBinaryForCLI()
-		exitOnError("resolve helper", err)
-		command := exec.Command(helperPath, "untrust", "local-ca")
-		command.Stdout = os.Stdout
-		command.Stderr = os.Stderr
-		exitOnError("bootstrap untrust-local-ca", command.Run())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		exitOnError("bootstrap untrust-local-ca", application.UntrustLocalCA(ctx))
+		fmt.Println("local CA trust removed from the login keychain")
 	default:
 		usage()
 		os.Exit(1)
@@ -361,8 +350,8 @@ func usage() {
 	fmt.Println("  nestcli shell integrate --zsh")
 	fmt.Println("  sudo nestcli bootstrap test-domain")
 	fmt.Println("  sudo nestcli bootstrap unbootstrap-test-domain")
-	fmt.Println("  sudo nestcli bootstrap trust-local-ca")
-	fmt.Println("  sudo nestcli bootstrap untrust-local-ca")
+	fmt.Println("  nestcli bootstrap trust-local-ca")
+	fmt.Println("  nestcli bootstrap untrust-local-ca")
 }
 
 func printComposerRuntime(runtime config.ComposerRuntime) {

@@ -61,6 +61,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [hasLoadedData, setHasLoadedData] = useState(false);
+  const [doctorLoading, setDoctorLoading] = useState(true);
   const [daemonState, setDaemonState] = useState({ status: "loading", message: "" });
   const [appMeta, setAppMeta] = useState({
     version: "...",
@@ -71,17 +72,45 @@ export default function App() {
   });
   const [updateState, setUpdateState] = useState({ status: "idle" });
 
+  const refreshSupplementalData = async (reportError = true) => {
+    setDoctorLoading(true);
+    const [doctorResult, logsResult] = await Promise.allSettled([
+      api.getDoctor(),
+      api.getLogs()
+    ]);
+
+    let nextError = "";
+
+    if (doctorResult.status === "fulfilled") {
+      setDoctorChecks(doctorResult.value);
+    } else {
+      nextError = formatAppError(doctorResult.reason);
+    }
+
+    if (logsResult.status === "fulfilled") {
+      setLogs(logsResult.value.content);
+    } else if (!nextError) {
+      nextError = formatAppError(logsResult.reason);
+    }
+
+    if (reportError && nextError) {
+      setError(nextError);
+    }
+
+    setDoctorLoading(false);
+  };
+
   const refresh = async () => {
     try {
       setIsRefreshing(true);
       setError("");
       if (!hasLoadedData) {
         setDaemonState({ status: "loading", message: "" });
+        setDoctorLoading(true);
       }
-      const [siteData, doctorData, logData, versionData, composerData, mariaDBData, statusData, settingsData, configData] = await Promise.all([
+
+      const [siteData, versionData, composerData, mariaDBData, statusData, settingsData, configData] = await Promise.all([
         api.getSites(),
-        api.getDoctor(),
-        api.getLogs(),
         api.getPHPVersions(),
         api.getComposer(),
         api.getMariaDB(),
@@ -90,8 +119,6 @@ export default function App() {
         api.getConfigFiles()
       ]);
       setSites(siteData);
-      setDoctorChecks(doctorData);
-      setLogs(logData.content);
       setVersions(versionData);
       setComposerRuntime(composerData);
       setMariaDB(mariaDBData);
@@ -100,6 +127,7 @@ export default function App() {
       setConfigs(configData);
       setHasLoadedData(true);
       setDaemonState({ status: "ready", message: "" });
+      void refreshSupplementalData();
     } catch (refreshError) {
       const message = formatAppError(refreshError);
       setError(message);
@@ -148,28 +176,28 @@ export default function App() {
         await api.bootstrapTestDomain();
         return;
       case "privileged-ports":
-        if (statusFor("test-resolver") !== "pass") {
+        if (statusFor("test-resolver") !== "pass" || statusFor("privileged-ports") !== "pass") {
           await api.bootstrapTestDomain();
         }
-        if (serviceStatus === "running" && statusFor("frankenphp-admin") !== "pass") {
+        if (serviceStatus === "running") {
           await api.reloadServices();
-        } else if (serviceStatus !== "running" || statusFor("frankenphp-admin") !== "pass") {
+        } else {
           await api.startServices();
-        }
-        if (statusFor("test-resolver") === "pass" && statusFor("frankenphp-admin") === "pass") {
-          await api.bootstrapTestDomain();
         }
         return;
       case "local-ca":
         await api.trustLocalCA();
         return;
       case "https-localhost":
+        if (statusFor("test-resolver") !== "pass" || statusFor("privileged-ports") !== "pass") {
+          await api.bootstrapTestDomain();
+        }
         if (statusFor("local-ca") !== "pass") {
           await api.trustLocalCA();
         }
-        if (serviceStatus === "running" && statusFor("frankenphp-admin") !== "pass") {
+        if (serviceStatus === "running") {
           await api.reloadServices();
-        } else if (serviceStatus !== "running" || statusFor("frankenphp-admin") !== "pass") {
+        } else {
           await api.startServices();
         }
         return;
@@ -179,6 +207,12 @@ export default function App() {
         } else {
           await api.startServices();
         }
+        return;
+      case "mariadb-runtime":
+        await api.installMariaDB();
+        return;
+      case "mariadb-ready":
+        await api.startMariaDB();
         return;
       default:
         await api.fixDoctorCheck(id);
@@ -302,6 +336,7 @@ export default function App() {
                 {activeTab === "dashboard" && (
                   <DashboardScreen
                     doctorChecks={doctorChecks}
+                    doctorLoading={doctorLoading}
                     serviceStatus={serviceStatus}
                     sites={sites}
                     onOpenSettings={() => setActiveTab("settings")}

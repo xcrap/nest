@@ -93,15 +93,9 @@ func (a *App) MarkTestDomainBootstrapped() error {
 }
 
 func (a *App) TrustLocalCA(ctx context.Context) error {
-	helperPath, err := resolveHelperBinary()
-	if err != nil {
+	_ = ctx
+	if err := bootstrapstate.TrustLocalCA(a.Paths.HomeDir); err != nil {
 		return err
-	}
-
-	command := exec.CommandContext(ctx, helperPath, "trust", "local-ca")
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(output))
 	}
 
 	return a.MarkLocalCATrusted()
@@ -131,15 +125,9 @@ func (a *App) UnbootstrapTestDomain(ctx context.Context) error {
 }
 
 func (a *App) UntrustLocalCA(ctx context.Context) error {
-	helperPath, err := resolveHelperBinary()
-	if err != nil {
+	_ = ctx
+	if err := bootstrapstate.UntrustLocalCA(a.Paths.HomeDir); err != nil {
 		return err
-	}
-
-	command := exec.CommandContext(ctx, helperPath, "untrust", "local-ca")
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, bytes.TrimSpace(output))
 	}
 
 	return a.syncBootstrapState(false)
