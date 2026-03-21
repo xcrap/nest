@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.net/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Nest</title>
+    <item>
+      <title>Version 0.10.0</title>
+      <sparkle:version>0.10.0</sparkle:version>
+      <sparkle:shortVersionString>0.10.0</sparkle:shortVersionString>
+      <pubDate>Sat, 21 Mar 2026 17:23:00 +0000</pubDate>
+      <enclosure url="https://github.com/xcrap/nest/releases/download/v0.10.0/Nest-0.10.0.dmg" length="3024550" type="application/octet-stream" sparkle:edSignature="C7k23Eh8nzAdlZWlzxsq53zx3mnx726gRFI7JilOTH0aRbiZWbu31BpVkoebFpmbclmuOnHazlMNz/muIWrEBA==" />
+    </item>
+  </channel>
+</rss>
