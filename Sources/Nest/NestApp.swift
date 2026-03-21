@@ -53,8 +53,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard statusItem == nil else { return }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "bird", accessibilityDescription: "Nest")
-            button.image?.size = NSSize(width: 16, height: 16)
+            if let appIcon = NSImage(named: NSImage.applicationIconName) {
+                let resized = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+                    appIcon.draw(in: rect)
+                    return true
+                }
+                resized.isTemplate = false
+                button.image = resized
+            }
         }
         buildMenu()
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
