@@ -17,7 +17,7 @@ Nest does not install runtimes. Install them manually:
 
 ```bash
 brew install frankenphp
-brew install mariadb@10.11
+brew install mariadb
 ```
 
 For `.test` domain routing and HTTPS, set up these system prerequisites manually:

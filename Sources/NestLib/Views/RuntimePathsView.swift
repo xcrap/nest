@@ -10,96 +10,161 @@ public struct RuntimePathsView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
+            // Header
             HStack {
-                Text("Runtime Paths")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Spacer()
-                Button("Detect Defaults") {
-                    paths = RuntimePaths.detectDefaults()
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Runtime Paths")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    Text("Configure the paths to your locally installed binaries.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        paths = RuntimePaths.detectDefaults()
+                    }
+                } label: {
+                    Label("Auto-Detect", systemImage: "sparkle.magnifyingglass")
+                        .font(.callout)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .padding()
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
 
             Divider()
 
-            Form {
-                Section("FrankenPHP") {
-                    PathField(label: "Binary", path: $paths.frankenphpBinary)
-                }
+            ScrollView {
+                VStack(spacing: 20) {
+                    // FrankenPHP
+                    settingsCard(title: "FrankenPHP", icon: "bolt.fill", color: .purple) {
+                        pathRow("Binary", path: $paths.frankenphpBinary, isDirectory: false)
+                    }
 
-                Section("MariaDB") {
-                    PathField(label: "Server (mariadbd)", path: $paths.mariadbServer)
-                    PathField(label: "Client (mariadb)", path: $paths.mariadbClient)
-                    PathField(label: "mysqldump", path: $paths.mysqldump)
-                }
-
-                Section("Logs") {
-                    PathField(label: "Log Directory", path: $paths.logDirectory, isDirectory: true)
-                }
-
-                if !validationIssues.isEmpty {
-                    Section("Issues") {
-                        ForEach(validationIssues, id: \.self) { issue in
-                            Label(issue, systemImage: "exclamationmark.triangle")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
+                    // MariaDB
+                    settingsCard(title: "MariaDB", icon: "cylinder.fill", color: .blue) {
+                        VStack(spacing: 10) {
+                            pathRow("Server (mariadbd)", path: $paths.mariadbServer, isDirectory: false)
+                            Divider().padding(.leading, 4)
+                            pathRow("Client (mariadb)", path: $paths.mariadbClient, isDirectory: false)
+                            Divider().padding(.leading, 4)
+                            pathRow("mysqldump", path: $paths.mysqldump, isDirectory: false)
                         }
                     }
-                }
-            }
-            .formStyle(.grouped)
 
+                    // Logs
+                    settingsCard(title: "Logs", icon: "doc.text.fill", color: .orange) {
+                        pathRow("Log Directory", path: $paths.logDirectory, isDirectory: true)
+                    }
+
+                    // Validation issues
+                    if !validationIssues.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(validationIssues, id: \.self) { issue in
+                                HStack(spacing: 8) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .font(.caption)
+                                    Text(issue)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.orange.opacity(0.06))
+                                .strokeBorder(Color.orange.opacity(0.15), lineWidth: 1)
+                        )
+                        .padding(.horizontal, 20)
+                    }
+                }
+                .padding(.vertical, 16)
+            }
+
+            Divider()
+
+            // Footer
             HStack {
                 Spacer()
                 if saved {
-                    Text("Saved")
-                        .foregroundStyle(.green)
+                    Label("Saved", systemImage: "checkmark.circle.fill")
                         .font(.caption)
+                        .foregroundStyle(.green)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
                 Button("Validate") {
                     validationIssues = paths.validate()
                 }
+                .controlSize(.small)
                 Button("Save") {
                     store.settings.runtimePaths = paths
                     store.saveSettings()
                     validationIssues = []
-                    saved = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { saved = false }
+                    withAnimation { saved = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation { saved = false }
+                    }
                 }
-                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut("s", modifiers: .command)
             }
-            .padding()
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
         }
         .onAppear {
             paths = store.settings.runtimePaths
         }
     }
-}
 
-public struct PathField: View {
-    public let label: String
-    @Binding public var path: String
-    public var isDirectory: Bool = false
-
-    public init(label: String, path: Binding<String>, isDirectory: Bool = false) {
-        self.label = label
-        self._path = path
-        self.isDirectory = isDirectory
+    private func settingsCard(title: String, icon: String, color: Color, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundStyle(color)
+                    .frame(width: 20, height: 20)
+                    .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                Text(title)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+            }
+            content()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .padding(.horizontal, 20)
     }
 
-    public var body: some View {
-        HStack {
-            TextField(label, text: $path)
-                .textFieldStyle(.roundedBorder)
-            Button("Browse…") {
-                let panel = NSOpenPanel()
-                panel.canChooseDirectories = isDirectory
-                panel.canChooseFiles = !isDirectory
-                panel.allowsMultipleSelection = false
-                if panel.runModal() == .OK, let url = panel.url {
-                    path = url.path
+    private func pathRow(_ label: String, path: Binding<String>, isDirectory: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                TextField("", text: path)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.caption, design: .monospaced))
+                Button("Browse...") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = isDirectory
+                    panel.canChooseFiles = !isDirectory
+                    panel.allowsMultipleSelection = false
+                    if panel.runModal() == .OK, let url = panel.url {
+                        path.wrappedValue = url.path
+                    }
                 }
+                .controlSize(.small)
             }
         }
     }

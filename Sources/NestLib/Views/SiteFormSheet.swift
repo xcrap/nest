@@ -29,73 +29,114 @@ public struct SiteFormSheet: View {
         return false
     }
 
-    private var title: String {
-        isEditing ? "Edit Site" : "Add Site"
-    }
-
-    public init(mode: SiteFormMode) {
-        self.mode = mode
-    }
+    public init(mode: SiteFormMode) { self.mode = mode }
 
     public var body: some View {
         VStack(spacing: 0) {
-            Text(title)
-                .font(.headline)
-                .padding()
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isEditing ? "Edit Site" : "New Site")
+                        .font(.headline)
+                    Text(isEditing ? "Update site configuration." : "Add a new local development site.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(20)
 
-            Form {
-                TextField("Name", text: $name)
-                TextField("Domain", text: $domain, prompt: Text("mysite.test"))
-                HStack {
-                    TextField("Root Path", text: $rootPath)
-                    Button("Browse…") {
-                        pickDirectory()
+            Divider()
+
+            // Form
+            VStack(spacing: 16) {
+                field("Name", prompt: "My Project") {
+                    TextField("", text: $name, prompt: Text("My Project"))
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                field("Domain", prompt: "mysite.test") {
+                    HStack(spacing: 0) {
+                        TextField("", text: $domain, prompt: Text("mysite"))
+                            .textFieldStyle(.roundedBorder)
+                        Text(".test")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 6)
                     }
                 }
-                Picker("Document Root", selection: $documentRoot) {
-                    Text("public").tag("public")
-                    Text(". (project root)").tag(".")
-                    Text("web").tag("web")
+
+                field("Root Path", prompt: "/Users/...") {
+                    HStack(spacing: 8) {
+                        TextField("", text: $rootPath, prompt: Text("/path/to/project"))
+                            .textFieldStyle(.roundedBorder)
+                        Button("Browse...") { pickDirectory() }
+                            .controlSize(.small)
+                    }
+                }
+
+                field("Document Root", prompt: "") {
+                    Picker("", selection: $documentRoot) {
+                        Text("public/").tag("public")
+                        Text(". (project root)").tag(".")
+                        Text("web/").tag("web")
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                }
+
+                if let error = errorMessage {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                        Spacer()
+                    }
                 }
             }
-            .formStyle(.grouped)
+            .padding(20)
 
-            if let error = errorMessage {
-                Text(error)
-                    .foregroundStyle(.red)
-                    .font(.caption)
-                    .padding(.horizontal)
-            }
+            Divider()
 
+            // Actions
             HStack {
-                Button("Cancel") {
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(isEditing ? "Save" : "Add") {
-                    save()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(name.isEmpty || domain.isEmpty || rootPath.isEmpty)
+                Button(isEditing ? "Save Changes" : "Add Site") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(name.isEmpty || domain.isEmpty || rootPath.isEmpty)
             }
-            .padding()
+            .padding(20)
         }
-        .frame(width: 450)
+        .frame(width: 480)
         .onAppear {
             if case .edit(let site) = mode {
                 name = site.name
-                domain = site.domain
+                domain = site.domain.replacingOccurrences(of: ".test", with: "")
                 rootPath = site.rootPath
                 documentRoot = site.documentRoot
             }
         }
     }
 
+    private func field(_ label: String, prompt: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundStyle(.secondary)
+            content()
+        }
+    }
+
     private func save() {
         let d = domain.hasSuffix(".test") ? domain : "\(domain).test"
 
-        // Check for duplicate domain
         if case .add = mode {
             if store.site(forDomain: d) != nil {
                 errorMessage = "A site with domain '\(d)' already exists."
