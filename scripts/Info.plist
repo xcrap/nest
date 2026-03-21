@@ -19,7 +19,7 @@
     <key>CFBundleDisplayName</key>
     <string>Nest</string>
     <key>CFBundleVersion</key>
-    <string>${BUILD_ID}</string>
+    <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key>
     <string>${VERSION}</string>
     <key>CFBundlePackageType</key>
