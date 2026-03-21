@@ -40,7 +40,7 @@ public struct ConfigRenderer {
         }
         lines.append("}")
         lines.append("")
-        lines.append("import snippets/*")
+        lines.append("import \(snippetsDirectory)/*")
         lines.append("")
 
         lines.append("localhost {")
@@ -65,7 +65,7 @@ public struct ConfigRenderer {
         """
         (php-app) {
             {args[0]} {
-                import ../security.conf
+                import \(securityConfPath)
                 root * {args[2]}
                 @blocked path */.* *.sql *.log *.bak *.env
                 respond @blocked 404

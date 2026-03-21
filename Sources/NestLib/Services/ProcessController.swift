@@ -124,37 +124,23 @@ public final class ProcessController: ObservableObject {
 
     /// Reload FrankenPHP config via the Caddy admin API.
     public func reloadFrankenPHP(caddyfilePath: String) {
-        let configData: Data
-        do {
-            let caddyfile = try String(contentsOfFile: caddyfilePath, encoding: .utf8)
-            let payload: [String: Any] = ["load": caddyfile]
-            // Use the admin API reload endpoint
-            configData = try JSONSerialization.data(withJSONObject: payload)
-        } catch {
-            frankenphpError = "Failed to read Caddyfile for reload: \(error.localizedDescription)"
+        guard let caddyfile = try? String(contentsOfFile: caddyfilePath, encoding: .utf8) else {
+            frankenphpError = "Failed to read Caddyfile for reload"
             return
         }
 
         var request = URLRequest(url: URL(string: "http://localhost:2019/load")!)
         request.httpMethod = "POST"
         request.setValue("text/caddyfile", forHTTPHeaderField: "Content-Type")
+        request.httpBody = caddyfile.data(using: .utf8)
 
-        do {
-            let caddyfile = try String(contentsOfFile: caddyfilePath, encoding: .utf8)
-            request.httpBody = caddyfile.data(using: .utf8)
-        } catch {
-            frankenphpError = "Failed to read Caddyfile: \(error.localizedDescription)"
-            return
-        }
-
-        let _ = configData // suppress unused warning
-
-        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             Task { @MainActor in
                 if let error {
                     self?.frankenphpError = "Reload failed: \(error.localizedDescription)"
                 } else if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-                    self?.frankenphpError = "Reload returned status \(http.statusCode)"
+                    let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    self?.frankenphpError = "Reload error: \(body)"
                 }
             }
         }.resume()
