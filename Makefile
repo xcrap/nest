@@ -26,6 +26,9 @@ package: build
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
 	cp $(BUILD_DIR)/Nest $(APP_BUNDLE)/Contents/MacOS/Nest
 	cp scripts/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
+	mkdir -p $(APP_BUNDLE)/Contents/Frameworks
+	cp -R .build/arm64-apple-macosx/release/Sparkle.framework $(APP_BUNDLE)/Contents/Frameworks/
+	install_name_tool -add_rpath @executable_path/../Frameworks $(APP_BUNDLE)/Contents/MacOS/Nest 2>/dev/null || true
 	sed 's/$${VERSION}/$(VERSION)/g; s/$${BUILD_ID}/$(BUILD_ID)/g; s/$${BUNDLE_ID}/$(BUNDLE_ID)/g' \
 		scripts/Info.plist > $(APP_BUNDLE)/Contents/Info.plist
 	@echo "$(APP_BUNDLE) created (version $(VERSION), build $(BUILD_ID))"
