@@ -1,7 +1,5 @@
 .DS_Store
 .build/
-Nest.app/
-*.dmg
-*.zip
+dist/
 *.log
 *.pid

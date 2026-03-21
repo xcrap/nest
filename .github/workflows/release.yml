@@ -19,11 +19,8 @@ jobs:
       - name: Run tests
         run: make test
 
-      - name: Build and package
-        run: make package
-
-      - name: Create ZIP
-        run: ditto -c -k --keepParent Nest.app Nest-$(cat version.txt).zip
+      - name: Build DMG
+        run: make dmg
 
       - name: Publish GitHub release
         uses: ncipollo/release-action@v1
@@ -31,4 +28,4 @@ jobs:
           allowUpdates: true
           generateReleaseNotes: true
           removeArtifacts: true
-          artifacts: "Nest-*.zip"
+          artifacts: "dist/Nest-*.dmg"
