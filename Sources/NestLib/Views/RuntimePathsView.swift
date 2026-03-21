@@ -52,20 +52,18 @@ public struct RuntimePathsView: View {
                 VStack(spacing: 20) {
                     // FrankenPHP
                     settingsCard(title: "FrankenPHP", icon: "bolt.fill", color: .purple) {
-                        pathRow("Binary", path: $paths.frankenphpBinary, isDirectory: false)
-                        Divider().padding(.leading, 4)
-                        pathRow("Log File", path: $paths.frankenphpLog, isDirectory: false)
+                        VStack(spacing: 12) {
+                            pathRow("Binary", path: $paths.frankenphpBinary, isDirectory: false)
+                            pathRow("Log File", path: $paths.frankenphpLog, isDirectory: false)
+                        }
                     }
 
                     // MariaDB
                     settingsCard(title: "MariaDB", icon: "cylinder.fill", color: .blue) {
-                        VStack(spacing: 10) {
+                        VStack(spacing: 12) {
                             pathRow("Server (mariadbd)", path: $paths.mariadbServer, isDirectory: false)
-                            Divider().padding(.leading, 4)
                             pathRow("Client (mariadb)", path: $paths.mariadbClient, isDirectory: false)
-                            Divider().padding(.leading, 4)
                             pathRow("mysqldump", path: $paths.mysqldump, isDirectory: false)
-                            Divider().padding(.leading, 4)
                             pathRow("Log File", path: $paths.mariadbLog, isDirectory: false)
                         }
                     }
