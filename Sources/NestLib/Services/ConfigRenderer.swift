@@ -32,12 +32,6 @@ public struct ConfigRenderer {
         lines.append("    https_port 8443")
         lines.append("    admin localhost:2019")
         lines.append("    local_certs")
-        if !frankenphpLogPath.isEmpty {
-            lines.append("    log {")
-            lines.append("        output file \"\(frankenphpLogPath)\"")
-            lines.append("        format console")
-            lines.append("    }")
-        }
         lines.append("}")
         lines.append("")
         lines.append("import \(snippetsDirectory)/*")
@@ -94,12 +88,6 @@ public struct ConfigRenderer {
         let fm = FileManager.default
         try fm.createDirectory(atPath: configDirectory, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: snippetsDirectory, withIntermediateDirectories: true)
-
-        // Ensure log file parent directory exists
-        if !frankenphpLogPath.isEmpty {
-            let logDir = (frankenphpLogPath as NSString).deletingLastPathComponent
-            try fm.createDirectory(atPath: logDir, withIntermediateDirectories: true)
-        }
 
         let caddyfile = render(sites: sites)
         try caddyfile.write(toFile: caddyfilePath, atomically: true, encoding: .utf8)

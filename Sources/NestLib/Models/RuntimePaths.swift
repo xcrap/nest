@@ -74,27 +74,24 @@ public struct RuntimePaths: Codable, Equatable {
             }
         }
 
-        // Default log locations
-        let appSupport = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true).first ?? "~/Library/Application Support"
-        let nestLogs = (appSupport as NSString).appendingPathComponent("Nest/logs")
-
-        // FrankenPHP log: check Nest's location, or Caddy's default
-        let nestFPLog = (nestLogs as NSString).appendingPathComponent("frankenphp.log")
-        if fm.fileExists(atPath: nestFPLog) {
-            paths.frankenphpLog = nestFPLog
+        // FrankenPHP log: prefer Homebrew default, then Caddy default
+        let brewFPLog = "\(brewPrefix)/var/log/frankenphp.log"
+        let homeDir = NSHomeDirectory()
+        let caddyLog = "\(homeDir)/.local/share/caddy/logs/default.log"
+        if fm.fileExists(atPath: brewFPLog) {
+            paths.frankenphpLog = brewFPLog
+        } else if fm.fileExists(atPath: caddyLog) {
+            paths.frankenphpLog = caddyLog
         } else {
-            let homeDir = NSHomeDirectory()
-            let caddyLog = "\(homeDir)/.local/share/caddy/logs/default.log"
-            paths.frankenphpLog = fm.fileExists(atPath: caddyLog) ? caddyLog : nestFPLog
+            paths.frankenphpLog = brewFPLog
         }
 
-        // MariaDB log: check Nest's location, or Homebrew's default
-        let nestDBLog = (nestLogs as NSString).appendingPathComponent("mariadb.log")
-        if fm.fileExists(atPath: nestDBLog) {
-            paths.mariadbLog = nestDBLog
+        // MariaDB log: prefer Homebrew default
+        let brewDBLog = "\(brewPrefix)/var/mysql/\(Host.current().localizedName ?? "localhost").err"
+        if fm.fileExists(atPath: brewDBLog) {
+            paths.mariadbLog = brewDBLog
         } else {
-            let brewLog = "\(brewPrefix)/var/mysql/\(Host.current().localizedName ?? "localhost").err"
-            paths.mariadbLog = fm.fileExists(atPath: brewLog) ? brewLog : nestDBLog
+            paths.mariadbLog = brewDBLog
         }
 
         return paths
