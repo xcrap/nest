@@ -3,11 +3,11 @@ import Foundation
 /// Generates and writes FrankenPHP/Caddy configuration from stored sites.
 public struct ConfigRenderer {
     public let configDirectory: String
-    public let logDirectory: String
+    public let frankenphpLogPath: String
 
-    public init(configDirectory: String, logDirectory: String) {
+    public init(configDirectory: String, frankenphpLogPath: String) {
         self.configDirectory = configDirectory
-        self.logDirectory = logDirectory
+        self.frankenphpLogPath = frankenphpLogPath
     }
 
     public var caddyfilePath: String {
@@ -27,29 +27,28 @@ public struct ConfigRenderer {
     public func render(sites: [Site]) -> String {
         var lines: [String] = []
 
-        // Global options
         lines.append("{")
         lines.append("    http_port 8080")
         lines.append("    https_port 8443")
         lines.append("    admin localhost:2019")
         lines.append("    local_certs")
-        lines.append("    log {")
-        lines.append("        output file \"\(logPath)\"")
-        lines.append("        format console")
-        lines.append("    }")
+        if !frankenphpLogPath.isEmpty {
+            lines.append("    log {")
+            lines.append("        output file \"\(frankenphpLogPath)\"")
+            lines.append("        format console")
+            lines.append("    }")
+        }
         lines.append("}")
         lines.append("")
         lines.append("import snippets/*")
         lines.append("")
 
-        // Default localhost block
         lines.append("localhost {")
         lines.append("    tls internal")
         lines.append("    respond 204")
         lines.append("}")
         lines.append("")
 
-        // Site blocks for running sites only
         let runningSites = sites.filter { $0.status == .running }
         for site in runningSites {
             lines.append("import php-app \(site.domain) \(site.rootPath) \(site.resolvedDocumentRoot)")
@@ -62,7 +61,6 @@ public struct ConfigRenderer {
         return lines.joined(separator: "\n")
     }
 
-    /// The PHP app snippet used by the Caddyfile.
     public var phpAppSnippet: String {
         """
         (php-app) {
@@ -79,7 +77,6 @@ public struct ConfigRenderer {
         """
     }
 
-    /// Security headers config.
     public var securityConf: String {
         """
         header {
@@ -97,7 +94,12 @@ public struct ConfigRenderer {
         let fm = FileManager.default
         try fm.createDirectory(atPath: configDirectory, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: snippetsDirectory, withIntermediateDirectories: true)
-        try fm.createDirectory(atPath: logDirectory, withIntermediateDirectories: true)
+
+        // Ensure log file parent directory exists
+        if !frankenphpLogPath.isEmpty {
+            let logDir = (frankenphpLogPath as NSString).deletingLastPathComponent
+            try fm.createDirectory(atPath: logDir, withIntermediateDirectories: true)
+        }
 
         let caddyfile = render(sites: sites)
         try caddyfile.write(toFile: caddyfilePath, atomically: true, encoding: .utf8)
@@ -105,11 +107,5 @@ public struct ConfigRenderer {
 
         let snippetPath = (snippetsDirectory as NSString).appendingPathComponent("php-app")
         try phpAppSnippet.write(toFile: snippetPath, atomically: true, encoding: .utf8)
-    }
-
-    // MARK: - Private
-
-    private var logPath: String {
-        (logDirectory as NSString).appendingPathComponent("frankenphp.log")
     }
 }

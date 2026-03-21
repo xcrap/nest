@@ -2,32 +2,28 @@ import Foundation
 
 public struct AppSettings: Codable, Equatable {
     public var runtimePaths: RuntimePaths
-    public var configDirectory: String
-    public var dataDirectory: String
-    public var defaultDocumentRoot: String?
+    public var caddyConfigDirectory: String
 
     public init(
         runtimePaths: RuntimePaths = RuntimePaths(),
-        configDirectory: String = "",
-        dataDirectory: String = "",
-        defaultDocumentRoot: String? = nil
+        caddyConfigDirectory: String = "/opt/homebrew/etc"
     ) {
         self.runtimePaths = runtimePaths
-        self.configDirectory = configDirectory
-        self.dataDirectory = dataDirectory
+        self.caddyConfigDirectory = caddyConfigDirectory
     }
 
     public static func defaultSettings() -> AppSettings {
+        return AppSettings(
+            runtimePaths: RuntimePaths.detectDefaults(),
+            caddyConfigDirectory: "/opt/homebrew/etc"
+        )
+    }
+
+    /// Path where Nest stores its own app data (sites.json, settings.json).
+    public static var nestDataDirectory: String {
         let appSupport = NSSearchPathForDirectoriesInDomains(
             .applicationSupportDirectory, .userDomainMask, true
         ).first ?? ("~/Library/Application Support" as NSString).expandingTildeInPath
-
-        let nestDir = (appSupport as NSString).appendingPathComponent("Nest")
-
-        return AppSettings(
-            runtimePaths: RuntimePaths.detectDefaults(),
-            configDirectory: (nestDir as NSString).appendingPathComponent("config"),
-            dataDirectory: (nestDir as NSString).appendingPathComponent("data")
-        )
+        return (appSupport as NSString).appendingPathComponent("Nest/config")
     }
 }

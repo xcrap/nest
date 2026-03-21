@@ -15,7 +15,7 @@ enum ConfigRendererTests {
             }
         }
 
-        let renderer = ConfigRenderer(configDirectory: "/tmp/nest-test-config", logDirectory: "/tmp/nest-test-logs")
+        let renderer = ConfigRenderer(configDirectory: "/tmp/nest-test-config", frankenphpLogPath: "/tmp/nest-test-logs/frankenphp.log")
 
         // Test: renders running sites only
         do {
@@ -66,7 +66,7 @@ enum ConfigRendererTests {
         // Test: writes all config files to disk
         do {
             let tmpDir = NSTemporaryDirectory() + "nest-test-\(UUID().uuidString)"
-            let r = ConfigRenderer(configDirectory: tmpDir, logDirectory: tmpDir + "/logs")
+            let r = ConfigRenderer(configDirectory: tmpDir, frankenphpLogPath: tmpDir + "/logs/frankenphp.log")
             let sites = [
                 Site(name: "App", domain: "app.test", rootPath: "/var/www/app", status: .running),
             ]

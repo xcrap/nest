@@ -39,7 +39,7 @@ public struct SiteFormSheet: View {
                     Text(isEditing ? "Edit Site" : "New Site")
                         .font(.headline)
                     Text(isEditing ? "Update site configuration." : "Add a new local development site.")
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -89,9 +89,9 @@ public struct SiteFormSheet: View {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                            .font(.caption)
+                            .font(.callout)
                         Text(error)
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.red)
                         Spacer()
                     }
@@ -127,7 +127,7 @@ public struct SiteFormSheet: View {
     private func field(_ label: String, prompt: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(label)
-                .font(.caption)
+                .font(.callout)
                 .fontWeight(.medium)
                 .foregroundStyle(.secondary)
             content()

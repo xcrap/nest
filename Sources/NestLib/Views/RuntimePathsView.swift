@@ -5,6 +5,7 @@ public struct RuntimePathsView: View {
     @State private var paths: RuntimePaths = RuntimePaths()
     @State private var validationIssues: [String] = []
     @State private var saved = false
+    @State private var detected = false
 
     public init() {}
 
@@ -16,14 +17,24 @@ public struct RuntimePathsView: View {
                     Text("Runtime Paths")
                         .font(.title2)
                         .fontWeight(.bold)
-                    Text("Configure the paths to your locally installed binaries.")
-                        .font(.caption)
+                    Text("Configure the paths to your locally installed binaries and log files.")
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if detected {
+                    Label("Detected", systemImage: "checkmark.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.green)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                }
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         paths = RuntimePaths.detectDefaults()
+                        detected = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation { detected = false }
                     }
                 } label: {
                     Label("Auto-Detect", systemImage: "sparkle.magnifyingglass")
@@ -42,6 +53,8 @@ public struct RuntimePathsView: View {
                     // FrankenPHP
                     settingsCard(title: "FrankenPHP", icon: "bolt.fill", color: .purple) {
                         pathRow("Binary", path: $paths.frankenphpBinary, isDirectory: false)
+                        Divider().padding(.leading, 4)
+                        pathRow("Log File", path: $paths.frankenphpLog, isDirectory: false)
                     }
 
                     // MariaDB
@@ -52,12 +65,9 @@ public struct RuntimePathsView: View {
                             pathRow("Client (mariadb)", path: $paths.mariadbClient, isDirectory: false)
                             Divider().padding(.leading, 4)
                             pathRow("mysqldump", path: $paths.mysqldump, isDirectory: false)
+                            Divider().padding(.leading, 4)
+                            pathRow("Log File", path: $paths.mariadbLog, isDirectory: false)
                         }
-                    }
-
-                    // Logs
-                    settingsCard(title: "Logs", icon: "doc.text.fill", color: .orange) {
-                        pathRow("Log Directory", path: $paths.logDirectory, isDirectory: true)
                     }
 
                     // Validation issues
@@ -67,9 +77,9 @@ public struct RuntimePathsView: View {
                                 HStack(spacing: 8) {
                                     Image(systemName: "exclamationmark.triangle.fill")
                                         .foregroundStyle(.orange)
-                                        .font(.caption)
+                                        .font(.callout)
                                     Text(issue)
-                                        .font(.caption)
+                                        .font(.callout)
                                         .foregroundStyle(.secondary)
                                 }
                             }
@@ -94,19 +104,30 @@ public struct RuntimePathsView: View {
                 Spacer()
                 if saved {
                     Label("Saved", systemImage: "checkmark.circle.fill")
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.green)
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
                 Button("Validate") {
-                    validationIssues = paths.validate()
+                    let issues = paths.validate()
+                    withAnimation {
+                        validationIssues = issues
+                    }
+                    if issues.isEmpty {
+                        withAnimation { saved = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            withAnimation { saved = false }
+                        }
+                    }
                 }
                 .controlSize(.small)
                 Button("Save") {
                     store.settings.runtimePaths = paths
                     store.saveSettings()
-                    validationIssues = []
-                    withAnimation { saved = true }
+                    withAnimation {
+                        validationIssues = []
+                        saved = true
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         withAnimation { saved = false }
                     }
@@ -127,7 +148,7 @@ public struct RuntimePathsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(color)
                     .frame(width: 20, height: 20)
                     .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
@@ -149,12 +170,12 @@ public struct RuntimePathsView: View {
     private func pathRow(_ label: String, path: Binding<String>, isDirectory: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 TextField("", text: path)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(.callout, design: .monospaced))
                 Button("Browse...") {
                     let panel = NSOpenPanel()
                     panel.canChooseDirectories = isDirectory

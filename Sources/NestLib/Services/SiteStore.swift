@@ -14,15 +14,13 @@ public final class SiteStore: ObservableObject {
 
     public init() {
         let defaults = AppSettings.defaultSettings()
-        let configDir = defaults.configDirectory
+        let nestDir = AppSettings.nestDataDirectory
 
         let fm = FileManager.default
-        try? fm.createDirectory(atPath: configDir, withIntermediateDirectories: true)
-        try? fm.createDirectory(atPath: defaults.dataDirectory, withIntermediateDirectories: true)
-        try? fm.createDirectory(atPath: defaults.runtimePaths.logDirectory, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: nestDir, withIntermediateDirectories: true)
 
-        self.sitesFileURL = URL(fileURLWithPath: configDir).appendingPathComponent("sites.json")
-        self.settingsFileURL = URL(fileURLWithPath: configDir).appendingPathComponent("settings.json")
+        self.sitesFileURL = URL(fileURLWithPath: nestDir).appendingPathComponent("sites.json")
+        self.settingsFileURL = URL(fileURLWithPath: nestDir).appendingPathComponent("settings.json")
 
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]

@@ -5,20 +5,23 @@ public struct RuntimePaths: Codable, Equatable {
     public var mariadbServer: String
     public var mariadbClient: String
     public var mysqldump: String
-    public var logDirectory: String
+    public var frankenphpLog: String
+    public var mariadbLog: String
 
     public init(
         frankenphpBinary: String = "",
         mariadbServer: String = "",
         mariadbClient: String = "",
         mysqldump: String = "",
-        logDirectory: String = ""
+        frankenphpLog: String = "",
+        mariadbLog: String = ""
     ) {
         self.frankenphpBinary = frankenphpBinary
         self.mariadbServer = mariadbServer
         self.mariadbClient = mariadbClient
         self.mysqldump = mysqldump
-        self.logDirectory = logDirectory
+        self.frankenphpLog = frankenphpLog
+        self.mariadbLog = mariadbLog
     }
 
     /// Try to detect default Homebrew paths.
@@ -28,7 +31,7 @@ public struct RuntimePaths: Codable, Equatable {
 
         var paths = RuntimePaths()
 
-        // Check Homebrew path first, then the legacy Nest-managed binary
+        // FrankenPHP: Homebrew first, then legacy Nest-managed binary
         let frankenphpCandidates = [
             "\(brewPrefix)/bin/frankenphp",
             NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true)
@@ -65,14 +68,34 @@ public struct RuntimePaths: Codable, Equatable {
         if fm.isExecutableFile(atPath: dump) {
             paths.mysqldump = dump
         } else {
-            let mysqldump = "\(brewPrefix)/bin/mysqldump"
-            if fm.isExecutableFile(atPath: mysqldump) {
-                paths.mysqldump = mysqldump
+            let mysqldumpBin = "\(brewPrefix)/bin/mysqldump"
+            if fm.isExecutableFile(atPath: mysqldumpBin) {
+                paths.mysqldump = mysqldumpBin
             }
         }
 
+        // Default log locations
         let appSupport = NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true).first ?? "~/Library/Application Support"
-        paths.logDirectory = (appSupport as NSString).appendingPathComponent("Nest/logs")
+        let nestLogs = (appSupport as NSString).appendingPathComponent("Nest/logs")
+
+        // FrankenPHP log: check Nest's location, or Caddy's default
+        let nestFPLog = (nestLogs as NSString).appendingPathComponent("frankenphp.log")
+        if fm.fileExists(atPath: nestFPLog) {
+            paths.frankenphpLog = nestFPLog
+        } else {
+            let homeDir = NSHomeDirectory()
+            let caddyLog = "\(homeDir)/.local/share/caddy/logs/default.log"
+            paths.frankenphpLog = fm.fileExists(atPath: caddyLog) ? caddyLog : nestFPLog
+        }
+
+        // MariaDB log: check Nest's location, or Homebrew's default
+        let nestDBLog = (nestLogs as NSString).appendingPathComponent("mariadb.log")
+        if fm.fileExists(atPath: nestDBLog) {
+            paths.mariadbLog = nestDBLog
+        } else {
+            let brewLog = "\(brewPrefix)/var/mysql/\(Host.current().localizedName ?? "localhost").err"
+            paths.mariadbLog = fm.fileExists(atPath: brewLog) ? brewLog : nestDBLog
+        }
 
         return paths
     }

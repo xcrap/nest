@@ -20,10 +20,69 @@ public struct PrerequisiteChecker {
     /// Run all prerequisite checks and return results.
     public static func checkAll() -> [CheckResult] {
         var results: [CheckResult] = []
+        results.append(checkDnsmasq())
         results.append(checkResolver())
         results.append(checkLocalCA())
         results.append(checkPFAnchor())
         return results
+    }
+
+    /// Check if dnsmasq is installed and running.
+    public static func checkDnsmasq() -> CheckResult {
+        let fm = FileManager.default
+        let binary = "/opt/homebrew/opt/dnsmasq/sbin/dnsmasq"
+        let config = "/opt/homebrew/etc/dnsmasq.conf"
+
+        guard fm.fileExists(atPath: binary) else {
+            return CheckResult(
+                name: "dnsmasq",
+                passed: false,
+                detail: "dnsmasq is not installed. It resolves *.test domains to 127.0.0.1.",
+                fixHint: """
+                brew install dnsmasq
+                printf 'port=5354\\naddress=/.test/127.0.0.1\\nlisten-address=127.0.0.1\\n' > /opt/homebrew/etc/dnsmasq.conf
+                brew services start dnsmasq
+                """
+            )
+        }
+
+        // Check config has .test entry
+        let configOK: Bool
+        if let content = try? String(contentsOfFile: config, encoding: .utf8) {
+            configOK = content.contains("address=/.test/127.0.0.1")
+        } else {
+            configOK = false
+        }
+
+        if !configOK {
+            return CheckResult(
+                name: "dnsmasq",
+                passed: false,
+                detail: "dnsmasq is installed but not configured for .test domains.",
+                fixHint: """
+                printf 'port=5354\\naddress=/.test/127.0.0.1\\nlisten-address=127.0.0.1\\n' > /opt/homebrew/etc/dnsmasq.conf
+                brew services restart dnsmasq
+                """
+            )
+        }
+
+        // Check if running
+        let running = isProcessRunning("dnsmasq")
+        if !running {
+            return CheckResult(
+                name: "dnsmasq",
+                passed: false,
+                detail: "dnsmasq is configured but not running.",
+                fixHint: "brew services start dnsmasq"
+            )
+        }
+
+        return CheckResult(
+            name: "dnsmasq",
+            passed: true,
+            detail: "dnsmasq is running and configured for *.test domains.",
+            fixHint: ""
+        )
     }
 
     /// Check if /etc/resolver/test exists with the correct content.
@@ -36,16 +95,16 @@ public struct PrerequisiteChecker {
                 name: "DNS Resolver",
                 passed: false,
                 detail: "/etc/resolver/test does not exist.",
-                fixHint: "Create it with:\n  sudo mkdir -p /etc/resolver\n  echo 'nameserver 127.0.0.1\\nport 5353' | sudo tee /etc/resolver/test"
+                fixHint: "sudo bash -c 'printf \"nameserver 127.0.0.1\\nport 5354\\n\" > /etc/resolver/test'"
             )
         }
 
         if let content = try? String(contentsOfFile: path, encoding: .utf8),
-           content.contains("127.0.0.1") {
+           content.contains("127.0.0.1"), content.contains("5354") {
             return CheckResult(
                 name: "DNS Resolver",
                 passed: true,
-                detail: "/etc/resolver/test is configured.",
+                detail: "/etc/resolver/test is configured (port 5354).",
                 fixHint: ""
             )
         }
@@ -54,7 +113,7 @@ public struct PrerequisiteChecker {
             name: "DNS Resolver",
             passed: false,
             detail: "/etc/resolver/test exists but may be misconfigured.",
-            fixHint: "Verify it contains:\n  nameserver 127.0.0.1\n  port 5353"
+            fixHint: "sudo bash -c 'printf \"nameserver 127.0.0.1\\nport 5354\\n\" > /etc/resolver/test'"
         )
     }
 
@@ -68,15 +127,15 @@ public struct PrerequisiteChecker {
                 name: "Local CA Certificate",
                 passed: false,
                 detail: "Caddy local CA certificate not found. Start FrankenPHP once to generate it.",
-                fixHint: "Start FrankenPHP, then trust the CA:\n  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\""
+                fixHint: "brew services start frankenphp\nThen trust the CA:\n  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\""
             )
         }
 
         return CheckResult(
             name: "Local CA Certificate",
             passed: true,
-            detail: "Caddy local CA certificate exists at \(caCertPath).\nIf HTTPS doesn't work, ensure it's trusted in Keychain.",
-            fixHint: "Trust it with:\n  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\""
+            detail: "Caddy local CA certificate exists.\nIf HTTPS doesn't work, ensure it's trusted in Keychain.",
+            fixHint: "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\""
         )
     }
 
@@ -90,15 +149,13 @@ public struct PrerequisiteChecker {
                 passed: false,
                 detail: "PF anchor not found. Ports 80/443 won't redirect to 8080/8443.",
                 fixHint: """
-                Create the anchor file:
-                  echo 'rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 80 -> 127.0.0.1 port 8080
-                rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 8443' | sudo tee /etc/pf.anchors/dev.nest.app
+                sudo bash -c 'printf "rdr pass on lo0 inet proto tcp from any to any port 80 -> 127.0.0.1 port 8080\\nrdr pass on lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443\\n" > /etc/pf.anchors/dev.nest.app'
 
-                Then add to /etc/pf.conf:
+                Add to /etc/pf.conf (before any existing anchor lines):
                   rdr-anchor "dev.nest.app"
                   load anchor "dev.nest.app" from "/etc/pf.anchors/dev.nest.app"
 
-                And reload: sudo pfctl -f /etc/pf.conf
+                Then reload: sudo pfctl -f /etc/pf.conf
                 """
             )
         }
@@ -109,5 +166,16 @@ public struct PrerequisiteChecker {
             detail: "PF anchor exists at \(anchorPath).",
             fixHint: "If redirects aren't working, reload with: sudo pfctl -f /etc/pf.conf"
         )
+    }
+
+    private static func isProcessRunning(_ name: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-x", name]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 }

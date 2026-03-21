@@ -33,18 +33,18 @@ Other directories:
 
 ## Runtime State
 
-Nest stores managed state under:
+Nest stores only its own data under `~/Library/Application Support/Nest/config/`:
 
-- `~/Library/Application Support/Nest`
+- `sites.json`, `settings.json`
 
-Common locations:
+All service config files live at Homebrew defaults (`/opt/homebrew/etc/`):
 
-- `config/`: `sites.json`, `settings.json`, `Caddyfile`, `security.conf`, `snippets/`
-- `data/`: persistent data (e.g. MariaDB data directory)
-- `logs/`: `frankenphp.log`, `mariadb.log`
-- `run/`: PID files, sockets
+- `Caddyfile`, `security.conf`, `snippets/` — FrankenPHP/Caddy
+- `php.ini` — PHP
+- `my.cnf` — MariaDB
+- `dnsmasq.conf` — DNS for `.test` domains
 
-Nest does NOT install runtimes. FrankenPHP and MariaDB are installed manually via Homebrew.
+FrankenPHP, MariaDB, and dnsmasq are all installed and managed via Homebrew (`brew services`). Nest does NOT install runtimes.
 
 ## Working Style
 

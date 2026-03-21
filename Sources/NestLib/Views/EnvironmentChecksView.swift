@@ -17,7 +17,7 @@ public struct EnvironmentChecksView: View {
                         .font(.title2)
                         .fontWeight(.bold)
                     Text("System prerequisites and service health.")
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -80,7 +80,7 @@ public struct EnvironmentChecksView: View {
                                     HStack(alignment: .top, spacing: 8) {
                                         Image(systemName: "exclamationmark.triangle.fill")
                                             .foregroundStyle(.orange)
-                                            .font(.caption)
+                                            .font(.callout)
                                         Text(issue)
                                             .font(.callout)
                                             .foregroundStyle(.secondary)
@@ -114,7 +114,7 @@ public struct EnvironmentChecksView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(color)
                     .frame(width: 20, height: 20)
                     .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
@@ -144,7 +144,7 @@ public struct EnvironmentChecksView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(running ? .green : .secondary)
                     .frame(width: 16)
 
@@ -157,7 +157,7 @@ public struct EnvironmentChecksView: View {
                         .fill(running ? Color.green : Color.secondary.opacity(0.25))
                         .frame(width: 6, height: 6)
                     Text(running ? "Running" : "Stopped")
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(running ? .green : .secondary)
                 }
 
@@ -172,7 +172,7 @@ public struct EnvironmentChecksView: View {
             }
             if let error {
                 Text(error)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.red)
                     .padding(.leading, 26)
             }
@@ -191,14 +191,14 @@ public struct EnvironmentChecksView: View {
                         .font(.callout)
                         .fontWeight(.medium)
                     Text(check.detail)
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
             }
             if !check.passed && !check.fixHint.isEmpty {
                 Text(check.fixHint)
-                    .font(.system(.caption2, design: .monospaced))
+                    .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -221,8 +221,8 @@ public struct EnvironmentChecksView: View {
         let paths = store.settings.runtimePaths
         guard !paths.frankenphpBinary.isEmpty else { return }
         let renderer = ConfigRenderer(
-            configDirectory: store.settings.configDirectory,
-            logDirectory: paths.logDirectory
+            configDirectory: store.settings.caddyConfigDirectory,
+            frankenphpLogPath: paths.frankenphpLog
         )
         try? renderer.writeAll(sites: store.sites)
         processController.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
@@ -231,10 +231,6 @@ public struct EnvironmentChecksView: View {
     private func startMariaDB() {
         let paths = store.settings.runtimePaths
         guard !paths.mariadbServer.isEmpty else { return }
-        processController.startMariaDB(
-            serverBinary: paths.mariadbServer,
-            dataDirectory: store.settings.dataDirectory + "/mariadb",
-            configDirectory: store.settings.configDirectory
-        )
+        processController.startMariaDB(serverBinary: paths.mariadbServer)
     }
 }

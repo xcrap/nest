@@ -39,20 +39,10 @@ public final class ProcessController: ObservableObject {
             checkCaddyAdmin()
         }
 
-        // Check MariaDB via PID file
-        if let pid = readPID(name: "mariadb"), isProcessAlive(pid) {
+        // Check MariaDB via pgrep
+        if let pid = findProcessPID(name: "mariadbd") {
             externalMariaDBPid = pid
             mariadbRunning = true
-        } else {
-            // Fallback: check if MariaDB socket exists and is connectable
-            let socketPath = (pidDirectory as NSString).appendingPathComponent("mariadb.sock")
-            if FileManager.default.fileExists(atPath: socketPath) {
-                // Try to find mariadb PID from the process list
-                if let pid = findProcessPID(name: "mariadbd") {
-                    externalMariaDBPid = pid
-                    mariadbRunning = true
-                }
-            }
         }
     }
 
@@ -109,43 +99,27 @@ public final class ProcessController: ObservableObject {
     public func startFrankenPHP(binary: String, caddyfilePath: String) {
         guard !frankenphpRunning else { return }
         frankenphpError = nil
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["run", "--config", caddyfilePath, "--adapter", "caddyfile"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        process.terminationHandler = { [weak self] proc in
+        runBrewServices("start", "frankenphp") { [weak self] success, error in
             Task { @MainActor in
-                self?.frankenphpRunning = false
-                self?.frankenphpProcess = nil
-                if proc.terminationStatus != 0 && proc.terminationStatus != 15 {
-                    self?.frankenphpError = "FrankenPHP exited with status \(proc.terminationStatus)"
+                if success {
+                    self?.frankenphpRunning = true
+                } else {
+                    self?.frankenphpError = error ?? "Failed to start FrankenPHP"
                 }
             }
-        }
-
-        do {
-            try process.run()
-            frankenphpProcess = process
-            frankenphpRunning = true
-            writePID(process.processIdentifier, name: "frankenphp")
-        } catch {
-            frankenphpError = "Failed to start FrankenPHP: \(error.localizedDescription)"
         }
     }
 
     public func stopFrankenPHP() {
-        if let process = frankenphpProcess, process.isRunning {
-            process.terminate()
-        } else if let pid = externalFrankenPHPPid {
-            kill(pid, SIGTERM)
-            externalFrankenPHPPid = nil
+        runBrewServices("stop", "frankenphp") { [weak self] _, _ in
+            // Also kill directly in case it wasn't started via brew
+            self?.killAll("frankenphp")
+            Task { @MainActor in
+                self?.frankenphpRunning = false
+                self?.frankenphpProcess = nil
+                self?.externalFrankenPHPPid = nil
+            }
         }
-        frankenphpProcess = nil
-        frankenphpRunning = false
-        removePID(name: "frankenphp")
     }
 
     /// Reload FrankenPHP config via the Caddy admin API.
@@ -188,72 +162,30 @@ public final class ProcessController: ObservableObject {
 
     // MARK: - MariaDB
 
-    public func startMariaDB(serverBinary: String, dataDirectory: String, configDirectory: String) {
+    public func startMariaDB(serverBinary: String) {
         guard !mariadbRunning else { return }
         mariadbError = nil
-
-        let fm = FileManager.default
-        try? fm.createDirectory(atPath: dataDirectory, withIntermediateDirectories: true)
-
-        // Check if data directory needs initialization
-        let ibdata = (dataDirectory as NSString).appendingPathComponent("ibdata1")
-        if !fm.fileExists(atPath: ibdata) {
-            initializeMariaDB(serverBinary: serverBinary, dataDirectory: dataDirectory)
-        }
-
-        // Write MariaDB config
-        let cnfPath = (configDirectory as NSString).appendingPathComponent("mariadb.cnf")
-        let socketPath = (pidDirectory as NSString).appendingPathComponent("mariadb.sock")
-        let logPath = ((NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true).first ?? "") as NSString)
-            .appendingPathComponent("Nest/logs/mariadb.log")
-
-        let cnf = """
-        [mysqld]
-        datadir=\(dataDirectory)
-        socket=\(socketPath)
-        port=3306
-        log-error=\(logPath)
-        bind-address=127.0.0.1
-        skip-networking=0
-        """
-        try? cnf.write(toFile: cnfPath, atomically: true, encoding: .utf8)
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: serverBinary)
-        process.arguments = ["--defaults-file=\(cnfPath)"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        process.terminationHandler = { [weak self] proc in
+        runBrewServices("start", "mariadb") { [weak self] success, error in
             Task { @MainActor in
-                self?.mariadbRunning = false
-                self?.mariadbProcess = nil
-                if proc.terminationStatus != 0 && proc.terminationStatus != 15 {
-                    self?.mariadbError = "MariaDB exited with status \(proc.terminationStatus)"
+                if success {
+                    self?.mariadbRunning = true
+                } else {
+                    self?.mariadbError = error ?? "Failed to start MariaDB"
                 }
             }
-        }
-
-        do {
-            try process.run()
-            mariadbProcess = process
-            mariadbRunning = true
-            writePID(process.processIdentifier, name: "mariadb")
-        } catch {
-            mariadbError = "Failed to start MariaDB: \(error.localizedDescription)"
         }
     }
 
     public func stopMariaDB() {
-        if let process = mariadbProcess, process.isRunning {
-            process.terminate()
-        } else if let pid = externalMariaDBPid {
-            kill(pid, SIGTERM)
-            externalMariaDBPid = nil
+        runBrewServices("stop", "mariadb") { [weak self] _, _ in
+            // Also kill directly in case it wasn't started via brew
+            self?.killAll("mariadbd")
+            Task { @MainActor in
+                self?.mariadbRunning = false
+                self?.mariadbProcess = nil
+                self?.externalMariaDBPid = nil
+            }
         }
-        mariadbProcess = nil
-        mariadbRunning = false
-        removePID(name: "mariadb")
     }
 
     // MARK: - Cleanup
@@ -265,20 +197,35 @@ public final class ProcessController: ObservableObject {
 
     // MARK: - Private
 
-    private func initializeMariaDB(serverBinary: String, dataDirectory: String) {
-        // mariadb-install-db is typically in the same directory as mariadbd
-        let binDir = (serverBinary as NSString).deletingLastPathComponent
-        let installDB = (binDir as NSString).appendingPathComponent("mariadb-install-db")
-
-        guard FileManager.default.isExecutableFile(atPath: installDB) else { return }
-
+    private nonisolated func killAll(_ name: String) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: installDB)
-        process.arguments = ["--datadir=\(dataDirectory)", "--auth-root-authentication-method=normal"]
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        process.arguments = [name]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
         process.waitUntilExit()
+    }
+
+    private func runBrewServices(_ action: String, _ service: String, completion: @escaping (Bool, String?) -> Void) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/brew")
+        process.arguments = ["services", action, service]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        process.terminationHandler = { proc in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            completion(proc.terminationStatus == 0, proc.terminationStatus == 0 ? nil : output)
+        }
+
+        do {
+            try process.run()
+        } catch {
+            completion(false, error.localizedDescription)
+        }
     }
 
     private func writePID(_ pid: Int32, name: String) {
