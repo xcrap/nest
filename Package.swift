@@ -4,6 +4,9 @@ import PackageDescription
 let package = Package(
     name: "Nest",
     platforms: [.macOS(.v14)],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.7.0"),
+    ],
     targets: [
         .target(
             name: "NestLib",
@@ -12,7 +15,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "Nest",
-            dependencies: ["NestLib"],
+            dependencies: ["NestLib", "Sparkle"],
             path: "Sources/Nest",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

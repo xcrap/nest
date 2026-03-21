@@ -4,6 +4,12 @@
 <dict>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>SUPublicEDKey</key>
+    <string>WTag3f7Il9pY5JwroV9iZdsrhoI5s/AOmqnN4GQC9B8=</string>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/xcrap/nest/main/appcast.xml</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
     <key>CFBundleExecutable</key>
     <string>Nest</string>
     <key>CFBundleIdentifier</key>
