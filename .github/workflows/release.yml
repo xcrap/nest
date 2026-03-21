@@ -12,11 +12,6 @@ permissions:
 jobs:
   release:
     runs-on: macos-14
-    env:
-      CSC_NAME: ${{ secrets.CSC_NAME }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -24,13 +19,16 @@ jobs:
       - name: Run tests
         run: make test
 
-      - name: Build signed release
-        run: make release
+      - name: Build and package
+        run: make package
 
-      - name: Publish GitHub release assets
+      - name: Create ZIP
+        run: ditto -c -k --keepParent Nest.app Nest-$(cat version.txt).zip
+
+      - name: Publish GitHub release
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
           generateReleaseNotes: true
           removeArtifacts: true
-          artifacts: "Nest-*.dmg,Nest-*.zip"
+          artifacts: "Nest-*.zip"
