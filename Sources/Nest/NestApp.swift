@@ -163,7 +163,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func quitApp() { NSApp.terminate(nil) }
 }
 
-// MARK: - Update Checker
+// MARK: - Auto Updater
 
 enum UpdateChecker {
     static func checkInBackground() {
@@ -176,18 +176,112 @@ enum UpdateChecker {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tagName = json["tag_name"] as? String else { return }
             let latestVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
-            if latestVersion.compare(currentVersion, options: .numeric) == .orderedDescending {
+
+            guard latestVersion.compare(currentVersion, options: .numeric) == .orderedDescending else { return }
+
+            // Find the DMG asset URL
+            guard let assets = json["assets"] as? [[String: Any]],
+                  let dmgAsset = assets.first(where: { ($0["name"] as? String)?.hasSuffix(".dmg") == true }),
+                  let downloadURL = dmgAsset["browser_download_url"] as? String else { return }
+
+            await MainActor.run {
+                let alert = NSAlert()
+                alert.messageText = "Update Available"
+                alert.informativeText = "Nest \(latestVersion) is available. You're running \(currentVersion).\n\nUpdate and relaunch automatically?"
+                alert.addButton(withTitle: "Update Now")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    performUpdate(downloadURL: downloadURL)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private static func performUpdate(downloadURL: String) {
+        guard let url = URL(string: downloadURL) else { return }
+        let appPath = Bundle.main.bundlePath
+
+        // Show progress
+        let progressAlert = NSAlert()
+        progressAlert.messageText = "Updating Nest..."
+        progressAlert.informativeText = "Downloading update. Please wait."
+        progressAlert.addButton(withTitle: "")
+        progressAlert.buttons.first?.isHidden = true
+        let window = progressAlert.window
+        progressAlert.layout()
+
+        // Show non-modally
+        NSApp.activate(ignoringOtherApps: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+
+        Task.detached {
+            do {
+                // Download DMG
+                let (dmgFileURL, _) = try await URLSession.shared.download(from: url)
+                let tmpDMG = FileManager.default.temporaryDirectory.appendingPathComponent("NestUpdate.dmg")
+                try? FileManager.default.removeItem(at: tmpDMG)
+                try FileManager.default.moveItem(at: dmgFileURL, to: tmpDMG)
+
+                // Mount DMG
+                let mountProcess = Process()
+                mountProcess.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+                mountProcess.arguments = ["attach", tmpDMG.path, "-nobrowse", "-quiet", "-mountpoint", "/tmp/NestUpdate"]
+                let mountPipe = Pipe()
+                mountProcess.standardOutput = mountPipe
+                mountProcess.standardError = FileHandle.nullDevice
+                try mountProcess.run()
+                mountProcess.waitUntilExit()
+
+                guard mountProcess.terminationStatus == 0 else {
+                    await MainActor.run { window.close() }
+                    return
+                }
+
+                // Copy new app over current
+                let srcApp = "/tmp/NestUpdate/Nest.app"
+                guard FileManager.default.fileExists(atPath: srcApp) else {
+                    await MainActor.run { window.close() }
+                    return
+                }
+
+                // Write a script that waits for us to quit, replaces the app, and relaunches
+                let script = """
+                #!/bin/bash
+                sleep 1
+                rm -rf "\(appPath)"
+                cp -R "\(srcApp)" "\(appPath)"
+                hdiutil detach /tmp/NestUpdate -quiet 2>/dev/null
+                rm -f "\(tmpDMG.path)"
+                open "\(appPath)"
+                rm -f /tmp/nest-update.sh
+                """
+                try script.write(toFile: "/tmp/nest-update.sh", atomically: true, encoding: .utf8)
+
+                let chmod = Process()
+                chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+                chmod.arguments = ["+x", "/tmp/nest-update.sh"]
+                try chmod.run()
+                chmod.waitUntilExit()
+
+                // Launch the updater script and quit
+                let updater = Process()
+                updater.executableURL = URL(fileURLWithPath: "/bin/bash")
+                updater.arguments = ["/tmp/nest-update.sh"]
+                try updater.run()
+
                 await MainActor.run {
-                    let alert = NSAlert()
-                    alert.messageText = "Update Available"
-                    alert.informativeText = "Nest \(latestVersion) is available. You're running \(currentVersion)."
-                    alert.addButton(withTitle: "Download")
-                    alert.addButton(withTitle: "Later")
-                    if alert.runModal() == .alertFirstButtonReturn {
-                        if let htmlURL = json["html_url"] as? String, let url = URL(string: htmlURL) {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
+                    window.close()
+                    NSApp.terminate(nil)
+                }
+            } catch {
+                await MainActor.run {
+                    window.close()
+                    let errAlert = NSAlert()
+                    errAlert.messageText = "Update Failed"
+                    errAlert.informativeText = error.localizedDescription
+                    errAlert.runModal()
                 }
             }
         }
