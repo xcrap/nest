@@ -1,174 +1,119 @@
 # Nest
 
-Nest is a macOS local PHP development app with a desktop UI, a Nest-managed FrankenPHP runtime, a Nest-managed Composer runtime, a Homebrew-managed MariaDB runtime, local `.test` domains, HTTPS bootstrap, and site management.
+Nest is a native macOS SwiftUI app for managing local PHP development sites with FrankenPHP and MariaDB.
 
-## What You Run
+## What It Does
 
-If you are using Nest as a product, open `Nest.app` in the project root.
+- Manage website records with `.test` domains
+- Configure paths to your Homebrew-installed FrankenPHP and MariaDB
+- Generate and reload FrankenPHP/Caddy config automatically
+- Start/stop FrankenPHP and MariaDB from the app
+- HTTPS with `.test` domains via Caddy's local CA
+- Import sites from the legacy Electron+Go version of Nest
 
-Typical flow:
+## Prerequisites
 
-1. Open `Nest.app`.
-2. Install PHP from the `PHP` screen.
-3. Install Composer from the `PHP` screen if your project needs it.
-4. Install MariaDB from the `MariaDB` screen if your project needs a database. Nest installs and pins `mariadb@10.11` with Homebrew.
-5. Start services from the header controls.
-6. In `Settings`, run `Install .test Routing` and `Trust Local HTTPS`.
-7. Add sites in `Sites`.
-8. Open `https://your-site.test`.
+Nest does not install runtimes. Install them manually:
 
-Nest runs `nestd` as a per-user background service. The desktop app is a client and can be opened or closed independently.
+```bash
+brew install frankenphp
+brew install mariadb@10.11
+```
 
-## Managed Runtime Layout
+For `.test` domain routing and HTTPS, set up these system prerequisites manually:
 
-Nest manages its own runtime state under:
+1. **DNS resolver**: Create `/etc/resolver/test` pointing to `127.0.0.1`
+2. **Port redirect** (optional): PF anchor to redirect ports 80/443 to 8080/8443
+3. **Local CA trust**: Trust Caddy's local CA certificate in your system keychain
 
-- `~/Library/Application Support/Nest`
+The app's Environment screen shows the status of each prerequisite with copy-pasteable fix commands.
 
-Important paths:
+## Getting Started
 
-- `versions/php`: installed PHP runtimes
-- `data/composer.phar`: managed Composer runtime
-- `data/mariadb`: MariaDB data directory
-- `config/mariadb.cnf`: MariaDB config file
-- `run/mariadb.sock`: MariaDB socket
-- `logs/`: service logs
-- `bin/`: active runtime symlinks and wrappers
+1. Open `Nest.app` (or `make run` for development).
+2. Go to **Runtime Paths** and configure your FrankenPHP and MariaDB binary paths (or click **Detect Defaults** for Homebrew paths).
+3. Add sites in the **Sites** screen.
+4. Start/stop sites and services from the UI.
+5. Open `https://your-site.test`.
+
+## Managed State
+
+Nest stores config and data under `~/Library/Application Support/Nest`:
+
+- `config/`: `sites.json`, `settings.json`, `Caddyfile`, `security.conf`, `snippets/`
+- `data/`: persistent data (MariaDB data directory)
+- `logs/`: `frankenphp.log`, `mariadb.log`
+- `run/`: PID files
 
 MariaDB defaults:
 
-- formula: `mariadb@10.11` via Homebrew
 - host: `127.0.0.1`
 - port: `3306`
 - user: `root`
 - password: none
 
-Nest uses Homebrew to install and pin MariaDB, but Nest still manages the process, config, data dir, socket, and shell wrappers itself. Nest does not use `brew services`.
-
-Composer defaults:
-
-- source: `https://getcomposer.org/download/latest-stable/composer.phar`
-- checksum: `https://getcomposer.org/download/latest-stable/composer.phar.sha256sum`
-- wrapper: `~/Library/Application Support/Nest/bin/composer`
-- rollback backup: `~/Library/Application Support/Nest/data/composer.previous.phar`
-
 ## Repository Layout
 
-- `daemon/`: Go daemon, API, services, and `nestcli`
-- `desktop/`: Electron + React desktop app
-- `helper/`: privileged macOS helper
-- `scripts/`: bootstrap and release support scripts
-- `bin/`: local build outputs
-- `Nest.app`: packaged desktop app copied to the repo root by `make package`
+- `Sources/NestLib/`: library target (models, services, views)
+- `Sources/Nest/`: app entry point (`@main`)
+- `Tests/NestTests/`: test runner
+- `scripts/`: Info.plist template, entitlements
+- `.github/workflows/`: release CI
 
-## Local Development
+## Development
 
-Bootstrap:
-
-```bash
-make bootstrap
-```
-
-Run the desktop app in development:
-
-```bash
-make dev
-```
-
-Build the binaries and frontend:
+Build:
 
 ```bash
 make build
 ```
 
-Run tests:
+Run (development):
+
+```bash
+make run
+```
+
+Test:
 
 ```bash
 make test
 ```
 
-Build a fresh root app bundle:
+Package into `Nest.app`:
 
 ```bash
 make package
 ```
 
-## CLI
+## Migration from Legacy App
 
-Main commands:
+If you used the previous Electron+Go version of Nest:
 
-```bash
-nestcli site list
-nestcli site add --name NAME --domain DOMAIN --root PATH [--document-root public|.|web]
-nestcli site remove ID
-nestcli site start ID
-nestcli site stop ID
-
-nestcli php list
-nestcli php install VERSION
-nestcli php activate VERSION
-
-nestcli composer status
-nestcli composer install
-nestcli composer update
-nestcli composer rollback
-nestcli composer check-updates
-
-nestcli mariadb status
-nestcli mariadb install
-nestcli mariadb start
-nestcli mariadb stop
-nestcli mariadb check-updates
-
-nestcli services start
-nestcli services stop
-nestcli services reload
-nestcli services status
-
-nestcli doctor
-nestcli shell integrate --zsh
-sudo nestcli bootstrap test-domain
-sudo nestcli bootstrap unbootstrap-test-domain
-sudo nestcli bootstrap trust-local-ca
-sudo nestcli bootstrap untrust-local-ca
-```
+1. Export your sites from the old app (Sites > Export).
+2. Export your MariaDB databases with `mysqldump`.
+3. Open the new Nest app and go to **Migration**.
+4. Import your `nest-sites.json` file.
+5. Restore your database dumps manually with the MariaDB client.
 
 ## Versioning
 
-Bump the version, commit, and create a `vx.y.z` git tag locally:
+The app version lives in `version.txt`. Bump it with:
 
 ```bash
-make bump VERSION=x.y.z
+make bump VERSION_NEW=x.y.z
 ```
 
-Push the commit:
+Push a `v*` tag to trigger a GitHub release:
 
 ```bash
+git tag v0.6.0
 git push origin main
+git push origin v0.6.0
 ```
-
-Optionally, push the tag to trigger a GitHub release:
-
-```bash
-git push origin vx.y.z
-```
-
-Pushing a `v*` tag triggers the GitHub release workflow. Only do this when you want to publish a release.
-
-## Packaging
-
-`make package` builds:
-
-- `bin/nestd`
-- `bin/nestcli`
-- `bin/nesthelper`
-- `desktop/release/mac-arm64/Nest.app`
-- root `./Nest.app`
 
 ## Notes
 
-- Nest manages one active PHP runtime through FrankenPHP.
-- Nest manages Composer as an official `composer.phar` download with checksum verification and rollback backup.
-- Nest installs MariaDB through Homebrew and pins the supported formula automatically.
-- The root `Nest.app` in this repo is the main packaged output to test.
-- This repository keeps project documentation in this `README.md`.
+- Nest manages FrankenPHP and MariaDB processes but does not install them.
+- The `.test` domain routing and HTTPS trust are documented manual prerequisites.
+- This repository keeps all project documentation in this `README.md`.

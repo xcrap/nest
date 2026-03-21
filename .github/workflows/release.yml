@@ -1,4 +1,4 @@
-name: Release Desktop
+name: Release
 
 on:
   push:
@@ -13,9 +13,6 @@ jobs:
   release:
     runs-on: macos-14
     env:
-      NEST_GITHUB_REPOSITORY: ${{ github.repository }}
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
       CSC_NAME: ${{ secrets.CSC_NAME }}
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -24,25 +21,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Node
-        uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Install dependencies
-        run: npm ci
-
       - name: Run tests
-        run: go test ./...
+        run: make test
 
-      - name: Build DMG and ZIP
+      - name: Build signed release
         run: make release
 
       - name: Publish GitHub release assets
@@ -51,4 +33,4 @@ jobs:
           allowUpdates: true
           generateReleaseNotes: true
           removeArtifacts: true
-          artifacts: "desktop/release/*.dmg,desktop/release/*.zip,desktop/release/*.blockmap,desktop/release/*.yml"
+          artifacts: "Nest-*.dmg,Nest-*.zip"
