@@ -12,15 +12,49 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      CSC_NAME: ${{ secrets.CSC_NAME }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Import code signing certificate
+        run: |
+          echo "$CSC_LINK" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import /tmp/cert.p12 -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          rm /tmp/cert.p12
+
       - name: Run tests
         run: make test
 
-      - name: Build DMG
-        run: make dmg
+      - name: Build, sign, notarize, and create DMG
+        run: |
+          make package
+          codesign --force --deep --options runtime \
+            --sign "$CSC_NAME" \
+            --entitlements scripts/entitlements.plist \
+            dist/Nest.app
+          VERSION=$(cat version.txt)
+          mkdir -p .dmg-staging
+          cp -R dist/Nest.app .dmg-staging/
+          ln -sf /Applications .dmg-staging/Applications
+          hdiutil create -volname "Nest" -srcfolder .dmg-staging -ov -format UDZO "dist/Nest-${VERSION}.dmg"
+          rm -rf .dmg-staging
+          xcrun notarytool submit "dist/Nest-${VERSION}.dmg" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+          xcrun stapler staple "dist/Nest-${VERSION}.dmg"
 
       - name: Publish GitHub release
         uses: ncipollo/release-action@v1
