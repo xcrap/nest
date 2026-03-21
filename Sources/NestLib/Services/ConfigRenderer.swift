@@ -32,6 +32,12 @@ public struct ConfigRenderer {
         lines.append("    https_port 8443")
         lines.append("    admin localhost:2019")
         lines.append("    local_certs")
+        if !frankenphpLogPath.isEmpty {
+            lines.append("    log {")
+            lines.append("        output file \"\(frankenphpLogPath)\"")
+            lines.append("        format console")
+            lines.append("    }")
+        }
         lines.append("}")
         lines.append("")
         lines.append("import \(snippetsDirectory)/*")

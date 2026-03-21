@@ -121,7 +121,7 @@ public struct LogsView: View {
                     Text(content)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .padding(12)
                 }
                 .background(Color(nsColor: .textBackgroundColor))
