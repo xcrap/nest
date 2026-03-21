@@ -42,7 +42,7 @@ public struct EnvironmentChecksView: View {
 
                     // Services
                     sectionCard(title: "Services", icon: "play.circle.fill", color: .green) {
-                        VStack(spacing: 0) {
+                        VStack(spacing: 4) {
                             serviceControl(
                                 name: "FrankenPHP",
                                 icon: "bolt.fill",
@@ -51,7 +51,6 @@ public struct EnvironmentChecksView: View {
                                 onStart: { startFrankenPHP() },
                                 onStop: { processController.stopFrankenPHP() }
                             )
-                            Divider().padding(.horizontal, 4)
                             serviceControl(
                                 name: "MariaDB",
                                 icon: "cylinder.fill",
@@ -92,11 +91,8 @@ public struct EnvironmentChecksView: View {
 
                     // System prerequisites
                     sectionCard(title: "System Prerequisites", icon: "shield.checkered", color: .blue) {
-                        VStack(spacing: 0) {
-                            ForEach(Array(checks.enumerated()), id: \.element.id) { index, check in
-                                if index > 0 {
-                                    Divider().padding(.horizontal, 4)
-                                }
+                        VStack(spacing: 4) {
+                            ForEach(checks) { check in
                                 prerequisiteRow(check)
                             }
                         }
@@ -126,10 +122,7 @@ public struct EnvironmentChecksView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, 20)
     }
 

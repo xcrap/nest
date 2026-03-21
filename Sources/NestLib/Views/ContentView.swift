@@ -31,14 +31,18 @@ public struct ContentView: View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 List(SidebarItem.allCases, selection: $selection) { item in
-                    Label(item.rawValue, systemImage: item.icon)
-                        .tag(item)
+                    Label {
+                        Text(item.rawValue)
+                    } icon: {
+                        Image(systemName: item.icon)
+                            .foregroundStyle(.primary)
+                    }
+                    .tag(item)
                 }
                 .listStyle(.sidebar)
 
                 Divider()
 
-                // Persistent service controls
                 VStack(spacing: 8) {
                     serviceRow(
                         "FrankenPHP",
@@ -64,8 +68,10 @@ public struct ContentView: View {
                         }
                     )
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(10)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
         } detail: {
@@ -105,14 +111,15 @@ public struct ContentView: View {
                 .frame(width: 7, height: 7)
             Text(name)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
             Spacer()
             Button(running ? "Stop" : "Start") {
                 onToggle()
             }
-            .font(.caption2)
+            .font(.callout)
             .buttonStyle(.bordered)
-            .controlSize(.mini)
+            .controlSize(.small)
+            .tint(running ? .red : .green)
         }
     }
 

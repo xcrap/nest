@@ -24,6 +24,7 @@ struct NestApp: App {
                 }
         }
         .defaultSize(width: 960, height: 640)
+        .windowResizability(.contentMinSize)
 
         Settings {
             SettingsView(updater: updaterController.updater)
@@ -192,9 +193,9 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Toggle("Launch Nest at login", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) { newValue in
+                .onChange(of: launchAtLogin) {
                     do {
-                        if newValue { try SMAppService.mainApp.register() }
+                        if launchAtLogin { try SMAppService.mainApp.register() }
                         else { try SMAppService.mainApp.unregister() }
                     } catch {
                         launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -202,8 +203,8 @@ struct SettingsView: View {
                 }
 
             Toggle("Automatically check for updates", isOn: $autoUpdate)
-                .onChange(of: autoUpdate) { newValue in
-                    updater.automaticallyChecksForUpdates = newValue
+                .onChange(of: autoUpdate) {
+                    updater.automaticallyChecksForUpdates = autoUpdate
                 }
                 .onAppear {
                     autoUpdate = updater.automaticallyChecksForUpdates

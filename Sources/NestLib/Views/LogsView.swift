@@ -23,35 +23,26 @@ public struct LogsView: View {
             logContent
         }
         .onAppear { loadLog() }
-        .onChange(of: selectedLog) { _ in loadLog() }
+        .onChange(of: selectedLog) { loadLog() }
         .onDisappear { stopTimer() }
     }
 
     private var logToolbar: some View {
-        HStack(spacing: 0) {
-            ForEach(LogFile.allCases) { file in
-                Button {
-                    selectedLog = file
-                } label: {
-                    Text(file.rawValue)
-                        .font(.callout)
-                        .fontWeight(selectedLog == file ? .semibold : .regular)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(selectedLog == file ? Color.accentColor.opacity(0.12) : Color.clear)
-                        )
-                        .foregroundStyle(selectedLog == file ? Color.accentColor : Color.secondary)
+        HStack(spacing: 12) {
+            Picker("Log", selection: $selectedLog) {
+                ForEach(LogFile.allCases) { file in
+                    Text(file.rawValue).tag(file)
                 }
-                .buttonStyle(.plain)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 200)
 
             Spacer()
 
             if currentLogPath.isEmpty {
-                Text("No log path configured")
-                    .font(.callout)
+                Label("No log path configured", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
                     .foregroundStyle(.orange)
             } else {
                 Text(currentLogPath)
@@ -67,9 +58,8 @@ public struct LogsView: View {
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
-            .padding(.horizontal, 8)
-            .onChange(of: autoRefresh) { on in
-                if on { startTimer() } else { stopTimer() }
+            .onChange(of: autoRefresh) {
+                if autoRefresh { startTimer() } else { stopTimer() }
             }
 
             Button {
@@ -80,10 +70,10 @@ public struct LogsView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .help("Refresh")
 
             Button {
                 content = ""
-                // Truncate the file
                 if !currentLogPath.isEmpty {
                     try? "".write(toFile: currentLogPath, atomically: true, encoding: .utf8)
                 }
@@ -93,16 +83,17 @@ public struct LogsView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .help("Clear Log")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(.bar)
     }
 
     private var logContent: some View {
         Group {
             if currentLogPath.isEmpty {
-                VStack(spacing: 8) {
+                VStack(spacing: 12) {
                     Spacer()
                     Image(systemName: "doc.text.magnifyingglass")
                         .font(.system(size: 32, weight: .light))
@@ -114,8 +105,11 @@ public struct LogsView: View {
                 }
                 .frame(maxWidth: .infinity)
             } else if content.isEmpty {
-                VStack(spacing: 8) {
+                VStack(spacing: 12) {
                     Spacer()
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 32, weight: .light))
+                        .foregroundStyle(.quaternary)
                     Text("Log file is empty.")
                         .font(.callout)
                         .foregroundStyle(.secondary)

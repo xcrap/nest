@@ -35,13 +35,20 @@ public struct SitesView: View {
                     TextField("Filter...", text: $searchText)
                         .textFieldStyle(.plain)
                         .font(.callout)
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.04))
-                )
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                 Spacer()
 
@@ -84,7 +91,11 @@ public struct SitesView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(filteredSites) { site in
                             SiteRow(site: site, isHovered: hoveredSiteId == site.id, onEdit: { editingSite = site })
-                                .onHover { h in hoveredSiteId = h ? site.id : nil }
+                                .onHover { h in
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        hoveredSiteId = h ? site.id : nil
+                                    }
+                                }
                             if site.id != filteredSites.last?.id {
                                 Divider().padding(.leading, 32)
                             }
@@ -156,7 +167,7 @@ public struct ImportResult {
     public init(message: String) { self.message = message }
 }
 
-// MARK: - Compact Site Row (single line)
+// MARK: - Compact Site Row (single line, stable height)
 
 public struct SiteRow: View {
     @EnvironmentObject var store: SiteStore
@@ -171,12 +182,14 @@ public struct SiteRow: View {
         self.onEdit = onEdit
     }
 
+    private var isRunning: Bool { site.status == .running }
+
     public var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             // Status
             Circle()
-                .fill(site.status == .running ? Color.green : Color.secondary.opacity(0.2))
-                .frame(width: 7, height: 7)
+                .fill(isRunning ? Color.green : Color.secondary.opacity(0.2))
+                .frame(width: 8, height: 8)
 
             // Name
             Text(site.name)
@@ -188,11 +201,11 @@ public struct SiteRow: View {
             // Domain
             Text(site.domain)
                 .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(.blue.opacity(0.7))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(width: 180, alignment: .leading)
 
-            // Path (truncated, fills remaining space)
+            // Path
             Text(site.rootPath)
                 .font(.callout)
                 .foregroundStyle(.tertiary)
@@ -200,53 +213,31 @@ public struct SiteRow: View {
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Hover actions
-            if isHovered {
-                Button { onEdit() } label: {
-                    Image(systemName: "pencil")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-
-                Button {
+            // Hover actions — always rendered, opacity-controlled
+            HStack(spacing: 0) {
+                rowAction(icon: "pencil", help: "Edit") { onEdit() }
+                rowAction(icon: "trash", help: "Delete") {
                     store.deleteSite(id: site.id)
                     reloadConfig()
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.caption)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
             }
+            .opacity(isHovered ? 1 : 0)
 
             // Start/Stop
-            Button {
-                let newStatus: SiteStatus = site.status == .running ? .stopped : .running
+            StartStopButton(isRunning: isRunning) {
+                let newStatus: SiteStatus = isRunning ? .stopped : .running
                 store.setSiteStatus(id: site.id, status: newStatus)
                 reloadConfig()
-            } label: {
-                Text(site.status == .running ? "Stop" : "Start")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .frame(width: 34)
-                    .padding(.vertical, 3)
-                    .padding(.horizontal, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(site.status == .running ? Color.red.opacity(0.1) : Color.green.opacity(0.1))
-                    )
-                    .foregroundStyle(site.status == .running ? Color.red : Color.green)
             }
-            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
         .background(isHovered ? Color.primary.opacity(0.03) : Color.clear)
+        .contentShape(Rectangle())
         .contextMenu {
             Button("Edit...") { onEdit() }
-            Button(site.status == .running ? "Stop" : "Start") {
-                store.setSiteStatus(id: site.id, status: site.status == .running ? .stopped : .running)
+            Button(isRunning ? "Stop" : "Start") {
+                store.setSiteStatus(id: site.id, status: isRunning ? .stopped : .running)
                 reloadConfig()
             }
             Divider()
@@ -255,6 +246,25 @@ public struct SiteRow: View {
                 reloadConfig()
             }
         }
+    }
+
+    @State private var hoveredAction: String?
+
+    private func rowAction(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.callout)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(hoveredAction == icon ? Color.primary.opacity(0.08) : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(hoveredAction == icon ? .primary : .secondary)
+        .onHover { h in hoveredAction = h ? icon : nil }
+        .help(help)
     }
 
     private func reloadConfig() {
@@ -280,5 +290,38 @@ public struct SiteExportDocument: FileDocument {
     }
     public func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         FileWrapper(regularFileWithContents: data)
+    }
+}
+
+// MARK: - Start/Stop Button with hover
+
+struct StartStopButton: View {
+    let isRunning: Bool
+    let action: () -> Void
+    @State private var isButtonHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(isRunning ? "Stop" : "Start")
+                .font(.caption)
+                .fontWeight(.medium)
+                .frame(width: 36)
+                .padding(.vertical, 3)
+                .padding(.horizontal, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(buttonFill)
+                )
+                .foregroundStyle(isRunning ? Color.red : Color.green)
+        }
+        .buttonStyle(.plain)
+        .onHover { h in isButtonHovered = h }
+    }
+
+    private var buttonFill: Color {
+        if isButtonHovered {
+            return isRunning ? Color.red.opacity(0.18) : Color.green.opacity(0.18)
+        }
+        return isRunning ? Color.red.opacity(0.08) : Color.green.opacity(0.08)
     }
 }

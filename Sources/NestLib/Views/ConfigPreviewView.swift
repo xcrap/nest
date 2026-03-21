@@ -35,13 +35,15 @@ public struct ConfigPreviewView: View {
             editorArea
         }
         .onAppear { loadContent() }
-        .onChange(of: selectedConfig) { _ in loadContent() }
+        .onChange(of: selectedConfig) { loadContent() }
     }
 
     private var configToolbar: some View {
-        HStack(spacing: 0) {
-            ForEach(ConfigFile.allCases) { file in
-                configTab(file)
+        HStack(spacing: 12) {
+            HStack(spacing: 2) {
+                ForEach(ConfigFile.allCases) { file in
+                    configTab(file)
+                }
             }
 
             Spacer()
@@ -51,25 +53,26 @@ public struct ConfigPreviewView: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .truncationMode(.head)
-                .padding(.trailing, 8)
 
             if saved {
-                Text("Saved")
-                    .font(.callout)
+                Label("Saved", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
                     .foregroundStyle(.green)
-                    .transition(.opacity)
-                    .padding(.trailing, 6)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
 
-            Button("Save") {
+            Button {
                 saveContent()
+            } label: {
+                Label("Save", systemImage: "square.and.arrow.down")
+                    .font(.callout)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .keyboardShortcut("s", modifiers: .command)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(.bar)
     }
 
@@ -83,10 +86,10 @@ public struct ConfigPreviewView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(selectedConfig == file ? Color.accentColor.opacity(0.12) : Color.clear)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(selectedConfig == file ? Color.primary.opacity(0.1) : Color.clear)
                 )
-                .foregroundStyle(selectedConfig == file ? Color.accentColor : Color.secondary)
+                .foregroundStyle(selectedConfig == file ? .primary : .secondary)
         }
         .buttonStyle(.plain)
     }
