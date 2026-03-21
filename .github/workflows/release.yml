@@ -40,13 +40,16 @@ jobs:
       - name: Run tests
         run: make test
 
-      - name: Build, sign, notarize, and create DMG
+      - name: Build and sign
         run: |
           make package
           codesign --force --deep --options runtime \
             --sign "$CSC_NAME" \
             --entitlements scripts/entitlements.plist \
             dist/Nest.app
+
+      - name: Create DMG and notarize
+        run: |
           VERSION=$(cat version.txt)
           mkdir -p .dmg-staging
           cp -R dist/Nest.app .dmg-staging/
@@ -60,16 +63,19 @@ jobs:
             --wait
           xcrun stapler staple "dist/Nest-${VERSION}.dmg"
 
+      - name: Create Sparkle update ZIP
+        run: |
+          VERSION=$(cat version.txt)
+          ditto -c -k --keepParent dist/Nest.app "dist/Nest-${VERSION}.zip"
+
       - name: Generate Sparkle appcast
         run: |
           VERSION=$(cat version.txt)
-          DOWNLOAD_URL="https://github.com/xcrap/nest/releases/download/v${VERSION}/Nest-${VERSION}.dmg"
-          FILESIZE=$(stat -f%z "dist/Nest-${VERSION}.dmg")
-          # Sign the update with Sparkle EdDSA key
-          SIGNATURE=$(.build/artifacts/sparkle/Sparkle/bin/sign_update "dist/Nest-${VERSION}.dmg" -f <(echo "$SPARKLE_KEY") 2>/dev/null || echo "")
-          # Extract edSignature and length from signature output
-          ED_SIGNATURE=$(echo "$SIGNATURE" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
-          cat > appcast.xml << APPCAST
+          DOWNLOAD_URL="https://github.com/xcrap/nest/releases/download/v${VERSION}/Nest-${VERSION}.zip"
+          SIGN_OUTPUT=$(.build/artifacts/sparkle/Sparkle/bin/sign_update "dist/Nest-${VERSION}.zip" -f <(echo "$SPARKLE_KEY") 2>&1)
+          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
+          ED_LENGTH=$(echo "$SIGN_OUTPUT" | grep -o 'length="[^"]*"' | cut -d'"' -f2)
+          cat > appcast.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.net/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
             <channel>
@@ -78,12 +84,13 @@ jobs:
                 <title>Version ${VERSION}</title>
                 <sparkle:version>${VERSION}</sparkle:version>
                 <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
                 <pubDate>$(date -R)</pubDate>
-                <enclosure url="${DOWNLOAD_URL}" length="${FILESIZE}" type="application/octet-stream" sparkle:edSignature="${ED_SIGNATURE}" />
+                <enclosure url="${DOWNLOAD_URL}" ${SIGN_OUTPUT} type="application/octet-stream" />
               </item>
             </channel>
           </rss>
-          APPCAST
+          EOF
 
       - name: Publish GitHub release
         uses: ncipollo/release-action@v1
@@ -91,7 +98,7 @@ jobs:
           allowUpdates: true
           generateReleaseNotes: true
           removeArtifacts: true
-          artifacts: "dist/Nest-*.dmg"
+          artifacts: "dist/Nest-*.dmg,dist/Nest-*.zip"
 
       - name: Push appcast to main
         run: |
