@@ -92,12 +92,20 @@ jobs:
           </rss>
           EOF
 
+      - name: Clean existing release assets
+        run: |
+          VERSION=$(cat version.txt)
+          for asset in $(gh release view "v${VERSION}" --json assets --jq '.assets[].name' 2>/dev/null); do
+            gh release delete-asset "v${VERSION}" "$asset" --yes 2>/dev/null || true
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Publish GitHub release
         uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
           generateReleaseNotes: true
-          removeArtifacts: true
           artifacts: "dist/Nest-*.dmg,dist/Nest-*.zip"
 
       - name: Push appcast to main
