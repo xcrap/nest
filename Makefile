@@ -25,6 +25,7 @@ package: build
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
 	cp $(BUILD_DIR)/Nest $(APP_BUNDLE)/Contents/MacOS/Nest
+	cp scripts/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	sed 's/$${VERSION}/$(VERSION)/g; s/$${BUILD_ID}/$(BUILD_ID)/g; s/$${BUNDLE_ID}/$(BUNDLE_ID)/g' \
 		scripts/Info.plist > $(APP_BUNDLE)/Contents/Info.plist
 	@echo "$(APP_BUNDLE) created (version $(VERSION), build $(BUILD_ID))"
