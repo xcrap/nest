@@ -16,7 +16,7 @@ Nest is a native macOS SwiftUI app for managing local PHP development sites with
 Install the runtimes and DNS resolver via Homebrew:
 
 ```bash
-brew install frankenphp
+brew install dunglas/frankenphp/frankenphp
 brew install mariadb
 brew install dnsmasq
 ```
