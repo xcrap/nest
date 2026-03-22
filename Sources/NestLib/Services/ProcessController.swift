@@ -181,6 +181,62 @@ public final class ProcessController: ObservableObject {
         stopMariaDB()
     }
 
+    // MARK: - Wake Recovery
+
+    /// Restore services after system wake from sleep.
+    /// macOS can flush PF redirect rules and DNS cache during sleep.
+    public func handleSystemWake() {
+        detectRunningProcesses()
+        flushDNSCache()
+
+        let shouldCheckPF = frankenphpRunning
+        guard shouldCheckPF else { return }
+
+        // Check if PF port redirect survived sleep; reload if broken
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self, !self.isPortRedirectWorking() else { return }
+            self.reloadPFRules()
+        }
+    }
+
+    /// Test whether PF redirects port 80 to 8080 (reaches Caddy).
+    private nonisolated func isPortRedirectWorking() -> Bool {
+        guard let url = URL(string: "http://localhost:80") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 2
+        let semaphore = DispatchSemaphore(value: 0)
+        var working = false
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            if response is HTTPURLResponse { working = true }
+            semaphore.signal()
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 3)
+        return working
+    }
+
+    /// Reload PF rules to restore port 80/443 → 8080/8443 redirects.
+    private nonisolated func reloadPFRules() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e",
+            "do shell script \"/sbin/pfctl -ef /etc/pf.conf 2>/dev/null\" with administrator privileges"
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+    }
+
+    /// Flush macOS DNS cache so .test domains resolve immediately.
+    private nonisolated func flushDNSCache() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/dscacheutil")
+        process.arguments = ["-flushcache"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+    }
+
     // MARK: - Private
 
     private nonisolated func killAll(_ name: String) {

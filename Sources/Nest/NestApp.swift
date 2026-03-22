@@ -41,6 +41,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var processController: ProcessController?
     var updaterController: SPUStandardUpdaterController?
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSystemWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
@@ -177,6 +186,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pc.stopMariaDB()
         } else {
             pc.startMariaDB(serverBinary: store.settings.runtimePaths.mariadbServer)
+        }
+    }
+
+    @objc func handleSystemWake() {
+        // Delay to let network stack stabilize after wake
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            self?.processController?.handleSystemWake()
         }
     }
 
