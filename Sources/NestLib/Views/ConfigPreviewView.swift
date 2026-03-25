@@ -115,7 +115,7 @@ public struct ConfigPreviewView: View {
             case .phpAppSnippet:
                 editedContent = renderer.phpAppSnippet
             case .phpIni:
-                editedContent = "; php.ini for FrankenPHP\n; Place PHP configuration directives here.\n"
+                editedContent = "; php.ini for FrankenPHP\n; Place PHP configuration directives here.\n\n[PHP]\nerror_reporting = E_ALL & ~E_DEPRECATED\n"
             case .myCnf:
                 editedContent = "[client-server]\n\n!includedir /opt/homebrew/etc/my.cnf.d\n"
             }

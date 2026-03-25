@@ -70,7 +70,10 @@ public struct ConfigRenderer {
                 @blocked path */.* *.sql *.log *.bak *.env
                 respond @blocked 404
                 encode zstd gzip
-                php_server
+                php_server {
+                    env PHP_INI_log_errors 1
+                    env PHP_INI_error_log php_errors.log
+                }
                 file_server
             }
         }
@@ -101,5 +104,6 @@ public struct ConfigRenderer {
 
         let snippetPath = (snippetsDirectory as NSString).appendingPathComponent("php-app")
         try phpAppSnippet.write(toFile: snippetPath, atomically: true, encoding: .utf8)
+
     }
 }
