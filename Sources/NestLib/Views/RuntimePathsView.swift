@@ -54,6 +54,7 @@ public struct RuntimePathsView: View {
                     settingsCard(title: "FrankenPHP", icon: "bolt.fill", color: .purple) {
                         VStack(spacing: 12) {
                             pathRow("Binary", path: $paths.frankenphpBinary, isDirectory: false)
+                            pathRow("php.ini", path: $paths.phpIniPath, isDirectory: false)
                             pathRow("Log File", path: $paths.frankenphpLog, isDirectory: false)
                         }
                     }

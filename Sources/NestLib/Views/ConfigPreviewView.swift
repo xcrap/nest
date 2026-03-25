@@ -28,6 +28,16 @@ public struct ConfigPreviewView: View {
 
     public init() {}
 
+    /// Returns the effective file path for a config, using the detected
+    /// php.ini path from RuntimePaths instead of the hardcoded fallback.
+    private func effectivePath(for config: ConfigFile) -> String {
+        if config == .phpIni {
+            let detected = store.settings.runtimePaths.phpIniPath
+            return detected.isEmpty ? config.filePath : detected
+        }
+        return config.filePath
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             configToolbar
@@ -48,7 +58,7 @@ public struct ConfigPreviewView: View {
 
             Spacer()
 
-            Text(selectedConfig.filePath)
+            Text(effectivePath(for: selectedConfig))
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
@@ -102,7 +112,7 @@ public struct ConfigPreviewView: View {
     }
 
     private func loadContent() {
-        let path = selectedConfig.filePath
+        let path = effectivePath(for: selectedConfig)
         if let onDisk = try? String(contentsOfFile: path, encoding: .utf8) {
             editedContent = onDisk
         } else {
@@ -115,7 +125,7 @@ public struct ConfigPreviewView: View {
             case .phpAppSnippet:
                 editedContent = renderer.phpAppSnippet
             case .phpIni:
-                editedContent = "; php.ini for FrankenPHP\n; Place PHP configuration directives here.\n\n[PHP]\nerror_reporting = E_ALL & ~E_DEPRECATED\n"
+                editedContent = "; php.ini for FrankenPHP\n; Place PHP configuration directives here.\n\n[PHP]\nerror_reporting = E_ALL & ~E_DEPRECATED\nlog_errors = On\nerror_log = php_errors.log\n"
             case .myCnf:
                 editedContent = "[client-server]\n\n!includedir /opt/homebrew/etc/my.cnf.d\n"
             }
@@ -123,7 +133,7 @@ public struct ConfigPreviewView: View {
     }
 
     private func saveContent() {
-        let path = selectedConfig.filePath
+        let path = effectivePath(for: selectedConfig)
 
         // Ensure parent directory exists
         let parentDir = (path as NSString).deletingLastPathComponent

@@ -7,6 +7,7 @@ public struct RuntimePaths: Codable, Equatable {
     public var mysqldump: String
     public var frankenphpLog: String
     public var mariadbLog: String
+    public var phpIniPath: String
 
     public init(
         frankenphpBinary: String = "",
@@ -14,7 +15,8 @@ public struct RuntimePaths: Codable, Equatable {
         mariadbClient: String = "",
         mysqldump: String = "",
         frankenphpLog: String = "",
-        mariadbLog: String = ""
+        mariadbLog: String = "",
+        phpIniPath: String = ""
     ) {
         self.frankenphpBinary = frankenphpBinary
         self.mariadbServer = mariadbServer
@@ -22,6 +24,7 @@ public struct RuntimePaths: Codable, Equatable {
         self.mysqldump = mysqldump
         self.frankenphpLog = frankenphpLog
         self.mariadbLog = mariadbLog
+        self.phpIniPath = phpIniPath
     }
 
     /// Try to detect default Homebrew paths.
@@ -84,6 +87,23 @@ public struct RuntimePaths: Codable, Equatable {
             paths.frankenphpLog = caddyLog
         } else {
             paths.frankenphpLog = brewFPLog
+        }
+
+        // PHP ini: detect from FrankenPHP binary
+        if !paths.frankenphpBinary.isEmpty {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: paths.frankenphpBinary)
+            process.arguments = ["php-cli", "-r", "echo php_ini_loaded_file();"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            try? process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let detectedPath = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !detectedPath.isEmpty {
+                paths.phpIniPath = detectedPath
+            }
         }
 
         // MariaDB log: prefer Homebrew default
