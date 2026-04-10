@@ -42,6 +42,10 @@ public enum LaunchAgentService {
         (launchAgentsDirectory as NSString).appendingPathComponent("\(label).plist")
     }
 
+    public static func serviceTarget(for label: String) -> String {
+        "\(domainTarget)/\(label)"
+    }
+
     @discardableResult
     public static func start(_ definition: LaunchAgentDefinition) -> CommandResult {
         do {
@@ -51,6 +55,9 @@ public enum LaunchAgentService {
         }
 
         let plistPath = plistPath(for: definition.label)
+        let serviceTarget = serviceTarget(for: definition.label)
+        _ = SystemProcess.capture("/bin/launchctl", arguments: ["enable", serviceTarget])
+        _ = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", serviceTarget])
         _ = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", domainTarget, plistPath])
         let bootstrap = SystemProcess.capture("/bin/launchctl", arguments: ["bootstrap", domainTarget, plistPath])
         if bootstrap.status != 0 {
@@ -59,14 +66,20 @@ public enum LaunchAgentService {
 
         return SystemProcess.capture(
             "/bin/launchctl",
-            arguments: ["kickstart", "-k", "\(domainTarget)/\(definition.label)"]
+            arguments: ["kickstart", "-k", serviceTarget]
         )
     }
 
     @discardableResult
     public static func stop(label: String, removePlist: Bool = true) -> CommandResult {
         let plistPath = plistPath(for: label)
-        let result = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", domainTarget, plistPath])
+        let serviceTarget = serviceTarget(for: label)
+        _ = SystemProcess.capture("/bin/launchctl", arguments: ["disable", serviceTarget])
+
+        var result = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", serviceTarget])
+        if result.status != 0 {
+            result = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", domainTarget, plistPath])
+        }
 
         if removePlist {
             try? FileManager.default.removeItem(atPath: plistPath)

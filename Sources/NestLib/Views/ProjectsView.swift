@@ -41,6 +41,7 @@ public struct ProjectsView: View {
                             ProjectRow(
                                 project: project,
                                 isRunning: processController.isProjectRunning(project),
+                                operation: processController.projectOperation(for: project.id),
                                 isHovered: hoveredProjectId == project.id,
                                 error: processController.projectError(for: project.id),
                                 onEdit: { editingProject = project },
@@ -161,12 +162,17 @@ private struct ProjectRow: View {
 
     let project: AppProject
     let isRunning: Bool
+    let operation: ProcessController.ProjectOperation?
     let isHovered: Bool
     let error: String?
     let onEdit: () -> Void
     let onShowLog: () -> Void
 
     @State private var hoveredAction: String?
+
+    private var isBusy: Bool {
+        operation != nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -208,8 +214,9 @@ private struct ProjectRow: View {
                     }
                 }
                 .opacity(isHovered ? 1 : 0)
+                .disabled(isBusy)
 
-                StartStopButton(isRunning: isRunning) {
+                StartStopButton(isRunning: isRunning, isPending: isBusy) {
                     if isRunning {
                         processController.stopProject(project)
                     } else {
@@ -235,7 +242,9 @@ private struct ProjectRow: View {
         .contentShape(Rectangle())
         .contextMenu {
             Button("Edit...") { onEdit() }
+                .disabled(isBusy)
             Button("View Logs") { onShowLog() }
+                .disabled(isBusy)
             Button(isRunning ? "Stop" : "Start") {
                 if isRunning {
                     processController.stopProject(project)
@@ -243,11 +252,13 @@ private struct ProjectRow: View {
                     processController.startProject(project)
                 }
             }
+            .disabled(isBusy)
             Divider()
             Button("Delete", role: .destructive) {
                 processController.stopProject(project)
                 store.deleteProject(id: project.id)
             }
+            .disabled(isBusy)
         }
     }
 

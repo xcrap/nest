@@ -5,6 +5,20 @@ import Darwin
 /// Manages FrankenPHP and MariaDB processes.
 @MainActor
 public final class ProcessController: ObservableObject {
+    public enum ProjectOperation: Sendable {
+        case starting
+        case stopping
+
+        var label: String {
+            switch self {
+            case .starting:
+                "Starting"
+            case .stopping:
+                "Stopping"
+            }
+        }
+    }
+
     @Published public var frankenphpRunning = false
     @Published public var mariadbRunning = false
     @Published public var cloudflaredRunning = false
@@ -13,6 +27,7 @@ public final class ProcessController: ObservableObject {
     @Published public var cloudflaredError: String?
     @Published public private(set) var projectStatuses: [String: Bool] = [:]
     @Published public private(set) var projectErrors: [String: String] = [:]
+    @Published public private(set) var projectOperations: [String: ProjectOperation] = [:]
 
     private var frankenphpProcess: Process?
     private var mariadbProcess: Process?
@@ -23,6 +38,32 @@ public final class ProcessController: ObservableObject {
     private struct ProjectPort: Sendable {
         let id: String
         let port: Int
+    }
+
+    private struct ProjectLaunchRequest: Sendable {
+        let id: String
+        let name: String
+        let command: String
+        let directory: String
+        let port: Int
+        let launchAgentLabel: String
+        let logPath: String
+        let launchPath: String
+    }
+
+    private struct ProjectLaunchOutcome: Sendable {
+        let running: Bool
+        let error: String?
+    }
+
+    private struct ProjectCommandSpec: Sendable {
+        let programArguments: [String]
+        let environmentOverrides: [String: String]
+    }
+
+    private struct ParsedProjectCommand: Sendable {
+        let arguments: [String]
+        let environmentAssignments: [String: String]
     }
 
     /// PID of an externally-started FrankenPHP process (not managed by us).
@@ -254,48 +295,69 @@ public final class ProcessController: ObservableObject {
     // MARK: - App Projects
 
     public func startProject(_ project: AppProject) {
+        guard projectOperations[project.id] == nil else { return }
         projectErrors[project.id] = nil
+        projectOperations[project.id] = .starting
 
-        if Self.isPortInUse(project.port) {
-            projectStatuses[project.id] = true
-            return
-        }
-
-        let resolvedCommand = resolveCommand(for: project)
-        let result = LaunchAgentService.start(
-            LaunchAgentDefinition(
-                label: project.launchAgentLabel,
-                programArguments: ["/bin/zsh", "-lc", resolvedCommand],
-                workingDirectory: project.directory,
-                environment: [
-                    "PATH": launchPath(),
-                    "PORT": "\(project.port)",
-                    "HOST": "0.0.0.0"
-                ],
-                standardOutPath: project.logPath,
-                standardErrorPath: project.logPath
-            )
+        let request = ProjectLaunchRequest(
+            id: project.id,
+            name: project.name,
+            command: project.command,
+            directory: project.directory,
+            port: project.port,
+            launchAgentLabel: project.launchAgentLabel,
+            logPath: project.logPath,
+            launchPath: Self.launchPath()
         )
 
-        if result.status == 0 {
-            projectStatuses[project.id] = true
-        } else {
-            projectErrors[project.id] = result.output.isEmpty ? "Failed to start \(project.name)" : result.output
+        Task { [request] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                Self.performProjectStart(request)
+            }.value
+
+            projectOperations.removeValue(forKey: request.id)
+            projectStatuses[request.id] = outcome.running
+            projectErrors[request.id] = outcome.error
         }
     }
 
     public func stopProject(_ project: AppProject) {
-        _ = LaunchAgentService.stop(label: project.launchAgentLabel)
+        guard projectOperations[project.id] == nil else { return }
+        projectErrors[project.id] = nil
+        projectOperations[project.id] = .stopping
 
-        for pid in Self.pids(onPort: project.port) {
-            killProcess(pid)
+        let request = ProjectLaunchRequest(
+            id: project.id,
+            name: project.name,
+            command: project.command,
+            directory: project.directory,
+            port: project.port,
+            launchAgentLabel: project.launchAgentLabel,
+            logPath: project.logPath,
+            launchPath: Self.launchPath()
+        )
+
+        Task { [request] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                Self.performProjectStop(request)
+            }.value
+
+            projectOperations.removeValue(forKey: request.id)
+            projectStatuses[request.id] = outcome.running
+            projectErrors[request.id] = outcome.error
         }
-
-        projectStatuses[project.id] = false
     }
 
     public func isProjectRunning(_ project: AppProject) -> Bool {
         projectStatuses[project.id] ?? false
+    }
+
+    public func isProjectBusy(_ project: AppProject) -> Bool {
+        projectOperations[project.id] != nil
+    }
+
+    public func projectOperation(for id: String) -> ProjectOperation? {
+        projectOperations[id]
     }
 
     public func projectError(for id: String) -> String? {
@@ -431,7 +493,78 @@ public final class ProcessController: ObservableObject {
         !pids(onPort: port).isEmpty
     }
 
-    private func launchPath() -> String {
+    private nonisolated static func performProjectStart(_ request: ProjectLaunchRequest) -> ProjectLaunchOutcome {
+        if isPortInUse(request.port) {
+            return ProjectLaunchOutcome(running: true, error: nil)
+        }
+
+        let resolvedCommand = resolveCommand(for: request)
+        let environment = [
+            "PATH": request.launchPath,
+            "PORT": "\(request.port)",
+            "HOST": "0.0.0.0"
+        ].merging(resolvedCommand.environmentOverrides) { _, override in override }
+
+        let result = LaunchAgentService.start(
+            LaunchAgentDefinition(
+                label: request.launchAgentLabel,
+                programArguments: resolvedCommand.programArguments,
+                workingDirectory: request.directory,
+                environment: environment,
+                standardOutPath: request.logPath,
+                standardErrorPath: request.logPath,
+                keepAlive: false
+            )
+        )
+
+        if result.status == 0 {
+            if waitForPortState(request.port, inUse: true, timeoutNanoseconds: 12_000_000_000) {
+                return ProjectLaunchOutcome(running: true, error: nil)
+            }
+
+            let error = "Started \(request.name), but nothing began listening on port \(request.port). Check the project log."
+            return ProjectLaunchOutcome(running: false, error: error)
+        }
+
+        let error = result.output.isEmpty ? "Failed to start \(request.name)" : result.output
+        return ProjectLaunchOutcome(running: false, error: error)
+    }
+
+    private nonisolated static func waitForPortState(
+        _ port: Int,
+        inUse expectedState: Bool,
+        timeoutNanoseconds: UInt64,
+        pollNanoseconds: UInt32 = 150_000_000
+    ) -> Bool {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            if isPortInUse(port) == expectedState {
+                return true
+            }
+
+            usleep(pollNanoseconds / 1_000)
+        }
+
+        return isPortInUse(port) == expectedState
+    }
+
+    private nonisolated static func performProjectStop(_ request: ProjectLaunchRequest) -> ProjectLaunchOutcome {
+        _ = LaunchAgentService.stop(label: request.launchAgentLabel)
+
+        for pid in pids(onPort: request.port) {
+            killProcess(pid)
+        }
+
+        if waitForPortState(request.port, inUse: false, timeoutNanoseconds: 5_000_000_000) {
+            return ProjectLaunchOutcome(running: false, error: nil)
+        }
+
+        let error = "Stopped \(request.name), but port \(request.port) is still in use."
+        return ProjectLaunchOutcome(running: false, error: error)
+    }
+
+    private nonisolated static func launchPath() -> String {
         let homeDirectory = NSHomeDirectory()
         let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
         let candidates = [
@@ -470,24 +603,31 @@ public final class ProcessController: ObservableObject {
             .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    private func killProcess(_ pid: Int32) {
+    private nonisolated static func killProcess(_ pid: Int32) {
         guard pid > 0 else { return }
         _ = Darwin.kill(pid, SIGTERM)
         usleep(500_000)
         _ = Darwin.kill(pid, SIGKILL)
     }
 
-    private func resolveCommand(for project: AppProject) -> String {
-        if !project.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return project.command
+    private nonisolated static func resolveCommand(for request: ProjectLaunchRequest) -> ProjectCommandSpec {
+        if !request.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let parsed = parseCommand(request.command) {
+                return directCommand(arguments: parsed.arguments, environmentOverrides: parsed.environmentAssignments)
+            }
+
+            return ProjectCommandSpec(
+                programArguments: ["/bin/zsh", "-c", request.command],
+                environmentOverrides: [:]
+            )
         }
 
-        let packagePath = (project.directory as NSString).appendingPathComponent("package.json")
+        let packagePath = (request.directory as NSString).appendingPathComponent("package.json")
         guard
             let data = FileManager.default.contents(atPath: packagePath),
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
-            return "bun run start"
+            return directCommand(arguments: ["bun", "run", "start"])
         }
 
         let dependencies = (json["dependencies"] as? [String: Any] ?? [:]).merging(
@@ -496,18 +636,148 @@ public final class ProcessController: ObservableObject {
         let scripts = json["scripts"] as? [String: Any] ?? [:]
 
         if dependencies["next"] != nil {
-            return "bun x next start -p \(project.port)"
+            return directCommand(arguments: ["bun", "x", "next", "start", "-p", "\(request.port)"])
         }
         if dependencies["vite"] != nil {
-            return "bun x vite --host --port \(project.port)"
+            return directCommand(arguments: ["bun", "x", "vite", "--host", "--port", "\(request.port)"])
         }
         if scripts["start"] != nil {
-            return "bun run start"
+            return directCommand(arguments: ["bun", "run", "start"])
         }
         if scripts["dev"] != nil {
-            return "bun run dev"
+            return directCommand(arguments: ["bun", "run", "dev"])
         }
 
-        return "bun run start"
+        return directCommand(arguments: ["bun", "run", "start"])
+    }
+
+    private nonisolated static func directCommand(
+        arguments: [String],
+        environmentOverrides: [String: String] = [:]
+    ) -> ProjectCommandSpec {
+        guard let executable = arguments.first else {
+            return ProjectCommandSpec(
+                programArguments: ["/bin/zsh", "-c", "exit 1"],
+                environmentOverrides: environmentOverrides
+            )
+        }
+
+        let programArguments: [String]
+        if executable.contains("/") {
+            programArguments = arguments
+        } else {
+            programArguments = ["/usr/bin/env"] + arguments
+        }
+
+        return ProjectCommandSpec(
+            programArguments: programArguments,
+            environmentOverrides: environmentOverrides
+        )
+    }
+
+    private nonisolated static func parseCommand(_ command: String) -> ParsedProjectCommand? {
+        var tokens: [String] = []
+        var current = ""
+        var inSingleQuotes = false
+        var inDoubleQuotes = false
+        var isEscaping = false
+        let shellOnlyCharacters = CharacterSet(charactersIn: "|&;<>$`~*?[]\n")
+
+        for character in command {
+            if isEscaping {
+                current.append(character)
+                isEscaping = false
+                continue
+            }
+
+            if inSingleQuotes {
+                if character == "'" {
+                    inSingleQuotes = false
+                } else {
+                    current.append(character)
+                }
+                continue
+            }
+
+            if inDoubleQuotes {
+                if character == "\"" {
+                    inDoubleQuotes = false
+                } else if character == "\\" {
+                    isEscaping = true
+                } else {
+                    current.append(character)
+                }
+                continue
+            }
+
+            if character == "\\" {
+                isEscaping = true
+                continue
+            }
+
+            if character == "'" {
+                inSingleQuotes = true
+                continue
+            }
+
+            if character == "\"" {
+                inDoubleQuotes = true
+                continue
+            }
+
+            if character.unicodeScalars.allSatisfy(shellOnlyCharacters.contains) {
+                return nil
+            }
+
+            if character.isWhitespace {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current.removeAll(keepingCapacity: true)
+                }
+                continue
+            }
+
+            current.append(character)
+        }
+
+        guard !isEscaping, !inSingleQuotes, !inDoubleQuotes else { return nil }
+
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+
+        guard !tokens.isEmpty else { return nil }
+
+        var environmentAssignments: [String: String] = [:]
+        var argumentStartIndex = 0
+
+        while argumentStartIndex < tokens.count,
+              let assignment = parseEnvironmentAssignment(tokens[argumentStartIndex]) {
+            environmentAssignments[assignment.key] = assignment.value
+            argumentStartIndex += 1
+        }
+
+        let arguments = Array(tokens.dropFirst(argumentStartIndex))
+        guard !arguments.isEmpty else { return nil }
+
+        return ParsedProjectCommand(
+            arguments: arguments,
+            environmentAssignments: environmentAssignments
+        )
+    }
+
+    private nonisolated static func parseEnvironmentAssignment(_ token: String) -> (key: String, value: String)? {
+        guard let separatorIndex = token.firstIndex(of: "=") else { return nil }
+        let key = String(token[..<separatorIndex])
+        let value = String(token[token.index(after: separatorIndex)...])
+
+        guard isValidEnvironmentKey(key) else { return nil }
+        return (key, value)
+    }
+
+    private nonisolated static func isValidEnvironmentKey(_ key: String) -> Bool {
+        guard let first = key.first else { return false }
+        guard first == "_" || first.isLetter else { return false }
+        return key.dropFirst().allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
     }
 }

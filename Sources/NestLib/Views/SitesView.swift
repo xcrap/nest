@@ -297,28 +297,42 @@ public struct SiteExportDocument: FileDocument {
 
 struct StartStopButton: View {
     let isRunning: Bool
+    var isPending: Bool = false
     let action: () -> Void
     @State private var isButtonHovered = false
 
     var body: some View {
         Button(action: action) {
-            Text(isRunning ? "Stop" : "Start")
-                .font(.caption)
-                .fontWeight(.medium)
-                .frame(width: 36)
-                .padding(.vertical, 3)
-                .padding(.horizontal, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(buttonFill)
-                )
-                .foregroundStyle(isRunning ? Color.red : Color.green)
+            Group {
+                if isPending {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.secondary)
+                        .frame(width: 36)
+                } else {
+                    Text(isRunning ? "Stop" : "Start")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .frame(width: 36)
+                        .foregroundStyle(isRunning ? Color.red : Color.green)
+                }
+            }
+            .padding(.vertical, 3)
+            .padding(.horizontal, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(buttonFill)
+            )
         }
         .buttonStyle(.plain)
+        .disabled(isPending)
         .onHover { h in isButtonHovered = h }
     }
 
     private var buttonFill: Color {
+        if isPending {
+            return isButtonHovered ? Color.primary.opacity(0.12) : Color.primary.opacity(0.06)
+        }
         if isButtonHovered {
             return isRunning ? Color.red.opacity(0.18) : Color.green.opacity(0.18)
         }
