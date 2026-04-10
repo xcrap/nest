@@ -4,11 +4,14 @@ public struct LogsView: View {
     @EnvironmentObject var store: SiteStore
     @State private var selectedLog: LogFile = .frankenphp
     @State private var content: String = ""
+    @State private var isLoading = false
     @State private var autoRefresh = false
-    @State private var refreshTimer: Timer?
+    @State private var loadTask: Task<Void, Never>?
+    @State private var refreshTask: Task<Void, Never>?
 
     enum LogFile: String, CaseIterable, Identifiable {
         case frankenphp = "FrankenPHP"
+        case cloudflared = "Cloudflared"
         case mariadb = "MariaDB"
 
         var id: String { rawValue }
@@ -18,13 +21,49 @@ public struct LogsView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            logToolbar
+            header
             Divider()
-            logContent
+
+            VStack(spacing: 0) {
+                logToolbar
+                Divider()
+                logContent
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .padding(16)
         }
-        .onAppear { loadLog() }
-        .onChange(of: selectedLog) { loadLog() }
-        .onDisappear { stopTimer() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .task(id: logReloadKey) {
+            reloadLog()
+        }
+        .onDisappear {
+            stopRefreshLoop()
+            cancelLoad()
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Logs")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Text("Tail service logs without leaving the app.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     private var logToolbar: some View {
@@ -59,11 +98,15 @@ public struct LogsView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .onChange(of: autoRefresh) {
-                if autoRefresh { startTimer() } else { stopTimer() }
+                if autoRefresh {
+                    startRefreshLoop()
+                } else {
+                    stopRefreshLoop()
+                }
             }
 
             Button {
-                loadLog()
+                reloadLog()
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.callout)
@@ -104,6 +147,9 @@ public struct LogsView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
+            } else if isLoading && content.isEmpty {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if content.isEmpty {
                 VStack(spacing: 12) {
                     Spacer()
@@ -117,52 +163,75 @@ public struct LogsView: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                ScrollView([.horizontal, .vertical]) {
-                    Text(content)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .padding(12)
-                }
-                .background(Color(nsColor: .textBackgroundColor))
+                LogTextView(text: content)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     // MARK: - Logic
 
+    private var logReloadKey: String {
+        "\(selectedLog.rawValue)|\(currentLogPath)"
+    }
+
     private var currentLogPath: String {
         switch selectedLog {
         case .frankenphp: return store.settings.runtimePaths.frankenphpLog
+        case .cloudflared: return store.settings.runtimePaths.cloudflaredLog
         case .mariadb: return store.settings.runtimePaths.mariadbLog
         }
     }
 
-    private func loadLog() {
+    private func reloadLog() {
+        cancelLoad()
+
         let path = currentLogPath
         guard !path.isEmpty else {
+            isLoading = false
             content = ""
             return
         }
-        guard let data = FileManager.default.contents(atPath: path) else {
-            content = ""
-            return
+
+        isLoading = true
+        loadTask = Task {
+            let loaded = await LogTailReader.load(path: path)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            if currentLogPath == path {
+                isLoading = false
+                if content != loaded {
+                    content = loaded
+                }
+            }
         }
-        // Show last 500KB max
-        let maxBytes = 500_000
-        let slice = data.count > maxBytes ? data.suffix(maxBytes) : data
-        content = String(data: slice, encoding: .utf8) ?? ""
     }
 
-    private func startTimer() {
-        stopTimer()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
-            loadLog()
+    private func startRefreshLoop() {
+        stopRefreshLoop()
+        refreshTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled else {
+                    return
+                }
+                await MainActor.run {
+                    reloadLog()
+                }
+            }
         }
     }
 
-    private func stopTimer() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
+    private func stopRefreshLoop() {
+        refreshTask?.cancel()
+        refreshTask = nil
+    }
+
+    private func cancelLoad() {
+        loadTask?.cancel()
+        loadTask = nil
     }
 }

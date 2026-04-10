@@ -8,6 +8,7 @@ public struct ConfigPreviewView: View {
 
     enum ConfigFile: String, CaseIterable, Identifiable {
         case caddyfile = "Caddyfile"
+        case cloudflared = "cloudflared"
         case securityConf = "security.conf"
         case phpAppSnippet = "php-app"
         case phpIni = "php.ini"
@@ -18,6 +19,7 @@ public struct ConfigPreviewView: View {
         var filePath: String {
             switch self {
             case .caddyfile: return "/opt/homebrew/etc/Caddyfile"
+            case .cloudflared: return CloudflareSettings.detectDefaults().configPath
             case .securityConf: return "/opt/homebrew/etc/security.conf"
             case .phpAppSnippet: return "/opt/homebrew/etc/snippets/php-app"
             case .phpIni: return "/opt/homebrew/etc/php.ini"
@@ -34,6 +36,10 @@ public struct ConfigPreviewView: View {
         if config == .phpIni {
             let detected = store.settings.runtimePaths.phpIniPath
             return detected.isEmpty ? config.filePath : detected
+        }
+        if config == .cloudflared {
+            let configured = store.settings.cloudflareSettings.configPath
+            return configured.isEmpty ? config.filePath : configured
         }
         return config.filePath
     }
@@ -120,6 +126,8 @@ public struct ConfigPreviewView: View {
             switch selectedConfig {
             case .caddyfile:
                 editedContent = renderer.render(sites: store.sites)
+            case .cloudflared:
+                editedContent = tunnelRenderer.render(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
             case .securityConf:
                 editedContent = renderer.securityConf
             case .phpAppSnippet:
@@ -151,5 +159,9 @@ public struct ConfigPreviewView: View {
             configDirectory: store.settings.caddyConfigDirectory,
             frankenphpLogPath: store.settings.runtimePaths.frankenphpLog
         )
+    }
+
+    private var tunnelRenderer: TunnelConfigRenderer {
+        TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
     }
 }

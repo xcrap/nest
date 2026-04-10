@@ -33,7 +33,10 @@ Other directories:
 
 ## Runtime State
 
-Nest stores only its own data under `~/Library/Application Support/Nest/config/`:
+Nest stores only its own data under a bundle-specific app support directory:
+
+- development app: `~/Library/Application Support/dev.nest.app/config/`
+- packaged app: `~/Library/Application Support/app.nest/config/`
 
 - `sites.json`, `settings.json`
 
@@ -80,7 +83,7 @@ make test
 Run (development):
 
 ```bash
-make run
+make dev
 ```
 
 Package (create Nest.app):
@@ -93,5 +96,5 @@ make package
 
 - When changing models or services in `NestLib`, ensure both the app and tests still build.
 - When changing config generation, verify the rendered Caddyfile matches expected format.
-- When changing UI, run the app to verify (`make run`).
+- When changing UI, run the app to verify (`make dev`).
 - After significant changes, rebuild the `.app` bundle (`make package`).

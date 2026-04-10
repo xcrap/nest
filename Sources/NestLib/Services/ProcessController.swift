@@ -1,13 +1,18 @@
 import Foundation
 import Combine
+import Darwin
 
 /// Manages FrankenPHP and MariaDB processes.
 @MainActor
 public final class ProcessController: ObservableObject {
     @Published public var frankenphpRunning = false
     @Published public var mariadbRunning = false
+    @Published public var cloudflaredRunning = false
     @Published public var frankenphpError: String?
     @Published public var mariadbError: String?
+    @Published public var cloudflaredError: String?
+    @Published public private(set) var projectStatuses: [String: Bool] = [:]
+    @Published public private(set) var projectErrors: [String: String] = [:]
 
     private var frankenphpProcess: Process?
     private var mariadbProcess: Process?
@@ -18,12 +23,18 @@ public final class ProcessController: ObservableObject {
     private var externalFrankenPHPPid: Int32?
     /// PID of an externally-started MariaDB process.
     private var externalMariaDBPid: Int32?
+    /// Label used for the Nest-managed Cloudflared launch agent.
+    public static var cloudflaredLaunchAgentLabel: String {
+        "\(launchAgentNamespace).cloudflared"
+    }
+
+    private static var launchAgentNamespace: String {
+        "app.nest.\(AppSettings.storageRootName.replacingOccurrences(of: ".", with: "-"))"
+    }
 
     public init() {
-        let appSupport = NSSearchPathForDirectoriesInDomains(
-            .applicationSupportDirectory, .userDomainMask, true
-        ).first ?? ("~/Library/Application Support" as NSString).expandingTildeInPath
-        self.pidDirectory = (appSupport as NSString).appendingPathComponent("Nest/run")
+        AppSettings.prepareStorage()
+        self.pidDirectory = AppSettings.nestRunDirectory
         try? FileManager.default.createDirectory(atPath: pidDirectory, withIntermediateDirectories: true)
         detectRunningProcesses()
     }
@@ -44,6 +55,8 @@ public final class ProcessController: ObservableObject {
             externalMariaDBPid = pid
             mariadbRunning = true
         }
+
+        cloudflaredRunning = isCloudflaredProcessRunning()
     }
 
     private func checkCaddyAdmin() {
@@ -181,6 +194,116 @@ public final class ProcessController: ObservableObject {
         stopMariaDB()
     }
 
+    // MARK: - Cloudflared
+
+    public func startCloudflared(settings: AppSettings) {
+        guard !cloudflaredRunning else { return }
+        cloudflaredError = nil
+
+        guard !settings.runtimePaths.cloudflaredBinary.isEmpty else {
+            cloudflaredError = "cloudflared binary path is not set."
+            return
+        }
+
+        guard settings.cloudflareSettings.hasLocalConfiguration else {
+            cloudflaredError = "Cloudflare tunnel configuration is incomplete."
+            return
+        }
+
+        let definition = LaunchAgentDefinition(
+            label: Self.cloudflaredLaunchAgentLabel,
+            programArguments: [
+                settings.runtimePaths.cloudflaredBinary,
+                "--config",
+                settings.cloudflareSettings.configPath,
+                "tunnel",
+                "run",
+                settings.cloudflareSettings.tunnelName
+            ],
+            environment: [:],
+            standardOutPath: settings.runtimePaths.cloudflaredLog,
+            standardErrorPath: settings.runtimePaths.cloudflaredLog
+        )
+
+        let result = LaunchAgentService.start(definition)
+        if result.status == 0 {
+            cloudflaredRunning = true
+        } else {
+            cloudflaredError = result.output.isEmpty ? "Failed to start cloudflared" : result.output
+        }
+    }
+
+    public func stopCloudflared() {
+        _ = LaunchAgentService.stop(label: Self.cloudflaredLaunchAgentLabel)
+        _ = SystemProcess.capture("/usr/bin/pkill", arguments: ["-f", "cloudflared.*tunnel.*run"])
+        cloudflaredRunning = false
+    }
+
+    public func refreshStatusSnapshot(settings: AppSettings, projects: [AppProject]) {
+        detectRunningProcesses()
+        cloudflaredRunning = isCloudflaredProcessRunning()
+        refreshProjectStatuses(projects)
+    }
+
+    // MARK: - App Projects
+
+    public func startProject(_ project: AppProject) {
+        projectErrors[project.id] = nil
+
+        if isPortInUse(project.port) {
+            projectStatuses[project.id] = true
+            return
+        }
+
+        let resolvedCommand = resolveCommand(for: project)
+        let result = LaunchAgentService.start(
+            LaunchAgentDefinition(
+                label: project.launchAgentLabel,
+                programArguments: ["/bin/zsh", "-lc", resolvedCommand],
+                workingDirectory: project.directory,
+                environment: [
+                    "PATH": launchPath(),
+                    "PORT": "\(project.port)",
+                    "HOST": "0.0.0.0"
+                ],
+                standardOutPath: project.logPath,
+                standardErrorPath: project.logPath
+            )
+        )
+
+        if result.status == 0 {
+            projectStatuses[project.id] = true
+        } else {
+            projectErrors[project.id] = result.output.isEmpty ? "Failed to start \(project.name)" : result.output
+        }
+    }
+
+    public func stopProject(_ project: AppProject) {
+        _ = LaunchAgentService.stop(label: project.launchAgentLabel)
+
+        for pid in pids(onPort: project.port) {
+            killProcess(pid)
+        }
+
+        projectStatuses[project.id] = false
+    }
+
+    public func isProjectRunning(_ project: AppProject) -> Bool {
+        projectStatuses[project.id] ?? isPortInUse(project.port)
+    }
+
+    public func projectError(for id: String) -> String? {
+        projectErrors[id] ?? nil
+    }
+
+    public func refreshProjectStatuses(_ projects: [AppProject]) {
+        var updated: [String: Bool] = [:]
+        for project in projects {
+            updated[project.id] = isPortInUse(project.port)
+        }
+        projectStatuses = updated
+    }
+
     // MARK: - Wake Recovery
 
     /// Restore services after system wake from sleep.
@@ -278,5 +401,93 @@ public final class ProcessController: ObservableObject {
     private func removePID(name: String) {
         let path = (pidDirectory as NSString).appendingPathComponent("\(name).pid")
         try? FileManager.default.removeItem(atPath: path)
+    }
+
+    private func isCloudflaredProcessRunning() -> Bool {
+        SystemProcess.capture("/usr/bin/pgrep", arguments: ["-f", "cloudflared.*tunnel.*run"]).status == 0
+    }
+
+    private func isPortInUse(_ port: Int) -> Bool {
+        !pids(onPort: port).isEmpty
+    }
+
+    private func launchPath() -> String {
+        let homeDirectory = NSHomeDirectory()
+        let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let candidates = [
+            currentPath,
+            "\(homeDirectory)/.bun/bin",
+            "\(homeDirectory)/.local/bin",
+            AppSettings.nestBinDirectory,
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ]
+
+        var seen: Set<String> = []
+        var components: [String] = []
+
+        for candidate in candidates {
+            for part in candidate.split(separator: ":").map(String.init) where !part.isEmpty {
+                if seen.insert(part).inserted {
+                    components.append(part)
+                }
+            }
+        }
+
+        return components.joined(separator: ":")
+    }
+
+    private func pids(onPort port: Int) -> [Int32] {
+        let result = SystemProcess.capture("/usr/sbin/lsof", arguments: ["-ti", ":\(port)"])
+        guard result.status == 0 else { return [] }
+        return result.output
+            .split(separator: "\n")
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    private func killProcess(_ pid: Int32) {
+        guard pid > 0 else { return }
+        _ = Darwin.kill(pid, SIGTERM)
+        usleep(500_000)
+        _ = Darwin.kill(pid, SIGKILL)
+    }
+
+    private func resolveCommand(for project: AppProject) -> String {
+        if !project.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return project.command
+        }
+
+        let packagePath = (project.directory as NSString).appendingPathComponent("package.json")
+        guard
+            let data = FileManager.default.contents(atPath: packagePath),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return "bun run start"
+        }
+
+        let dependencies = (json["dependencies"] as? [String: Any] ?? [:]).merging(
+            json["devDependencies"] as? [String: Any] ?? [:]
+        ) { current, _ in current }
+        let scripts = json["scripts"] as? [String: Any] ?? [:]
+
+        if dependencies["next"] != nil {
+            return "bun x next start -p \(project.port)"
+        }
+        if dependencies["vite"] != nil {
+            return "bun x vite --host --port \(project.port)"
+        }
+        if scripts["start"] != nil {
+            return "bun run start"
+        }
+        if scripts["dev"] != nil {
+            return "bun run dev"
+        }
+
+        return "bun run start"
     }
 }

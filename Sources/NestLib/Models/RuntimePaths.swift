@@ -5,8 +5,10 @@ public struct RuntimePaths: Codable, Equatable {
     public var mariadbServer: String
     public var mariadbClient: String
     public var mysqldump: String
+    public var cloudflaredBinary: String
     public var frankenphpLog: String
     public var mariadbLog: String
+    public var cloudflaredLog: String
     public var phpIniPath: String
 
     public init(
@@ -14,17 +16,46 @@ public struct RuntimePaths: Codable, Equatable {
         mariadbServer: String = "",
         mariadbClient: String = "",
         mysqldump: String = "",
+        cloudflaredBinary: String = "",
         frankenphpLog: String = "",
         mariadbLog: String = "",
+        cloudflaredLog: String = "",
         phpIniPath: String = ""
     ) {
         self.frankenphpBinary = frankenphpBinary
         self.mariadbServer = mariadbServer
         self.mariadbClient = mariadbClient
         self.mysqldump = mysqldump
+        self.cloudflaredBinary = cloudflaredBinary
         self.frankenphpLog = frankenphpLog
         self.mariadbLog = mariadbLog
+        self.cloudflaredLog = cloudflaredLog
         self.phpIniPath = phpIniPath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case frankenphpBinary
+        case mariadbServer
+        case mariadbClient
+        case mysqldump
+        case cloudflaredBinary
+        case frankenphpLog
+        case mariadbLog
+        case cloudflaredLog
+        case phpIniPath
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        frankenphpBinary = try container.decodeIfPresent(String.self, forKey: .frankenphpBinary) ?? ""
+        mariadbServer = try container.decodeIfPresent(String.self, forKey: .mariadbServer) ?? ""
+        mariadbClient = try container.decodeIfPresent(String.self, forKey: .mariadbClient) ?? ""
+        mysqldump = try container.decodeIfPresent(String.self, forKey: .mysqldump) ?? ""
+        cloudflaredBinary = try container.decodeIfPresent(String.self, forKey: .cloudflaredBinary) ?? ""
+        frankenphpLog = try container.decodeIfPresent(String.self, forKey: .frankenphpLog) ?? ""
+        mariadbLog = try container.decodeIfPresent(String.self, forKey: .mariadbLog) ?? ""
+        cloudflaredLog = try container.decodeIfPresent(String.self, forKey: .cloudflaredLog) ?? ""
+        phpIniPath = try container.decodeIfPresent(String.self, forKey: .phpIniPath) ?? ""
     }
 
     /// Try to detect default Homebrew paths.
@@ -37,8 +68,7 @@ public struct RuntimePaths: Codable, Equatable {
         // FrankenPHP: Homebrew first, then legacy Nest-managed binary
         let frankenphpCandidates = [
             "\(brewPrefix)/bin/frankenphp",
-            NSSearchPathForDirectoriesInDomains(.applicationSupportDirectory, .userDomainMask, true)
-                .first.map { ($0 as NSString).appendingPathComponent("Nest/bin/frankenphp") } ?? "",
+            (AppSettings.nestBinDirectory as NSString).appendingPathComponent("frankenphp"),
         ]
         for candidate in frankenphpCandidates {
             if !candidate.isEmpty && fm.isExecutableFile(atPath: candidate) {
@@ -75,6 +105,11 @@ public struct RuntimePaths: Codable, Equatable {
             if fm.isExecutableFile(atPath: mysqldumpBin) {
                 paths.mysqldump = mysqldumpBin
             }
+        }
+
+        let cloudflared = "\(brewPrefix)/bin/cloudflared"
+        if fm.isExecutableFile(atPath: cloudflared) {
+            paths.cloudflaredBinary = cloudflared
         }
 
         // FrankenPHP log: prefer Homebrew default, then Caddy default
@@ -114,7 +149,44 @@ public struct RuntimePaths: Codable, Equatable {
             paths.mariadbLog = brewDBLog
         }
 
+        paths.cloudflaredLog = (AppSettings.nestLogsDirectory as NSString)
+            .appendingPathComponent("cloudflared.log")
+
         return paths
+    }
+
+    public func fillingMissingValues(from defaults: RuntimePaths = RuntimePaths.detectDefaults()) -> RuntimePaths {
+        var merged = self
+
+        if merged.frankenphpBinary.isEmpty {
+            merged.frankenphpBinary = defaults.frankenphpBinary
+        }
+        if merged.mariadbServer.isEmpty {
+            merged.mariadbServer = defaults.mariadbServer
+        }
+        if merged.mariadbClient.isEmpty {
+            merged.mariadbClient = defaults.mariadbClient
+        }
+        if merged.mysqldump.isEmpty {
+            merged.mysqldump = defaults.mysqldump
+        }
+        if merged.cloudflaredBinary.isEmpty {
+            merged.cloudflaredBinary = defaults.cloudflaredBinary
+        }
+        if merged.frankenphpLog.isEmpty {
+            merged.frankenphpLog = defaults.frankenphpLog
+        }
+        if merged.mariadbLog.isEmpty {
+            merged.mariadbLog = defaults.mariadbLog
+        }
+        if merged.cloudflaredLog.isEmpty {
+            merged.cloudflaredLog = defaults.cloudflaredLog
+        }
+        if merged.phpIniPath.isEmpty {
+            merged.phpIniPath = defaults.phpIniPath
+        }
+
+        return merged
     }
 
     public func validate() -> [String] {
@@ -143,6 +215,12 @@ public struct RuntimePaths: Codable, Equatable {
             issues.append("mysqldump path is not set.")
         } else if !fm.isExecutableFile(atPath: mysqldump) {
             issues.append("mysqldump not found or not executable at: \(mysqldump)")
+        }
+
+        if cloudflaredBinary.isEmpty {
+            issues.append("cloudflared binary path is not set.")
+        } else if !fm.isExecutableFile(atPath: cloudflaredBinary) {
+            issues.append("cloudflared binary not found or not executable at: \(cloudflaredBinary)")
         }
 
         return issues

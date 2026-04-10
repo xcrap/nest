@@ -52,6 +52,14 @@ public struct EnvironmentChecksView: View {
                                 onStop: { processController.stopFrankenPHP() }
                             )
                             serviceControl(
+                                name: "Cloudflared",
+                                icon: "network",
+                                running: processController.cloudflaredRunning,
+                                error: processController.cloudflaredError,
+                                onStart: { startCloudflared() },
+                                onStop: { processController.stopCloudflared() }
+                            )
+                            serviceControl(
                                 name: "MariaDB",
                                 icon: "cylinder.fill",
                                 running: processController.mariadbRunning,
@@ -225,5 +233,11 @@ public struct EnvironmentChecksView: View {
         let paths = store.settings.runtimePaths
         guard !paths.mariadbServer.isEmpty else { return }
         processController.startMariaDB(serverBinary: paths.mariadbServer)
+    }
+
+    private func startCloudflared() {
+        let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
+        try? renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        processController.startCloudflared(settings: store.settings)
     }
 }

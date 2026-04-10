@@ -62,7 +62,7 @@ The app's **Environment** screen verifies all prerequisites with copy-pasteable 
 ## Getting Started
 
 1. Complete the prerequisites above.
-2. Open `Nest.app` (or `make run` for development).
+2. Open `Nest.app` (or `make dev` for development).
 3. Go to **Runtime Paths** and click **Auto-Detect** (or configure paths manually), then **Save**.
 4. Add sites in the **Sites** screen.
 5. Start FrankenPHP and MariaDB from the sidebar controls.
@@ -70,7 +70,10 @@ The app's **Environment** screen verifies all prerequisites with copy-pasteable 
 
 ## App Data
 
-Nest stores only its own config under `~/Library/Application Support/Nest/config/`:
+Nest stores its own config under a bundle-specific app support directory:
+
+- development app: `~/Library/Application Support/dev.nest.app/config/`
+- packaged app: `~/Library/Application Support/app.nest/config/`
 
 - `sites.json` — site definitions
 - `settings.json` — runtime paths and app settings
@@ -98,7 +101,8 @@ FrankenPHP, MariaDB, and dnsmasq all run via `brew services`.
 
 ```bash
 make build      # Build
-make run        # Run in development
+make dev        # Build and open the dev app
+make run        # Alias for make dev
 make test       # Run tests
 make package    # Package into Nest.app
 ```

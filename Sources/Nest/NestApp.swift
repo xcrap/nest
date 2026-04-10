@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import NestLib
 import ServiceManagement
 import Sparkle
@@ -11,7 +12,7 @@ struct NestApp: App {
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     var body: some Scene {
-        Window("Nest", id: "main") {
+        WindowGroup("Nest") {
             ContentView()
                 .environmentObject(store)
                 .environmentObject(processController)
@@ -25,6 +26,14 @@ struct NestApp: App {
         }
         .defaultSize(width: 960, height: 640)
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(replacing: .sidebar) {
+                Button("Toggle Sidebar") {
+                    NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("b", modifiers: .command)
+            }
+        }
 
         Settings {
             SettingsView(updater: updaterController.updater)
@@ -42,6 +51,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var updaterController: SPUStandardUpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleSystemWake),
@@ -74,14 +85,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         buildMenu()
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            self?.buildMenu()
+            Task { @MainActor in
+                self?.buildMenu()
+            }
         }
     }
 
     func buildMenu() {
+        if let store, let processController {
+            processController.refreshStatusSnapshot(settings: store.settings, projects: store.appProjects)
+        }
+
         let menu = NSMenu()
         let phpRunning = processController?.frankenphpRunning ?? false
         let dbRunning = processController?.mariadbRunning ?? false
+        let cloudflaredRunning = processController?.cloudflaredRunning ?? false
 
         let phpItem = NSMenuItem(title: "FrankenPHP: \(phpRunning ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
         phpItem.image = NSImage(systemSymbolName: phpRunning ? "circle.fill" : "circle", accessibilityDescription: nil)
@@ -93,14 +111,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         dbItem.image?.isTemplate = true
         menu.addItem(dbItem)
 
+        let cloudflareItem = NSMenuItem(title: "Cloudflared: \(cloudflaredRunning ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
+        cloudflareItem.image = NSImage(systemSymbolName: cloudflaredRunning ? "circle.fill" : "circle", accessibilityDescription: nil)
+        cloudflareItem.image?.isTemplate = true
+        menu.addItem(cloudflareItem)
+
         menu.addItem(.separator())
 
-        if phpRunning || dbRunning {
+        if phpRunning || dbRunning || cloudflaredRunning {
             let stopAll = NSMenuItem(title: "Stop All Services", action: #selector(stopAllServices), keyEquivalent: "")
             stopAll.target = self
             menu.addItem(stopAll)
         }
-        if !phpRunning || !dbRunning {
+        if !phpRunning || !dbRunning || !cloudflaredRunning {
             let startAll = NSMenuItem(title: "Start All Services", action: #selector(startAllServices), keyEquivalent: "")
             startAll.target = self
             menu.addItem(startAll)
@@ -115,6 +138,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let dbToggle = NSMenuItem(title: dbRunning ? "Stop MariaDB" : "Start MariaDB", action: #selector(toggleMariaDB), keyEquivalent: "")
         dbToggle.target = self
         menu.addItem(dbToggle)
+
+        let cloudflareToggle = NSMenuItem(title: cloudflaredRunning ? "Stop Cloudflared" : "Start Cloudflared", action: #selector(toggleCloudflared), keyEquivalent: "")
+        cloudflareToggle.target = self
+        menu.addItem(cloudflareToggle)
 
         menu.addItem(.separator())
 
@@ -152,6 +179,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func stopAllServices() {
         processController?.stopFrankenPHP()
+        processController?.stopCloudflared()
         processController?.stopMariaDB()
     }
 
@@ -162,6 +190,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let renderer = ConfigRenderer(configDirectory: store.settings.caddyConfigDirectory, frankenphpLogPath: paths.frankenphpLog)
             try? renderer.writeAll(sites: store.sites)
             pc.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
+        }
+        if !pc.cloudflaredRunning && !paths.cloudflaredBinary.isEmpty && store.settings.cloudflareSettings.hasLocalConfiguration {
+            let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
+            try? renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+            pc.startCloudflared(settings: store.settings)
         }
         if !pc.mariadbRunning && !paths.mariadbServer.isEmpty {
             pc.startMariaDB(serverBinary: paths.mariadbServer)
@@ -186,6 +219,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pc.stopMariaDB()
         } else {
             pc.startMariaDB(serverBinary: store.settings.runtimePaths.mariadbServer)
+        }
+    }
+
+    @objc func toggleCloudflared() {
+        guard let pc = processController, let store else { return }
+        if pc.cloudflaredRunning {
+            pc.stopCloudflared()
+        } else {
+            let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
+            try? renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+            pc.startCloudflared(settings: store.settings)
         }
     }
 

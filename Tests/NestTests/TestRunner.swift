@@ -18,7 +18,12 @@ struct TestRunner {
         }
 
         run("Site Model", SiteTests.runAll)
+        run("AppSettings", AppSettingsTests.runAll)
+        run("RuntimePaths", RuntimePathsTests.runAll)
         run("ConfigRenderer", ConfigRendererTests.runAll)
+        run("LogTailReader", LogTailReaderTests.runAll)
+        run("TunnelConfigRenderer", TunnelConfigRendererTests.runAll)
+        run("MindImportService", MindImportServiceTests.runAll)
         run("MigrationService", MigrationServiceTests.runAll)
 
         print("Total: \(totalPassed) passed, \(totalFailed) failed")

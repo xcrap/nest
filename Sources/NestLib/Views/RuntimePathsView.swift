@@ -69,6 +69,13 @@ public struct RuntimePathsView: View {
                         }
                     }
 
+                    settingsCard(title: "Cloudflared", icon: "network", color: .green) {
+                        VStack(spacing: 12) {
+                            pathRow("Binary", path: $paths.cloudflaredBinary, isDirectory: false)
+                            pathRow("Log File", path: $paths.cloudflaredLog, isDirectory: false)
+                        }
+                    }
+
                     // Validation issues
                     if !validationIssues.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {

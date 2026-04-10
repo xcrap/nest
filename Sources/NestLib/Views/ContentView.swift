@@ -2,20 +2,22 @@ import SwiftUI
 
 public enum SidebarItem: String, CaseIterable, Identifiable {
     case sites = "Sites"
-    case runtimePaths = "Runtime Paths"
-    case config = "Configuration"
+    case projects = "Projects"
+    case tunnels = "Tunnels"
+    case dns = "DNS"
     case logs = "Logs"
-    case environment = "Environment"
+    case settings = "Settings"
 
     public var id: String { rawValue }
 
     public var icon: String {
         switch self {
         case .sites: return "globe"
-        case .runtimePaths: return "gearshape.2"
-        case .config: return "doc.text"
+        case .projects: return "square.stack.3d.up"
+        case .tunnels: return "network"
+        case .dns: return "icloud"
         case .logs: return "doc.text.magnifyingglass"
-        case .environment: return "stethoscope"
+        case .settings: return "gearshape"
         }
     }
 }
@@ -56,6 +58,17 @@ public struct ContentView: View {
                         }
                     )
                     serviceRow(
+                        "Cloudflared",
+                        running: processController.cloudflaredRunning,
+                        onToggle: {
+                            if processController.cloudflaredRunning {
+                                processController.stopCloudflared()
+                            } else {
+                                startCloudflared()
+                            }
+                        }
+                    )
+                    serviceRow(
                         "MariaDB",
                         running: processController.mariadbRunning,
                         onToggle: {
@@ -79,29 +92,23 @@ public struct ContentView: View {
                 switch selection {
                 case .sites:
                     SitesView()
-                case .runtimePaths:
-                    RuntimePathsView()
-                case .config:
-                    ConfigPreviewView()
+                case .projects:
+                    ProjectsView()
+                case .tunnels:
+                    TunnelsView()
+                case .dns:
+                    DNSView()
                 case .logs:
                     LogsView()
-                case .environment:
-                    EnvironmentChecksView()
+                case .settings:
+                    WorkspaceSettingsView()
                 case nil:
                     emptyState
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear {
-            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "b" {
-                    NSApp.keyWindow?.firstResponder?.tryToPerform(#selector(NSSplitViewController.toggleSidebar(_:)), with: nil)
-                    return nil
-                }
-                return event
-            }
-        }
+        .navigationSplitViewStyle(.balanced)
     }
 
     private func serviceRow(_ name: String, running: Bool, onToggle: @escaping () -> Void) -> some View {
@@ -143,5 +150,11 @@ public struct ContentView: View {
         )
         try? renderer.writeAll(sites: store.sites)
         processController.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
+    }
+
+    private func startCloudflared() {
+        let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
+        try? renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        processController.startCloudflared(settings: store.settings)
     }
 }
