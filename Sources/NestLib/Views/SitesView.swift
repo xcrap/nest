@@ -77,8 +77,8 @@ public struct SitesView: View {
                 .keyboardShortcut("n", modifiers: .command)
                 .help("Add Site (Cmd+N)")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
             .background(.bar)
 
             Divider()
@@ -232,7 +232,7 @@ public struct SiteRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(isHovered ? Color.primary.opacity(0.03) : Color.clear)
+        .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
         .contentShape(Rectangle())
         .contextMenu {
             Button("Edit...") { onEdit() }

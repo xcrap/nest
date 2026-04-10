@@ -15,18 +15,18 @@ public struct CloudflareView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
-
             ScrollView {
-                VStack(spacing: 18) {
+                VStack(spacing: 12) {
                     essentialsCard
                     advancedCard
                     serviceCard
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                .padding(16)
             }
+
+            Divider()
+
+            footer
         }
         .fileExporter(
             isPresented: $exportSettings,
@@ -48,31 +48,22 @@ public struct CloudflareView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Cloudflare")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Text("Keep the tunnel essentials up front. The rest stays available when you need it.")
+    // MARK: - Footer
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Button("Import Settings...") { importSettings = true }
+                Button("Export Settings...") { exportSettings = true }
+            } label: {
+                Image(systemName: "arrow.left.arrow.right")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Transfer Settings")
 
             Spacer()
-
-            Menu {
-                Button("Import Settings...") {
-                    importSettings = true
-                }
-                Button("Export Settings...") {
-                    exportSettings = true
-                }
-            } label: {
-                Label("Transfer", systemImage: "arrow.left.arrow.right")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
 
             Button("Auto-Detect") {
                 cloudflareSettings = CloudflareSettings.detectDefaults()
@@ -80,29 +71,22 @@ public struct CloudflareView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
 
-            Button("Save") {
-                persistSettings()
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            Button("Save") { persistSettings() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut("s", modifiers: .command)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
+
+    // MARK: - Cards
 
     private var essentialsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Essentials")
-                        .font(.headline)
-                    Text("These are the values you are most likely to touch.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
+            Text("Essentials")
+                .font(.callout)
+                .fontWeight(.semibold)
 
             HStack(spacing: 12) {
                 settingField("Tunnel Name", text: $cloudflareSettings.tunnelName)
@@ -116,20 +100,15 @@ public struct CloudflareView: View {
                 }
             }
 
-            HStack(spacing: 18) {
-                readinessBadge(
-                    title: "Tunnel Service",
-                    ready: cloudflareSettings.hasLocalConfiguration
-                )
-                readinessBadge(
-                    title: "DNS API",
-                    ready: cloudflareSettings.hasAPIConfiguration
-                )
+            HStack(spacing: 16) {
+                readinessBadge(title: "Tunnel Service", ready: cloudflareSettings.hasLocalConfiguration)
+                readinessBadge(title: "DNS API", ready: cloudflareSettings.hasAPIConfiguration)
                 Spacer()
             }
         }
         .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var advancedCard: some View {
@@ -140,12 +119,10 @@ public struct CloudflareView: View {
                         settingField("Tunnel ID", text: $cloudflareSettings.tunnelId)
                         settingField("Tunnel Domain", text: $cloudflareSettings.tunnelDomain)
                     }
-
                     HStack(spacing: 12) {
                         settingField("Zone ID", text: $cloudflareSettings.zoneId)
                         settingField("Account ID", text: $cloudflareSettings.accountId)
                     }
-
                     HStack(spacing: 12) {
                         settingField("Credentials File", text: $cloudflareSettings.credentialsFilePath)
                         settingField("cloudflared Config", text: $cloudflareSettings.configPath)
@@ -153,34 +130,27 @@ public struct CloudflareView: View {
                 }
                 .padding(.top, 8)
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Advanced Tunnel & DNS Configuration")
-                        .font(.headline)
-                    Text("Only needed when you are moving the setup to another machine or fixing Cloudflare metadata.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Advanced")
+                    .font(.callout)
+                    .fontWeight(.semibold)
             }
         }
         .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var serviceCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Tunnel Service")
-                        .font(.headline)
-                    Text("Write config, push remote changes, and control the persistent cloudflared service.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Tunnel Service")
+                    .font(.callout)
+                    .fontWeight(.semibold)
                 Spacer()
                 serviceStatus
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button("Write Config") {
                     persistSettings()
                     writeTunnelConfig()
@@ -188,14 +158,15 @@ public struct CloudflareView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
-                Button("Sync Cloudflare") {
+                Button("Push to Cloudflare") {
                     persistSettings()
                     syncTunnelConfig()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .help("Writes the local tunnel config, then pushes the generated ingress rules to Cloudflare.")
 
-                Button(processController.cloudflaredRunning ? "Stop Cloudflared" : "Start Cloudflared") {
+                Button(processController.cloudflaredRunning ? "Stop" : "Start") {
                     persistSettings()
                     if processController.cloudflaredRunning {
                         processController.stopCloudflared()
@@ -209,6 +180,10 @@ public struct CloudflareView: View {
                 .tint(processController.cloudflaredRunning ? .red : .green)
             }
 
+            Text("Write Config updates the local cloudflared config on this Mac. Push to Cloudflare also sends the generated tunnel routes to Cloudflare's API.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             if let error = processController.cloudflaredError, !error.isEmpty {
                 Text(error)
                     .font(.caption)
@@ -216,24 +191,28 @@ public struct CloudflareView: View {
             }
         }
         .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    // MARK: - Components
+
     private var serviceStatus: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Circle()
-                .fill(processController.cloudflaredRunning ? Color.green : Color.secondary.opacity(0.25))
+                .fill(processController.cloudflaredRunning ? Color.green : Color.secondary.opacity(0.2))
                 .frame(width: 8, height: 8)
-            Text(processController.cloudflaredRunning ? "Cloudflared Running" : "Cloudflared Stopped")
+            Text(processController.cloudflaredRunning ? "Running" : "Stopped")
                 .font(.callout)
                 .foregroundStyle(processController.cloudflaredRunning ? .green : .secondary)
         }
     }
 
     private func readinessBadge(title: String, ready: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Image(systemName: ready ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                 .foregroundStyle(ready ? .green : .orange)
+                .font(.callout)
             Text(title)
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -252,6 +231,8 @@ public struct CloudflareView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    // MARK: - Actions
 
     private func persistSettings() {
         store.settings.cloudflareSettings = cloudflareSettings
@@ -279,7 +260,7 @@ public struct CloudflareView: View {
                     projects: store.appProjects
                 )
                 await MainActor.run {
-                    statusMessage = "Tunnel config pushed to Cloudflare."
+                    statusMessage = "Tunnel routes pushed to Cloudflare."
                 }
             } catch {
                 await MainActor.run {
@@ -304,6 +285,8 @@ public struct CloudflareView: View {
         }
     }
 }
+
+// MARK: - Export Document
 
 private struct CloudflareSettingsDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.json] }

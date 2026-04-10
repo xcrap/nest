@@ -16,8 +16,14 @@ public final class ProcessController: ObservableObject {
 
     private var frankenphpProcess: Process?
     private var mariadbProcess: Process?
+    private var projectStatusRefreshTask: Task<Void, Never>?
 
     private let pidDirectory: String
+
+    private struct ProjectPort: Sendable {
+        let id: String
+        let port: Int
+    }
 
     /// PID of an externally-started FrankenPHP process (not managed by us).
     private var externalFrankenPHPPid: Int32?
@@ -250,7 +256,7 @@ public final class ProcessController: ObservableObject {
     public func startProject(_ project: AppProject) {
         projectErrors[project.id] = nil
 
-        if isPortInUse(project.port) {
+        if Self.isPortInUse(project.port) {
             projectStatuses[project.id] = true
             return
         }
@@ -281,7 +287,7 @@ public final class ProcessController: ObservableObject {
     public func stopProject(_ project: AppProject) {
         _ = LaunchAgentService.stop(label: project.launchAgentLabel)
 
-        for pid in pids(onPort: project.port) {
+        for pid in Self.pids(onPort: project.port) {
             killProcess(pid)
         }
 
@@ -289,7 +295,7 @@ public final class ProcessController: ObservableObject {
     }
 
     public func isProjectRunning(_ project: AppProject) -> Bool {
-        projectStatuses[project.id] ?? isPortInUse(project.port)
+        projectStatuses[project.id] ?? false
     }
 
     public func projectError(for id: String) -> String? {
@@ -297,11 +303,25 @@ public final class ProcessController: ObservableObject {
     }
 
     public func refreshProjectStatuses(_ projects: [AppProject]) {
-        var updated: [String: Bool] = [:]
-        for project in projects {
-            updated[project.id] = isPortInUse(project.port)
+        let snapshot = projects.map { ProjectPort(id: $0.id, port: $0.port) }
+
+        projectStatusRefreshTask?.cancel()
+        projectStatusRefreshTask = Task.detached(priority: .utility) { [snapshot] in
+            var updated: [String: Bool] = [:]
+            updated.reserveCapacity(snapshot.count)
+
+            for project in snapshot {
+                guard !Task.isCancelled else { return }
+                updated[project.id] = Self.isPortInUse(project.port)
+            }
+
+            guard !Task.isCancelled else { return }
+            let resolvedStatuses = updated
+
+            await MainActor.run {
+                self.projectStatuses = resolvedStatuses
+            }
         }
-        projectStatuses = updated
     }
 
     // MARK: - Wake Recovery
@@ -407,7 +427,7 @@ public final class ProcessController: ObservableObject {
         SystemProcess.capture("/usr/bin/pgrep", arguments: ["-f", "cloudflared.*tunnel.*run"]).status == 0
     }
 
-    private func isPortInUse(_ port: Int) -> Bool {
+    private nonisolated static func isPortInUse(_ port: Int) -> Bool {
         !pids(onPort: port).isEmpty
     }
 
@@ -442,7 +462,7 @@ public final class ProcessController: ObservableObject {
         return components.joined(separator: ":")
     }
 
-    private func pids(onPort port: Int) -> [Int32] {
+    private nonisolated static func pids(onPort port: Int) -> [Int32] {
         let result = SystemProcess.capture("/usr/sbin/lsof", arguments: ["-ti", ":\(port)"])
         guard result.status == 0 else { return [] }
         return result.output

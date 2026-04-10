@@ -114,7 +114,7 @@ public struct ContentView: View {
     private func serviceRow(_ name: String, running: Bool, onToggle: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(running ? Color.green : Color.red.opacity(0.4))
+                .fill(running ? Color.green : Color.secondary.opacity(0.2))
                 .frame(width: 7, height: 7)
             Text(name)
                 .font(.callout)

@@ -9,12 +9,13 @@ public struct DNSView: View {
     @State private var showAddSheet = false
     @State private var newSubdomain = ""
     @State private var recordPendingDeletion: CloudflareDNSRecord?
+    @State private var hoveredRecordId: String?
 
     public init() {}
 
     public var body: some View {
         VStack(spacing: 0) {
-            header
+            toolbar
             Divider()
 
             if !store.settings.cloudflareSettings.hasAPIConfiguration {
@@ -25,15 +26,25 @@ public struct DNSView: View {
             } else if records.isEmpty {
                 emptyState
             } else {
-                List {
-                    ForEach(records) { record in
-                        DNSRouteRow(
-                            record: record,
-                            onDelete: { recordPendingDeletion = record }
-                        )
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(records) { record in
+                            DNSRouteRow(
+                                record: record,
+                                isHovered: hoveredRecordId == record.id,
+                                onDelete: { recordPendingDeletion = record }
+                            )
+                            .onHover { h in
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    hoveredRecordId = h ? record.id : nil
+                                }
+                            }
+                            if record.id != records.last?.id {
+                                Divider().padding(.leading, 16)
+                            }
+                        }
                     }
                 }
-                .listStyle(.inset)
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -43,9 +54,7 @@ public struct DNSView: View {
                     showAddSheet = false
                     newSubdomain = ""
                 },
-                onSave: {
-                    createRecord()
-                }
+                onSave: { createRecord() }
             )
         }
         .alert("DNS Status", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -72,83 +81,82 @@ public struct DNSView: View {
             },
             message: {
                 if let recordPendingDeletion {
-                    Text("This will remove `\(recordPendingDeletion.name)` from Cloudflare.")
+                    Text("Remove \(recordPendingDeletion.name) from Cloudflare.")
                 }
             }
         )
         .onAppear(perform: reload)
     }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("DNS Routes")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-
-                if store.settings.cloudflareSettings.hasAPIConfiguration {
-                    Text("\(records.count) route\(records.count == 1 ? "" : "s") pointing at the current tunnel")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
+    private var toolbar: some View {
+        HStack(spacing: 10) {
+            Text("\(records.count) route\(records.count == 1 ? "" : "s")")
+                .font(.callout)
+                .foregroundStyle(.secondary)
 
             Spacer()
 
             Button {
                 reload()
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Image(systemName: "arrow.clockwise")
+                    .font(.callout)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(!store.settings.cloudflareSettings.hasAPIConfiguration || isLoading)
+            .help("Refresh")
 
             Button {
                 showAddSheet = true
             } label: {
-                Label("Add Route", systemImage: "plus")
+                Image(systemName: "plus")
+                    .font(.callout)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(!store.settings.cloudflareSettings.hasAPIConfiguration || isLoading)
+            .help("Add DNS Route")
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+        .background(.bar)
     }
 
     private var missingConfiguration: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             Spacer()
-            Image(systemName: "icloud.slash")
-                .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.quaternary)
-            Text("Cloudflare API settings are incomplete.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Text("Open Settings > Cloudflare and fill in the API token, zone ID, account ID, tunnel ID, and tunnel domain.")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+            VStack(spacing: 14) {
+                Image(systemName: "icloud.slash")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundStyle(.quaternary)
+                Text("Cloudflare API not configured")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text("Fill in the API token, zone ID, account ID, tunnel ID and domain in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
             Spacer()
         }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             Spacer()
-            Image(systemName: "globe")
-                .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.quaternary)
-            Text("No DNS routes found for this tunnel.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Button("Add DNS Route") {
-                showAddSheet = true
+            VStack(spacing: 14) {
+                Image(systemName: "globe")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundStyle(.quaternary)
+                Text("No DNS routes found")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Add DNS Route") { showAddSheet = true }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
             Spacer()
         }
     }
@@ -216,60 +224,85 @@ public struct DNSView: View {
     }
 }
 
+// MARK: - DNS Route Row
+
 private struct DNSRouteRow: View {
     let record: CloudflareDNSRecord
+    let isHovered: Bool
     let onDelete: () -> Void
 
+    @State private var hoveredAction: String?
+
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(record.name)
-                    .font(.system(.body, design: .monospaced))
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
+        HStack(spacing: 10) {
+            Text(record.type)
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .frame(width: 42)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.blue.opacity(0.12))
+                )
+                .foregroundStyle(.blue)
 
-                HStack(spacing: 8) {
-                    Text(record.type)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            Text(record.name)
+                .font(.system(.callout, design: .monospaced))
+                .fontWeight(.medium)
+                .lineLimit(1)
+                .frame(width: 220, alignment: .leading)
 
-                    Text(record.content)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
+            Image(systemName: "arrow.right")
+                .font(.caption2)
+                .foregroundStyle(.quaternary)
 
-            Spacer(minLength: 12)
+            Text(record.content)
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             if record.proxied {
                 Text("Proxied")
-                    .font(.caption)
+                    .font(.caption2)
                     .fontWeight(.medium)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
                     .background(
-                        Capsule(style: .continuous)
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(Color.orange.opacity(0.12))
                     )
                     .foregroundStyle(.orange)
             }
 
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.callout)
+                    .frame(width: 26, height: 26)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(hoveredAction == "trash" ? Color.primary.opacity(0.08) : Color.clear)
+                    )
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(.plain)
+            .foregroundStyle(hoveredAction == "trash" ? .primary : .secondary)
+            .onHover { h in hoveredAction = h ? "trash" : nil }
+            .opacity(isHovered ? 1 : 0)
+            .help("Delete")
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
+        .contentShape(Rectangle())
         .contextMenu {
-            Button("Delete Route", role: .destructive) {
-                onDelete()
-            }
+            Button("Delete Route", role: .destructive) { onDelete() }
         }
     }
 }
+
+// MARK: - Add Record Sheet
 
 private struct DNSAddRecordSheet: View {
     @Binding var subdomain: String
@@ -284,7 +317,7 @@ private struct DNSAddRecordSheet: View {
                     Text("New DNS Route")
                         .font(.headline)
                     Text("Creates a proxied CNAME pointing at the current Cloudflare tunnel.")
-                        .font(.callout)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -293,7 +326,7 @@ private struct DNSAddRecordSheet: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Subdomain")
                     .font(.callout)
                     .fontWeight(.medium)
@@ -318,8 +351,6 @@ private struct DNSAddRecordSheet: View {
             .padding(20)
         }
         .frame(width: 420)
-        .onAppear {
-            isFocused = true
-        }
+        .onAppear { isFocused = true }
     }
 }

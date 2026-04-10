@@ -21,23 +21,9 @@ public struct LogsView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            header
+            toolbar
             Divider()
-
-            VStack(spacing: 0) {
-                logToolbar
-                Divider()
-                logContent
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-            )
-            .padding(16)
+            logContent
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: logReloadKey) {
@@ -49,24 +35,7 @@ public struct LogsView: View {
         }
     }
 
-    private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Logs")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Text("Tail service logs without leaving the app.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-
-    private var logToolbar: some View {
+    private var toolbar: some View {
         HStack(spacing: 12) {
             Picker("Log", selection: $selectedLog) {
                 ForEach(LogFile.allCases) { file in
@@ -75,12 +44,12 @@ public struct LogsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 200)
+            .frame(width: 260)
 
             Spacer()
 
             if currentLogPath.isEmpty {
-                Label("No log path configured", systemImage: "exclamationmark.triangle")
+                Label("No path configured", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
             } else {
@@ -98,11 +67,7 @@ public struct LogsView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .onChange(of: autoRefresh) {
-                if autoRefresh {
-                    startRefreshLoop()
-                } else {
-                    stopRefreshLoop()
-                }
+                if autoRefresh { startRefreshLoop() } else { stopRefreshLoop() }
             }
 
             Button {
@@ -128,8 +93,8 @@ public struct LogsView: View {
             .controlSize(.small)
             .help("Clear Log")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .background(.bar)
     }
 
@@ -141,7 +106,7 @@ public struct LogsView: View {
                     Image(systemName: "doc.text.magnifyingglass")
                         .font(.system(size: 32, weight: .light))
                         .foregroundStyle(.quaternary)
-                    Text("Set the log file path in Runtime Paths.")
+                    Text("Set the log file path in Settings > Paths.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -167,7 +132,6 @@ public struct LogsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     // MARK: - Logic
@@ -186,26 +150,19 @@ public struct LogsView: View {
 
     private func reloadLog() {
         cancelLoad()
-
         let path = currentLogPath
         guard !path.isEmpty else {
             isLoading = false
             content = ""
             return
         }
-
         isLoading = true
         loadTask = Task {
             let loaded = await LogTailReader.load(path: path)
-            guard !Task.isCancelled else {
-                return
-            }
-
+            guard !Task.isCancelled else { return }
             if currentLogPath == path {
                 isLoading = false
-                if content != loaded {
-                    content = loaded
-                }
+                if content != loaded { content = loaded }
             }
         }
     }
@@ -215,12 +172,8 @@ public struct LogsView: View {
         refreshTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard !Task.isCancelled else {
-                    return
-                }
-                await MainActor.run {
-                    reloadLog()
-                }
+                guard !Task.isCancelled else { return }
+                await MainActor.run { reloadLog() }
             }
         }
     }

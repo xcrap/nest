@@ -6,39 +6,54 @@ public struct TunnelsView: View {
     @State private var editingRoute: TunnelRoute?
     @State private var showAddSheet = false
     @State private var routePendingDeletion: TunnelRoute?
+    @State private var searchText = ""
+    @State private var hoveredRouteId: String?
 
     public init() {}
 
-    private var sortedRoutes: [TunnelRoute] {
-        store.tunnelRoutes.sorted { $0.publicHostname.localizedCaseInsensitiveCompare($1.publicHostname) == .orderedAscending }
+    private var filteredRoutes: [TunnelRoute] {
+        let sorted = store.tunnelRoutes.sorted { $0.publicHostname.localizedCaseInsensitiveCompare($1.publicHostname) == .orderedAscending }
+        if searchText.isEmpty { return sorted }
+        let q = searchText.lowercased()
+        return sorted.filter {
+            $0.publicHostname.lowercased().contains(q)
+            || $0.localDomain.lowercased().contains(q)
+            || $0.subdomain.lowercased().contains(q)
+        }
     }
 
     private var activeCount: Int {
         store.tunnelRoutes.filter(\.active).count
     }
 
-    private var inactiveCount: Int {
-        max(store.tunnelRoutes.count - activeCount, 0)
-    }
-
     public var body: some View {
         VStack(spacing: 0) {
-            header
+            toolbar
             Divider()
 
-            if sortedRoutes.isEmpty {
+            if store.tunnelRoutes.isEmpty {
                 emptyState
             } else {
-                List {
-                    ForEach(sortedRoutes) { route in
-                        TunnelRouteRow(
-                            route: route,
-                            onEdit: { editingRoute = route },
-                            onDelete: { routePendingDeletion = route }
-                        )
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(filteredRoutes) { route in
+                            TunnelRouteRow(
+                                route: route,
+                                isHovered: hoveredRouteId == route.id,
+                                onEdit: { editingRoute = route },
+                                onDelete: { routePendingDeletion = route }
+                            )
+                            .onHover { h in
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    hoveredRouteId = h ? route.id : nil
+                                }
+                            }
+                            if route.id != filteredRoutes.last?.id {
+                                Divider().padding(.leading, 36)
+                            }
+                        }
                     }
                 }
-                .listStyle(.inset)
             }
         }
         .sheet(isPresented: $showAddSheet) {
@@ -66,94 +81,125 @@ public struct TunnelsView: View {
             },
             message: {
                 if let routePendingDeletion {
-                    Text("This will remove `\(routePendingDeletion.publicHostname)` from Nest's tunnel configuration.")
+                    Text("Remove \(routePendingDeletion.publicHostname) from tunnel configuration.")
                 }
             }
         )
     }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Tunnels")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Text("\(activeCount) active, \(inactiveCount) inactive")
+    private var toolbar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.tertiary)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                TextField("Filter...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
 
             Spacer()
+
+            Text("\(activeCount)/\(store.tunnelRoutes.count) active")
+                .font(.callout)
+                .foregroundStyle(.secondary)
 
             Button {
                 showAddSheet = true
             } label: {
-                Label("Add Route", systemImage: "plus")
+                Image(systemName: "plus")
+                    .font(.callout)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .controlSize(.small)
+            .keyboardShortcut("n", modifiers: .command)
+            .help("Add Route (Cmd+N)")
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+        .background(.bar)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             Spacer()
-            Image(systemName: "network")
-                .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.quaternary)
-            Text("No tunnel routes yet")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Button("Add Route") { showAddSheet = true }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+            VStack(spacing: 14) {
+                Image(systemName: "network")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundStyle(.quaternary)
+                Text("No tunnel routes yet")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Add Route") { showAddSheet = true }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
             Spacer()
         }
     }
 }
 
+// MARK: - Tunnel Route Row
+
 private struct TunnelRouteRow: View {
     @EnvironmentObject private var store: SiteStore
 
     let route: TunnelRoute
+    let isHovered: Bool
     let onEdit: () -> Void
     let onDelete: () -> Void
 
-    private var destinationText: String {
-        "\(route.localDomain):\(route.originPort)"
-    }
+    @State private var hoveredAction: String?
 
     var body: some View {
-        HStack(spacing: 12) {
-            RouteKindBadge(kind: route.kind)
+        HStack(spacing: 10) {
+            Text(route.kind == .php ? "PHP" : "APP")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .frame(width: 32)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(badgeColor.opacity(0.12))
+                )
+                .foregroundStyle(badgeColor)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(route.publicHostname)
-                    .font(.system(.body, design: .monospaced))
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
+            Text(route.publicHostname)
+                .font(.system(.callout, design: .monospaced))
+                .fontWeight(.medium)
+                .lineLimit(1)
+                .frame(width: 220, alignment: .leading)
 
-                Text(destinationText)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            Image(systemName: "arrow.right")
+                .font(.caption2)
+                .foregroundStyle(.quaternary)
+
+            Text("\(route.localDomain):\(route.originPort)")
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 0) {
+                rowAction(icon: "pencil", help: "Edit") { onEdit() }
+                rowAction(icon: "trash", help: "Delete") { onDelete() }
             }
+            .opacity(isHovered ? 1 : 0)
 
-            Spacer(minLength: 12)
-
-            Button("Edit", action: onEdit)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            Toggle("Active", isOn: Binding(
+            Toggle("", isOn: Binding(
                 get: { route.active },
                 set: { newValue in
                     var updated = route
@@ -163,10 +209,12 @@ private struct TunnelRouteRow: View {
             ))
             .labelsHidden()
             .toggleStyle(.switch)
-            .controlSize(.small)
-            .help(route.active ? "Disable route" : "Enable route")
+            .controlSize(.mini)
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
+        .contentShape(Rectangle())
         .contextMenu {
             Button("Edit Route") { onEdit() }
             Button(route.active ? "Disable" : "Enable") {
@@ -175,33 +223,28 @@ private struct TunnelRouteRow: View {
                 store.updateTunnelRoute(updated)
             }
             Divider()
-            Button("Delete Route", role: .destructive) {
-                onDelete()
-            }
-        }
-        .onTapGesture(count: 2) {
-            onEdit()
+            Button("Delete Route", role: .destructive) { onDelete() }
         }
     }
-}
 
-private struct RouteKindBadge: View {
-    let kind: TunnelRouteKind
-
-    private var kindColor: Color {
-        kind == .php ? .blue : .green
+    private var badgeColor: Color {
+        route.kind == .php ? .blue : .green
     }
 
-    var body: some View {
-        Text(kind == .php ? "PHP" : "APP")
-            .font(.caption)
-            .fontWeight(.semibold)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(kindColor.opacity(0.12))
-            )
-            .foregroundStyle(kindColor)
+    private func rowAction(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.callout)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(hoveredAction == icon ? Color.primary.opacity(0.08) : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(hoveredAction == icon ? .primary : .secondary)
+        .onHover { h in hoveredAction = h ? icon : nil }
+        .help(help)
     }
 }

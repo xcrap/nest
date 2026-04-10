@@ -87,8 +87,8 @@ public struct ConfigPreviewView: View {
             .controlSize(.small)
             .keyboardShortcut("s", modifiers: .command)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .background(.bar)
     }
 

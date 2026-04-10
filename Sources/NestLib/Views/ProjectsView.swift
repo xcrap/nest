@@ -8,6 +8,7 @@ public struct ProjectsView: View {
     @State private var editingProject: AppProject?
     @State private var logProject: AppProject?
     @State private var searchText = ""
+    @State private var hoveredProjectId: String?
 
     public init() {}
 
@@ -31,7 +32,7 @@ public struct ProjectsView: View {
             toolbar
             Divider()
 
-            if filteredProjects.isEmpty {
+            if store.appProjects.isEmpty {
                 emptyState
             } else {
                 ScrollView {
@@ -40,12 +41,18 @@ public struct ProjectsView: View {
                             ProjectRow(
                                 project: project,
                                 isRunning: processController.isProjectRunning(project),
+                                isHovered: hoveredProjectId == project.id,
                                 error: processController.projectError(for: project.id),
                                 onEdit: { editingProject = project },
                                 onShowLog: { logProject = project }
                             )
+                            .onHover { h in
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    hoveredProjectId = h ? project.id : nil
+                                }
+                            }
                             if project.id != filteredProjects.last?.id {
-                                Divider().padding(.leading, 32)
+                                Divider().padding(.leading, 36)
                             }
                         }
                     }
@@ -69,7 +76,27 @@ public struct ProjectsView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            searchField
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.tertiary)
+                    .font(.callout)
+                TextField("Filter...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
 
             Spacer()
 
@@ -85,7 +112,7 @@ public struct ProjectsView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Refresh Status")
+            .help("Refresh")
 
             Button {
                 showAddSheet = true
@@ -95,45 +122,28 @@ public struct ProjectsView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .keyboardShortcut("n", modifiers: .command)
+            .help("Add Project (Cmd+N)")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .background(.bar)
     }
 
-    private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.tertiary)
-            TextField("Filter projects...", text: $searchText)
-                .textFieldStyle(.plain)
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-    }
-
     private var emptyState: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 0) {
             Spacer()
-            Image(systemName: "square.stack.3d.up")
-                .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.quaternary)
-            Text("No projects yet")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Button("Add Project") { showAddSheet = true }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+            VStack(spacing: 14) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundStyle(.quaternary)
+                Text("No projects yet")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Add Project") { showAddSheet = true }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
             Spacer()
         }
     }
@@ -143,32 +153,39 @@ public struct ProjectsView: View {
     }
 }
 
+// MARK: - Project Row
+
 private struct ProjectRow: View {
     @EnvironmentObject var store: SiteStore
     @EnvironmentObject var processController: ProcessController
 
     let project: AppProject
     let isRunning: Bool
+    let isHovered: Bool
     let error: String?
     let onEdit: () -> Void
     let onShowLog: () -> Void
 
+    @State private var hoveredAction: String?
+
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Circle()
-                    .fill(isRunning ? Color.green : Color.secondary.opacity(0.25))
+                    .fill(isRunning ? Color.green : Color.secondary.opacity(0.2))
                     .frame(width: 8, height: 8)
 
                 Text(project.name)
                     .font(.callout)
                     .fontWeight(.medium)
+                    .lineLimit(1)
                     .frame(width: 150, alignment: .leading)
 
                 Text(project.hostname)
                     .font(.system(.callout, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .frame(width: 190, alignment: .leading)
+                    .lineLimit(1)
+                    .frame(width: 180, alignment: .leading)
 
                 Text(project.directory)
                     .font(.callout)
@@ -179,34 +196,26 @@ private struct ProjectRow: View {
 
                 Text(":\(project.port)")
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 56, alignment: .trailing)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 50, alignment: .trailing)
 
-                Button("Log") { onShowLog() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                Button("Edit") { onEdit() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                Button("Delete", role: .destructive) {
-                    processController.stopProject(project)
-                    store.deleteProject(id: project.id)
+                HStack(spacing: 0) {
+                    rowAction(icon: "doc.text", help: "Logs") { onShowLog() }
+                    rowAction(icon: "pencil", help: "Edit") { onEdit() }
+                    rowAction(icon: "trash", help: "Delete") {
+                        processController.stopProject(project)
+                        store.deleteProject(id: project.id)
+                    }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .opacity(isHovered ? 1 : 0)
 
-                Button(isRunning ? "Stop" : "Start") {
+                StartStopButton(isRunning: isRunning) {
                     if isRunning {
                         processController.stopProject(project)
                     } else {
                         processController.startProject(project)
                     }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(isRunning ? .red : .green)
             }
 
             if let error, !error.isEmpty {
@@ -216,13 +225,51 @@ private struct ProjectRow: View {
                         .foregroundStyle(.red)
                     Spacer()
                 }
-                .padding(.leading, 30)
+                .padding(.leading, 28)
+                .padding(.top, 4)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
+        .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Edit...") { onEdit() }
+            Button("View Logs") { onShowLog() }
+            Button(isRunning ? "Stop" : "Start") {
+                if isRunning {
+                    processController.stopProject(project)
+                } else {
+                    processController.startProject(project)
+                }
+            }
+            Divider()
+            Button("Delete", role: .destructive) {
+                processController.stopProject(project)
+                store.deleteProject(id: project.id)
+            }
+        }
+    }
+
+    private func rowAction(icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.callout)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(hoveredAction == icon ? Color.primary.opacity(0.08) : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(hoveredAction == icon ? .primary : .secondary)
+        .onHover { h in hoveredAction = h ? icon : nil }
+        .help(help)
     }
 }
+
+// MARK: - Project Log Sheet
 
 private struct ProjectLogSheet: View {
     let project: AppProject
@@ -285,18 +332,12 @@ private struct ProjectLogSheet: View {
     private func load() {
         cancelLoad()
         isLoading = true
-
         let logPath = project.logPath
         loadTask = Task {
             let loaded = await LogTailReader.load(path: logPath)
-            guard !Task.isCancelled else {
-                return
-            }
-
+            guard !Task.isCancelled else { return }
             isLoading = false
-            if content != loaded {
-                content = loaded
-            }
+            if content != loaded { content = loaded }
         }
     }
 
@@ -305,12 +346,8 @@ private struct ProjectLogSheet: View {
         refreshTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard !Task.isCancelled else {
-                    return
-                }
-                await MainActor.run {
-                    load()
-                }
+                guard !Task.isCancelled else { return }
+                await MainActor.run { load() }
             }
         }
     }

@@ -9,105 +9,80 @@ public struct EnvironmentChecksView: View {
     public init() {}
 
     public var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Environment")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("System prerequisites and service health.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        runChecks()
+        ScrollView {
+            VStack(spacing: 12) {
+                HStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { runChecks() }
+                    } label: {
+                        Label("Recheck", systemImage: "arrow.clockwise")
                     }
-                } label: {
-                    Label("Recheck", systemImage: "arrow.clockwise")
-                        .font(.callout)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
 
-            Divider()
+                sectionCard(title: "Services", icon: "play.circle.fill", color: .green) {
+                    VStack(spacing: 4) {
+                        serviceControl(
+                            name: "FrankenPHP", icon: "bolt.fill",
+                            running: processController.frankenphpRunning,
+                            error: processController.frankenphpError,
+                            onStart: { startFrankenPHP() },
+                            onStop: { processController.stopFrankenPHP() }
+                        )
+                        serviceControl(
+                            name: "Cloudflared", icon: "network",
+                            running: processController.cloudflaredRunning,
+                            error: processController.cloudflaredError,
+                            onStart: { startCloudflared() },
+                            onStop: { processController.stopCloudflared() }
+                        )
+                        serviceControl(
+                            name: "MariaDB", icon: "cylinder.fill",
+                            running: processController.mariadbRunning,
+                            error: processController.mariadbError,
+                            onStart: { startMariaDB() },
+                            onStop: { processController.stopMariaDB() }
+                        )
+                    }
+                }
 
-            ScrollView {
-                VStack(spacing: 16) {
-
-                    // Services
-                    sectionCard(title: "Services", icon: "play.circle.fill", color: .green) {
-                        VStack(spacing: 4) {
-                            serviceControl(
-                                name: "FrankenPHP",
-                                icon: "bolt.fill",
-                                running: processController.frankenphpRunning,
-                                error: processController.frankenphpError,
-                                onStart: { startFrankenPHP() },
-                                onStop: { processController.stopFrankenPHP() }
-                            )
-                            serviceControl(
-                                name: "Cloudflared",
-                                icon: "network",
-                                running: processController.cloudflaredRunning,
-                                error: processController.cloudflaredError,
-                                onStart: { startCloudflared() },
-                                onStop: { processController.stopCloudflared() }
-                            )
-                            serviceControl(
-                                name: "MariaDB",
-                                icon: "cylinder.fill",
-                                running: processController.mariadbRunning,
-                                error: processController.mariadbError,
-                                onStart: { startMariaDB() },
-                                onStop: { processController.stopMariaDB() }
-                            )
+                sectionCard(title: "Runtime Binaries", icon: "wrench.and.screwdriver.fill", color: .purple) {
+                    if runtimeIssues.isEmpty {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text("All runtime paths are valid.")
+                                .font(.callout)
+                            Spacer()
                         }
-                    }
-
-                    // Runtime binaries
-                    sectionCard(title: "Runtime Binaries", icon: "wrench.and.screwdriver.fill", color: .purple) {
-                        if runtimeIssues.isEmpty {
-                            HStack(spacing: 8) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                Text("All runtime paths are valid.")
-                                    .font(.callout)
-                                Spacer()
-                            }
-                            .padding(.vertical, 4)
-                        } else {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(runtimeIssues, id: \.self) { issue in
-                                    HStack(alignment: .top, spacing: 8) {
-                                        Image(systemName: "exclamationmark.triangle.fill")
-                                            .foregroundStyle(.orange)
-                                            .font(.callout)
-                                        Text(issue)
-                                            .font(.callout)
-                                            .foregroundStyle(.secondary)
-                                    }
+                        .padding(.vertical, 4)
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(runtimeIssues, id: \.self) { issue in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .font(.callout)
+                                    Text(issue)
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                         }
                     }
+                }
 
-                    // System prerequisites
-                    sectionCard(title: "System Prerequisites", icon: "shield.checkered", color: .blue) {
-                        VStack(spacing: 4) {
-                            ForEach(checks) { check in
-                                prerequisiteRow(check)
-                            }
+                sectionCard(title: "System Prerequisites", icon: "shield.checkered", color: .blue) {
+                    VStack(spacing: 4) {
+                        ForEach(checks) { check in
+                            prerequisiteRow(check)
                         }
                     }
                 }
-                .padding(.vertical, 16)
             }
+            .padding(16)
         }
         .onAppear { runChecks() }
     }
@@ -128,19 +103,14 @@ public struct EnvironmentChecksView: View {
             }
             content()
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.horizontal, 20)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func serviceControl(
-        name: String,
-        icon: String,
-        running: Bool,
-        error: String?,
-        onStart: @escaping () -> Void,
-        onStop: @escaping () -> Void
+        name: String, icon: String, running: Bool, error: String?,
+        onStart: @escaping () -> Void, onStop: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
@@ -155,7 +125,7 @@ public struct EnvironmentChecksView: View {
 
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(running ? Color.green : Color.secondary.opacity(0.25))
+                        .fill(running ? Color.green : Color.secondary.opacity(0.2))
                         .frame(width: 6, height: 6)
                     Text(running ? "Running" : "Stopped")
                         .font(.callout)
@@ -173,7 +143,7 @@ public struct EnvironmentChecksView: View {
             }
             if let error {
                 Text(error)
-                    .font(.callout)
+                    .font(.caption)
                     .foregroundStyle(.red)
                     .padding(.leading, 26)
             }

@@ -11,72 +11,32 @@ public struct RuntimePathsView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Runtime Paths")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Configure the paths to your locally installed binaries and log files.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if detected {
-                    Label("Detected", systemImage: "checkmark.circle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.green)
-                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                }
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        paths = RuntimePaths.detectDefaults()
-                        detected = true
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        withAnimation { detected = false }
-                    }
-                } label: {
-                    Label("Auto-Detect", systemImage: "sparkle.magnifyingglass")
-                        .font(.callout)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-
-            Divider()
-
             ScrollView {
-                VStack(spacing: 20) {
-                    // FrankenPHP
+                VStack(spacing: 12) {
                     settingsCard(title: "FrankenPHP", icon: "bolt.fill", color: .purple) {
                         VStack(spacing: 12) {
-                            pathRow("Binary", path: $paths.frankenphpBinary, isDirectory: false)
-                            pathRow("php.ini", path: $paths.phpIniPath, isDirectory: false)
-                            pathRow("Log File", path: $paths.frankenphpLog, isDirectory: false)
+                            pathRow("Binary", path: $paths.frankenphpBinary)
+                            pathRow("php.ini", path: $paths.phpIniPath)
+                            pathRow("Log File", path: $paths.frankenphpLog)
                         }
                     }
 
-                    // MariaDB
                     settingsCard(title: "MariaDB", icon: "cylinder.fill", color: .blue) {
                         VStack(spacing: 12) {
-                            pathRow("Server (mariadbd)", path: $paths.mariadbServer, isDirectory: false)
-                            pathRow("Client (mariadb)", path: $paths.mariadbClient, isDirectory: false)
-                            pathRow("mysqldump", path: $paths.mysqldump, isDirectory: false)
-                            pathRow("Log File", path: $paths.mariadbLog, isDirectory: false)
+                            pathRow("Server (mariadbd)", path: $paths.mariadbServer)
+                            pathRow("Client (mariadb)", path: $paths.mariadbClient)
+                            pathRow("mysqldump", path: $paths.mysqldump)
+                            pathRow("Log File", path: $paths.mariadbLog)
                         }
                     }
 
                     settingsCard(title: "Cloudflared", icon: "network", color: .green) {
                         VStack(spacing: 12) {
-                            pathRow("Binary", path: $paths.cloudflaredBinary, isDirectory: false)
-                            pathRow("Log File", path: $paths.cloudflaredLog, isDirectory: false)
+                            pathRow("Binary", path: $paths.cloudflaredBinary)
+                            pathRow("Log File", path: $paths.cloudflaredLog)
                         }
                     }
 
-                    // Validation issues
                     if !validationIssues.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(validationIssues, id: \.self) { issue in
@@ -97,28 +57,32 @@ public struct RuntimePathsView: View {
                                 .fill(Color.orange.opacity(0.06))
                                 .strokeBorder(Color.orange.opacity(0.15), lineWidth: 1)
                         )
-                        .padding(.horizontal, 20)
                     }
                 }
-                .padding(.vertical, 16)
+                .padding(16)
             }
 
             Divider()
 
-            // Footer
-            HStack {
-                Spacer()
+            HStack(spacing: 8) {
+                if detected {
+                    Label("Detected", systemImage: "checkmark.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.green)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                }
                 if saved {
                     Label("Saved", systemImage: "checkmark.circle.fill")
                         .font(.callout)
                         .foregroundStyle(.green)
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
+
+                Spacer()
+
                 Button("Validate") {
                     let issues = paths.validate()
-                    withAnimation {
-                        validationIssues = issues
-                    }
+                    withAnimation { validationIssues = issues }
                     if issues.isEmpty {
                         withAnimation { saved = true }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -127,6 +91,21 @@ public struct RuntimePathsView: View {
                     }
                 }
                 .controlSize(.small)
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        paths = RuntimePaths.detectDefaults()
+                        detected = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation { detected = false }
+                    }
+                } label: {
+                    Label("Auto-Detect", systemImage: "sparkle.magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
                 Button("Save") {
                     store.settings.runtimePaths = paths
                     store.saveSettings()
@@ -142,13 +121,15 @@ public struct RuntimePathsView: View {
                 .controlSize(.small)
                 .keyboardShortcut("s", modifiers: .command)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
         .onAppear {
             paths = store.settings.runtimePaths
         }
     }
+
+    // MARK: - Components
 
     private func settingsCard(title: String, icon: String, color: Color, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -164,13 +145,12 @@ public struct RuntimePathsView: View {
             }
             content()
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.horizontal, 20)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    private func pathRow(_ label: String, path: Binding<String>, isDirectory: Bool) -> some View {
+    private func pathRow(_ label: String, path: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.callout)
@@ -181,8 +161,8 @@ public struct RuntimePathsView: View {
                     .font(.system(.callout, design: .monospaced))
                 Button("Browse...") {
                     let panel = NSOpenPanel()
-                    panel.canChooseDirectories = isDirectory
-                    panel.canChooseFiles = !isDirectory
+                    panel.canChooseDirectories = false
+                    panel.canChooseFiles = true
                     panel.allowsMultipleSelection = false
                     if panel.runModal() == .OK, let url = panel.url {
                         path.wrappedValue = url.path
