@@ -241,7 +241,7 @@ private struct DNSRouteRow: View {
                 .frame(width: 42)
                 .padding(.vertical, 3)
                 .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(Color.blue.opacity(0.12))
                 )
                 .foregroundStyle(.blue)
@@ -270,7 +270,7 @@ private struct DNSRouteRow: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
                             .fill(Color.orange.opacity(0.12))
                     )
                     .foregroundStyle(.orange)
@@ -281,7 +281,7 @@ private struct DNSRouteRow: View {
                     .font(.callout)
                     .frame(width: 26, height: 26)
                     .background(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
                             .fill(hoveredAction == "trash" ? Color.primary.opacity(0.08) : Color.clear)
                     )
                     .contentShape(Rectangle())

@@ -82,7 +82,7 @@ public struct ContentView: View {
                     )
                 }
                 .padding(10)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
             }

@@ -48,7 +48,7 @@ public struct SitesView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
 
                 Spacer()
 
@@ -256,7 +256,7 @@ public struct SiteRow: View {
                 .font(.callout)
                 .frame(width: 26, height: 26)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(hoveredAction == icon ? Color.primary.opacity(0.08) : Color.clear)
                 )
                 .contentShape(Rectangle())
@@ -309,7 +309,7 @@ struct StartStopButton: View {
                 .padding(.vertical, 3)
                 .padding(.horizontal, 2)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(buttonFill)
                 )
                 .foregroundStyle(isRunning ? Color.red : Color.green)

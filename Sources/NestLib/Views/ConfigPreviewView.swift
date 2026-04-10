@@ -102,7 +102,7 @@ public struct ConfigPreviewView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(selectedConfig == file ? Color.primary.opacity(0.1) : Color.clear)
                 )
                 .foregroundStyle(selectedConfig == file ? .primary : .secondary)

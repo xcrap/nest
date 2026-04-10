@@ -108,7 +108,7 @@ public struct CloudflareView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
     private var advancedCard: some View {
@@ -137,7 +137,7 @@ public struct CloudflareView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
     private var serviceCard: some View {
@@ -192,7 +192,7 @@ public struct CloudflareView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
     // MARK: - Components

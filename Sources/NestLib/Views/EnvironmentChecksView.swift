@@ -96,7 +96,7 @@ public struct EnvironmentChecksView: View {
                     .font(.callout)
                     .foregroundStyle(color)
                     .frame(width: 20, height: 20)
-                    .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 3, style: .continuous))
                 Text(title)
                     .font(.callout)
                     .fontWeight(.semibold)
@@ -105,7 +105,7 @@ public struct EnvironmentChecksView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
     private func serviceControl(
@@ -174,7 +174,7 @@ public struct EnvironmentChecksView: View {
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(nsColor: .textBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                     .padding(.leading, 24)
             }
         }
