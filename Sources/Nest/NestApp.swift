@@ -5,6 +5,10 @@ import NestLib
 import ServiceManagement
 import Sparkle
 
+private enum MainWindowScene {
+    static let id = "main-window"
+}
+
 @main
 struct NestApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -13,20 +17,13 @@ struct NestApp: App {
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     var body: some Scene {
-        WindowGroup("Nest") {
-            ContentView()
-                .environmentObject(store)
-                .environmentObject(processController)
-                .frame(minWidth: 800, minHeight: 500)
-                .onAppear {
-                    appDelegate.store = store
-                    appDelegate.processController = processController
-                    appDelegate.updaterController = updaterController
-                    appDelegate.setupStatusBar()
-                    DispatchQueue.main.async {
-                        AppDelegate.refreshWindowCorners()
-                    }
-                }
+        WindowGroup("Nest", id: MainWindowScene.id) {
+            MainWindowSceneView(
+                appDelegate: appDelegate,
+                store: store,
+                processController: processController,
+                updaterController: updaterController
+            )
         }
         .defaultSize(width: 960, height: 640)
         .windowResizability(.contentMinSize)
@@ -45,6 +42,32 @@ struct NestApp: App {
     }
 }
 
+private struct MainWindowSceneView: View {
+    @Environment(\.openWindow) private var openWindow
+
+    let appDelegate: AppDelegate
+    let store: SiteStore
+    let processController: ProcessController
+    let updaterController: SPUStandardUpdaterController
+
+    var body: some View {
+        ContentView()
+            .environmentObject(store)
+            .environmentObject(processController)
+            .frame(minWidth: 800, minHeight: 500)
+            .onAppear {
+                appDelegate.store = store
+                appDelegate.processController = processController
+                appDelegate.updaterController = updaterController
+                appDelegate.openMainWindowAction = openWindow
+                appDelegate.setupStatusBar()
+                DispatchQueue.main.async {
+                    AppDelegate.refreshWindowCorners()
+                }
+            }
+    }
+}
+
 // MARK: - App Delegate (Menu Bar + Window Management)
 
 @MainActor
@@ -53,6 +76,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var store: SiteStore?
     var processController: ProcessController?
     var updaterController: SPUStandardUpdaterController?
+    var openMainWindowAction: OpenWindowAction?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.swizzleWindowCornerRadius(6.0)
@@ -223,9 +247,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.title == "Nest" }) {
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
             window.makeKeyAndOrderFront(nil)
-        } else if let window = NSApp.windows.first {
-            window.makeKeyAndOrderFront(nil)
+        } else {
+            openMainWindowAction?(id: MainWindowScene.id)
         }
     }
 
