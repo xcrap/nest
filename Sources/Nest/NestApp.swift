@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ObjectiveC
 import NestLib
 import ServiceManagement
 import Sparkle
@@ -22,6 +23,9 @@ struct NestApp: App {
                     appDelegate.processController = processController
                     appDelegate.updaterController = updaterController
                     appDelegate.setupStatusBar()
+                    DispatchQueue.main.async {
+                        AppDelegate.refreshWindowCorners()
+                    }
                 }
         }
         .defaultSize(width: 960, height: 640)
@@ -51,6 +55,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var updaterController: SPUStandardUpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.swizzleWindowCornerRadius(6.0)
         NSApp.setActivationPolicy(.regular)
 
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -162,6 +167,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
 
         statusItem?.menu = menu
+    }
+
+    static func swizzleWindowCornerRadius(_ radius: CGFloat) {
+        guard let cls = NSClassFromString("NSThemeFrame") else { return }
+
+        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_cornerRadius")) {
+            let block: @convention(block) (AnyObject) -> CGFloat = { _ in radius }
+            method_setImplementation(m, imp_implementationWithBlock(block))
+        }
+        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_getCachedWindowCornerRadius")) {
+            let block: @convention(block) (AnyObject) -> CGFloat = { _ in radius }
+            method_setImplementation(m, imp_implementationWithBlock(block))
+        }
+        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_topCornerSize")) {
+            let block: @convention(block) (AnyObject) -> CGSize = { _ in CGSize(width: radius, height: radius) }
+            method_setImplementation(m, imp_implementationWithBlock(block))
+        }
+        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_bottomCornerSize")) {
+            let block: @convention(block) (AnyObject) -> CGSize = { _ in CGSize(width: radius, height: radius) }
+            method_setImplementation(m, imp_implementationWithBlock(block))
+        }
+        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_cornerPath")) {
+            let block: @convention(block) (AnyObject) -> CGPath = { obj in
+                let view = obj as! NSView
+                return CGPath(roundedRect: view.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+            }
+            method_setImplementation(m, imp_implementationWithBlock(block))
+        }
+        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_getCachedWindowCornerPath")) {
+            let block: @convention(block) (AnyObject) -> CGPath = { obj in
+                let view = obj as! NSView
+                return CGPath(roundedRect: view.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
+            }
+            method_setImplementation(m, imp_implementationWithBlock(block))
+        }
+    }
+
+    static func refreshWindowCorners() {
+        for window in NSApp.windows {
+            guard let frameView = window.contentView?.superview else { continue }
+            let sel = NSSelectorFromString("windowCornerMaskChanged")
+            if frameView.responds(to: sel) {
+                frameView.perform(sel)
+            }
+            let sel2 = NSSelectorFromString("_updateCornerInsets")
+            if frameView.responds(to: sel2) {
+                frameView.perform(sel2)
+            }
+            window.display()
+            window.invalidateShadow()
+        }
     }
 
     @objc func showMainWindow() {

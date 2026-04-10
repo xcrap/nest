@@ -97,7 +97,7 @@ public struct SitesView: View {
                                     }
                                 }
                             if site.id != filteredSites.last?.id {
-                                Divider().padding(.leading, 32)
+                                Divider()
                             }
                         }
                     }
