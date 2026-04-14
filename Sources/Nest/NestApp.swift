@@ -79,6 +79,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var openMainWindowAction: OpenWindowAction?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Enforce single instance — dev and prod use different bundle IDs so they can coexist
+        if let bundleID = Bundle.main.bundleIdentifier {
+            let currentPID = ProcessInfo.processInfo.processIdentifier
+            let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .filter { $0.processIdentifier != currentPID }
+            if let existing = others.first {
+                existing.activate()
+                NSApp.terminate(nil)
+                return
+            }
+        }
+
         Self.swizzleWindowCornerRadius(6.0)
         NSApp.setActivationPolicy(.regular)
 

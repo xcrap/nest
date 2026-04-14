@@ -101,16 +101,22 @@ public enum LaunchAgentService {
         try fm.createDirectory(atPath: outDirectory, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: errDirectory, withIntermediateDirectories: true)
 
-        let plist: [String: Any] = [
+        var plist: [String: Any] = [
             "Label": definition.label,
             "ProgramArguments": definition.programArguments,
             "RunAtLoad": true,
             "KeepAlive": definition.keepAlive,
             "StandardOutPath": definition.standardOutPath,
             "StandardErrorPath": definition.standardErrorPath,
-            "WorkingDirectory": definition.workingDirectory as Any,
-            "EnvironmentVariables": definition.environment
-        ].compactMapValues { $0 }
+        ]
+
+        if let workingDirectory = definition.workingDirectory {
+            plist["WorkingDirectory"] = workingDirectory
+        }
+
+        if !definition.environment.isEmpty {
+            plist["EnvironmentVariables"] = definition.environment
+        }
 
         let data = try PropertyListSerialization.data(
             fromPropertyList: plist,

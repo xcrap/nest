@@ -84,6 +84,7 @@ public final class ProcessController: ObservableObject {
         self.pidDirectory = AppSettings.nestRunDirectory
         try? FileManager.default.createDirectory(atPath: pidDirectory, withIntermediateDirectories: true)
         detectRunningProcesses()
+        restoreSystemRulesIfNeeded()
     }
 
     /// Detect already-running FrankenPHP and MariaDB at startup.
@@ -392,12 +393,16 @@ public final class ProcessController: ObservableObject {
     /// macOS can flush PF redirect rules and DNS cache during sleep.
     public func handleSystemWake() {
         detectRunningProcesses()
+        restoreSystemRulesIfNeeded()
+    }
+
+    /// Flush DNS cache and restore PF port redirect rules if FrankenPHP is running.
+    /// Called on both app startup and system wake.
+    private func restoreSystemRulesIfNeeded() {
         flushDNSCache()
 
-        let shouldCheckPF = frankenphpRunning
-        guard shouldCheckPF else { return }
+        guard frankenphpRunning else { return }
 
-        // Check if PF port redirect survived sleep; reload if broken
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, !self.isPortRedirectWorking() else { return }
             self.reloadPFRules()
