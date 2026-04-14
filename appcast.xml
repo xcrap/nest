@@ -3,12 +3,12 @@
   <channel>
     <title>Nest</title>
     <item>
-      <title>Version 0.10.20</title>
-      <sparkle:version>0.10.20</sparkle:version>
-      <sparkle:shortVersionString>0.10.20</sparkle:shortVersionString>
+      <title>Version 0.10.21</title>
+      <sparkle:version>0.10.21</sparkle:version>
+      <sparkle:shortVersionString>0.10.21</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Tue, 14 Apr 2026 08:03:45 +0000</pubDate>
-      <enclosure url="https://github.com/xcrap/nest/releases/download/v0.10.20/Nest-0.10.20.zip" sparkle:edSignature="Y78K9NbGmronPdwpc6faMWDfOVL7g2My4LjaHctDHEwAHfLLdQw9UngN+GyPqf5PlXWwvz/bnp5Pjn6XGDYyBA==" length="2791034" type="application/octet-stream" />
+      <pubDate>Tue, 14 Apr 2026 08:08:03 +0000</pubDate>
+      <enclosure url="https://github.com/xcrap/nest/releases/download/v0.10.21/Nest-0.10.21.zip" sparkle:edSignature="vz5x63VRZRSW0xnxfMWHIgmBkTJ4/Z7qpUCVdqFAvM54/+lLQMGtz7L7yZtF2MVJSHDwP0kqsl2K0RO9CqpNDQ==" length="2790615" type="application/octet-stream" />
     </item>
   </channel>
 </rss>
