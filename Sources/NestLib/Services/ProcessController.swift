@@ -88,49 +88,32 @@ public final class ProcessController: ObservableObject {
 
     /// Detect already-running FrankenPHP and MariaDB at startup.
     private func detectRunningProcesses() {
-        frankenphpRunning = false
-        mariadbRunning = false
-        externalFrankenPHPPid = nil
-        externalMariaDBPid = nil
+        var resolvedFrankenPHPPid: Int32?
+        var resolvedMariaDBPid: Int32?
+        var resolvedFrankenPHPRunning = false
+        var resolvedMariaDBRunning = false
 
         // Check FrankenPHP via PID file, then verify the process is alive
         if let pid = readPID(name: "frankenphp"), isProcessAlive(pid) {
-            externalFrankenPHPPid = pid
-            frankenphpRunning = true
-        } else {
-            // Fallback: check if Caddy admin API is responding (FrankenPHP started externally)
-            checkCaddyAdmin()
+            resolvedFrankenPHPPid = pid
+            resolvedFrankenPHPRunning = true
+        } else if isCaddyAdminReachable() {
+            // FrankenPHP may have been started outside Nest, so the PID file can be missing.
+            resolvedFrankenPHPPid = findProcessPID(name: "frankenphp")
+            resolvedFrankenPHPRunning = true
         }
 
         // Check MariaDB via pgrep
         if let pid = findProcessPID(name: "mariadbd") {
-            externalMariaDBPid = pid
-            mariadbRunning = true
+            resolvedMariaDBPid = pid
+            resolvedMariaDBRunning = true
         }
 
+        externalFrankenPHPPid = resolvedFrankenPHPPid
+        externalMariaDBPid = resolvedMariaDBPid
+        frankenphpRunning = resolvedFrankenPHPRunning
+        mariadbRunning = resolvedMariaDBRunning
         cloudflaredRunning = isCloudflaredProcessRunning()
-    }
-
-    private func checkCaddyAdmin() {
-        guard let url = URL(string: "http://localhost:2019/config/") else { return }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 1
-        let semaphore = DispatchSemaphore(value: 0)
-        var alive = false
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            if let http = response as? HTTPURLResponse, http.statusCode < 500 {
-                alive = true
-            }
-            semaphore.signal()
-        }.resume()
-        _ = semaphore.wait(timeout: .now() + 1.5)
-        if alive {
-            // Find the actual PID
-            if let pid = findProcessPID(name: "frankenphp") {
-                externalFrankenPHPPid = pid
-            }
-            frankenphpRunning = true
-        }
     }
 
     private func readPID(name: String) -> Int32? {
@@ -423,6 +406,10 @@ public final class ProcessController: ObservableObject {
     private nonisolated func isPortRedirectWorking() -> Bool {
         isHTTPEndpointReachable("http://localhost:80") &&
             isHTTPEndpointReachable("https://localhost:443", insecureTLS: true)
+    }
+
+    private nonisolated func isCaddyAdminReachable() -> Bool {
+        isHTTPEndpointReachable("http://localhost:2019/config/")
     }
 
     /// Reload PF rules to restore port 80/443 → 8080/8443 redirects.
