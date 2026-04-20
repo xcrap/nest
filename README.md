@@ -37,18 +37,21 @@ sudo bash -c 'printf "nameserver 127.0.0.1\nport 5354\n" > /etc/resolver/test'
 
 Set up PF port redirect (so `.test` domains work on ports 80/443):
 
-```bash
-sudo bash -c 'printf "rdr pass on lo0 inet proto tcp from any to any port 80 -> 127.0.0.1 port 8080\nrdr pass on lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443\n" > /etc/pf.anchors/dev.nest.app'
-```
+- **Packaged app (DMG install):** open **Environment** → Port Redirect row → click **Install Helper**, then approve in System Settings → General → Login Items & Extensions. Ports 80/443 will redirect to 8080/8443 automatically on every boot — no terminal required.
+- **Developing from source (`make dev`):** the blessed helper needs Developer ID signing, so dev builds fall back to a manual one-time setup:
 
-Add these lines to `/etc/pf.conf` (before any existing anchor lines):
+  ```bash
+  sudo bash -c 'printf "rdr pass on lo0 inet proto tcp from any to any port 80 -> 127.0.0.1 port 8080\nrdr pass on lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443\n" > /etc/pf.anchors/dev.nest.app'
+  ```
 
-```
-rdr-anchor "dev.nest.app"
-load anchor "dev.nest.app" from "/etc/pf.anchors/dev.nest.app"
-```
+  Add these lines to `/etc/pf.conf` (before any existing anchor lines):
 
-Then reload: `sudo pfctl -f /etc/pf.conf`
+  ```
+  rdr-anchor "dev.nest.app"
+  load anchor "dev.nest.app" from "/etc/pf.anchors/dev.nest.app"
+  ```
+
+  Then reload: `sudo pfctl -f /etc/pf.conf`
 
 Trust the local CA certificate (after starting FrankenPHP once):
 
@@ -93,8 +96,9 @@ FrankenPHP, MariaDB, and dnsmasq all run via `brew services`.
 
 - `Sources/NestLib/`: library target (models, services, views)
 - `Sources/Nest/`: app entry point (`@main`)
+- `Sources/NestPFHelper/`: privileged root daemon for PF port redirects (prod bundle only)
 - `Tests/NestTests/`: test runner
-- `scripts/`: Info.plist template, entitlements
+- `scripts/`: Info.plist template, entitlements, PF helper launchd plist
 - `.github/workflows/`: release CI
 
 ## Development
@@ -118,5 +122,5 @@ git push origin vx.y.z    # triggers GitHub release
 ## Notes
 
 - All runtimes are installed and managed via Homebrew — Nest does not install anything.
-- `.test` domain routing requires dnsmasq + resolver + PF rules (see Prerequisites).
+- `.test` domain routing requires dnsmasq + resolver + PF rules (see Prerequisites). Packaged builds manage PF via a privileged SMAppService helper; dev builds require a one-time manual pfctl setup.
 - HTTPS requires trusting Caddy's local CA certificate once.
