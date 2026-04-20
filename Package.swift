@@ -20,6 +20,11 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
+            name: "NestPFHelper",
+            path: "Sources/NestPFHelper",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(
             name: "NestTests",
             dependencies: ["NestLib"],
             path: "Tests/NestTests",

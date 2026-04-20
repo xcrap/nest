@@ -43,8 +43,11 @@ package: build
 	rm -rf $(APP_BUNDLE)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
+	mkdir -p $(APP_BUNDLE)/Contents/Library/LaunchDaemons
 	cp $(BUILD_DIR)/Nest $(APP_BUNDLE)/Contents/MacOS/Nest
+	cp $(BUILD_DIR)/NestPFHelper $(APP_BUNDLE)/Contents/MacOS/NestPFHelper
 	cp scripts/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
+	cp scripts/app.nest.pfhelper.plist $(APP_BUNDLE)/Contents/Library/LaunchDaemons/app.nest.pfhelper.plist
 	mkdir -p $(APP_BUNDLE)/Contents/Frameworks
 	cp -R .build/arm64-apple-macosx/release/Sparkle.framework $(APP_BUNDLE)/Contents/Frameworks/
 	install_name_tool -add_rpath @executable_path/../Frameworks $(APP_BUNDLE)/Contents/MacOS/Nest 2>/dev/null || true

@@ -5,6 +5,7 @@ public struct EnvironmentChecksView: View {
     @EnvironmentObject var processController: ProcessController
     @State private var checks: [PrerequisiteChecker.CheckResult] = []
     @State private var runtimeIssues: [String] = []
+    @State private var helperMessage: String?
 
     public init() {}
 
@@ -166,6 +167,9 @@ public struct EnvironmentChecksView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if check.action != .none {
+                    actionButton(for: check.action)
+                }
             }
             if !check.passed && !check.fixHint.isEmpty {
                 Text(check.fixHint)
@@ -177,8 +181,30 @@ public struct EnvironmentChecksView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                     .padding(.leading, 24)
             }
+            if let helperMessage, check.action == .installPFHelper || check.action == .openPFHelperSettings {
+                Text(helperMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 24)
+            }
         }
         .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func actionButton(for action: PrerequisiteChecker.CheckAction) -> some View {
+        switch action {
+        case .installPFHelper:
+            Button("Install Helper") { installPFHelper() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        case .openPFHelperSettings:
+            Button("Open Settings") { PFHelperManager.openLoginItemsSettings() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        case .none:
+            EmptyView()
+        }
     }
 
     // MARK: - Actions
@@ -186,6 +212,26 @@ public struct EnvironmentChecksView: View {
     private func runChecks() {
         checks = PrerequisiteChecker.checkAll()
         runtimeIssues = store.settings.runtimePaths.validate()
+    }
+
+    private func installPFHelper() {
+        do {
+            try PFHelperManager.register()
+            switch PFHelperManager.status {
+            case .enabled:
+                helperMessage = "Helper installed. Ports 80/443 will redirect automatically on every boot."
+            case .requiresApproval:
+                helperMessage = "Approve the helper in System Settings → General → Login Items & Extensions."
+                PFHelperManager.openLoginItemsSettings()
+            case .notFound:
+                helperMessage = "Helper plist missing from app bundle. Reinstall Nest."
+            case .notRegistered, .unknown, .unsupported:
+                helperMessage = "Helper registration didn't take effect. Try again or reinstall Nest."
+            }
+        } catch {
+            helperMessage = "Helper install failed: \(error.localizedDescription)"
+        }
+        runChecks()
     }
 
     private func startFrankenPHP() {

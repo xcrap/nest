@@ -2,18 +2,26 @@ import Foundation
 
 /// Checks manual system prerequisites for .test domain and HTTPS support.
 public struct PrerequisiteChecker {
+    public enum CheckAction: Equatable {
+        case none
+        case installPFHelper
+        case openPFHelperSettings
+    }
+
     public struct CheckResult: Identifiable {
         public let id = UUID()
         public let name: String
         public let passed: Bool
         public let detail: String
         public let fixHint: String
+        public let action: CheckAction
 
-        public init(name: String, passed: Bool, detail: String, fixHint: String) {
+        public init(name: String, passed: Bool, detail: String, fixHint: String, action: CheckAction = .none) {
             self.name = name
             self.passed = passed
             self.detail = detail
             self.fixHint = fixHint
+            self.action = action
         }
     }
 
@@ -141,6 +149,58 @@ public struct PrerequisiteChecker {
 
     /// Check if PF anchor for port redirect exists.
     public static func checkPFAnchor() -> CheckResult {
+        if PFHelperManager.isSupported {
+            return checkPFAnchorViaHelper()
+        }
+        return checkPFAnchorLegacy()
+    }
+
+    private static func checkPFAnchorViaHelper() -> CheckResult {
+        switch PFHelperManager.status {
+        case .enabled:
+            if isPortRedirectWorking() {
+                return CheckResult(
+                    name: "Port Redirect (PF)",
+                    passed: true,
+                    detail: "Managed by Nest helper. Ports 80/443 redirect to 8080/8443 automatically on every boot.",
+                    fixHint: ""
+                )
+            }
+            if isCaddyAdminReachable() {
+                return CheckResult(
+                    name: "Port Redirect (PF)",
+                    passed: false,
+                    detail: "Nest helper is enabled but redirect isn't live. It will retry automatically; you can also re-run it now.",
+                    fixHint: "",
+                    action: .installPFHelper
+                )
+            }
+            return CheckResult(
+                name: "Port Redirect (PF)",
+                passed: true,
+                detail: "Nest helper is enabled. Start FrankenPHP to verify live 80/443 redirects.",
+                fixHint: ""
+            )
+        case .requiresApproval:
+            return CheckResult(
+                name: "Port Redirect (PF)",
+                passed: false,
+                detail: "Nest helper needs one-time approval in System Settings → General → Login Items & Extensions.",
+                fixHint: "",
+                action: .openPFHelperSettings
+            )
+        case .notRegistered, .notFound, .unknown, .unsupported:
+            return CheckResult(
+                name: "Port Redirect (PF)",
+                passed: false,
+                detail: "Install the Nest privileged helper so ports 80/443 redirect to 8080/8443 automatically on every boot.",
+                fixHint: "",
+                action: .installPFHelper
+            )
+        }
+    }
+
+    private static func checkPFAnchorLegacy() -> CheckResult {
         let anchorName = "dev.nest.app"
         let anchorPath = "/etc/pf.anchors/dev.nest.app"
         let pfConfPath = "/etc/pf.conf"

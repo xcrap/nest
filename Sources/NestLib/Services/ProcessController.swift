@@ -413,7 +413,16 @@ public final class ProcessController: ObservableObject {
     }
 
     /// Reload PF rules to restore port 80/443 → 8080/8443 redirects.
+    /// Prefers the privileged helper (no prompt); falls back to osascript if not available.
     private nonisolated func reloadPFRules() -> Bool {
+        if PFHelperManager.kickstart() {
+            // launchd may take a moment to fire WatchPaths; give it time to run pfctl.
+            Thread.sleep(forTimeInterval: 1.5)
+            if isPortRedirectWorking() {
+                return true
+            }
+        }
+
         let result = SystemProcess.capture(
             "/usr/bin/osascript",
             arguments: [
