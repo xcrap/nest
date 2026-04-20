@@ -113,5 +113,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add appcast.xml
-          git commit -m "Update appcast for v$(cat version.txt)" || true
-          git push origin HEAD:main || true
+          if ! git diff --cached --quiet; then
+            git commit -m "Update appcast for v$(cat version.txt)"
+          else
+            echo "appcast.xml unchanged; nothing to push"
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "push attempt $attempt rejected, retrying..."
+            sleep 3
+          done
+          echo "failed to push appcast update after retries"
+          exit 1
