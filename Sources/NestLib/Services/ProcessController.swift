@@ -84,11 +84,15 @@ public final class ProcessController: ObservableObject {
         self.pidDirectory = AppSettings.nestRunDirectory
         try? FileManager.default.createDirectory(atPath: pidDirectory, withIntermediateDirectories: true)
         detectRunningProcesses()
-        restoreSystemRulesIfNeeded()
     }
 
     /// Detect already-running FrankenPHP and MariaDB at startup.
     private func detectRunningProcesses() {
+        frankenphpRunning = false
+        mariadbRunning = false
+        externalFrankenPHPPid = nil
+        externalMariaDBPid = nil
+
         // Check FrankenPHP via PID file, then verify the process is alive
         if let pid = readPID(name: "frankenphp"), isProcessAlive(pid) {
             externalFrankenPHPPid = pid
@@ -164,6 +168,7 @@ public final class ProcessController: ObservableObject {
             Task { @MainActor in
                 if success {
                     self?.frankenphpRunning = true
+                    self?.restoreSystemRulesIfNeeded()
                 } else {
                     self?.frankenphpError = error ?? "Failed to start FrankenPHP"
                 }
@@ -293,6 +298,11 @@ public final class ProcessController: ObservableObject {
         refreshProjectStatuses(projects)
     }
 
+    public func reconcileSystemNetworkState() {
+        detectRunningProcesses()
+        restoreSystemRulesIfNeeded()
+    }
+
     // MARK: - App Projects
 
     public func startProject(_ project: AppProject) {
@@ -392,8 +402,7 @@ public final class ProcessController: ObservableObject {
     /// Restore services after system wake from sleep.
     /// macOS can flush PF redirect rules and DNS cache during sleep.
     public func handleSystemWake() {
-        detectRunningProcesses()
-        restoreSystemRulesIfNeeded()
+        reconcileSystemNetworkState()
     }
 
     /// Flush DNS cache and restore PF port redirect rules if FrankenPHP is running.
@@ -405,36 +414,28 @@ public final class ProcessController: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self, !self.isPortRedirectWorking() else { return }
-            self.reloadPFRules()
+            guard self.reloadPFRules() else { return }
+            _ = self.isPortRedirectWorking()
         }
     }
 
     /// Test whether PF redirects port 80 to 8080 (reaches Caddy).
     private nonisolated func isPortRedirectWorking() -> Bool {
-        guard let url = URL(string: "http://localhost:80") else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 2
-        let semaphore = DispatchSemaphore(value: 0)
-        var working = false
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            if response is HTTPURLResponse { working = true }
-            semaphore.signal()
-        }.resume()
-        _ = semaphore.wait(timeout: .now() + 3)
-        return working
+        isHTTPEndpointReachable("http://localhost:80") &&
+            isHTTPEndpointReachable("https://localhost:443", insecureTLS: true)
     }
 
     /// Reload PF rules to restore port 80/443 → 8080/8443 redirects.
-    private nonisolated func reloadPFRules() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = [
-            "-e",
-            "do shell script \"/sbin/pfctl -ef /etc/pf.conf 2>/dev/null\" with administrator privileges"
-        ]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
+    private nonisolated func reloadPFRules() -> Bool {
+        let result = SystemProcess.capture(
+            "/usr/bin/osascript",
+            arguments: [
+                "-e",
+                "do shell script \"/sbin/pfctl -ef /etc/pf.conf 2>/dev/null\" with administrator privileges"
+            ]
+        )
+
+        return result.status == 0
     }
 
     /// Flush macOS DNS cache so .test domains resolve immediately.
@@ -445,6 +446,28 @@ public final class ProcessController: ObservableObject {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
+    }
+
+    private nonisolated func isHTTPEndpointReachable(_ url: String, insecureTLS: Bool = false) -> Bool {
+        var arguments = [
+            "-I",
+            "--silent",
+            "--output", "/dev/null",
+            "--write-out", "%{http_code}",
+            "--max-time", "2"
+        ]
+
+        if insecureTLS {
+            arguments.append("-k")
+        }
+
+        arguments.append(url)
+
+        let result = SystemProcess.capture("/usr/bin/curl", arguments: arguments)
+        guard result.status == 0 else { return false }
+
+        let statusCode = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !statusCode.isEmpty && statusCode != "000"
     }
 
     // MARK: - Private

@@ -62,6 +62,9 @@ private struct MainWindowSceneView: View {
                 appDelegate.openMainWindowAction = openWindow
                 appDelegate.setupStatusBar()
                 DispatchQueue.main.async {
+                    processController.reconcileSystemNetworkState()
+                }
+                DispatchQueue.main.async {
                     AppDelegate.refreshWindowCorners()
                 }
             }

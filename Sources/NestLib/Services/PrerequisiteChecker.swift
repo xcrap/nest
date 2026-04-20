@@ -141,7 +141,9 @@ public struct PrerequisiteChecker {
 
     /// Check if PF anchor for port redirect exists.
     public static func checkPFAnchor() -> CheckResult {
+        let anchorName = "dev.nest.app"
         let anchorPath = "/etc/pf.anchors/dev.nest.app"
+        let pfConfPath = "/etc/pf.conf"
 
         guard FileManager.default.fileExists(atPath: anchorPath) else {
             return CheckResult(
@@ -155,16 +157,58 @@ public struct PrerequisiteChecker {
                   rdr-anchor "dev.nest.app"
                   load anchor "dev.nest.app" from "/etc/pf.anchors/dev.nest.app"
 
-                Then reload: sudo pfctl -f /etc/pf.conf
+                Then reload: sudo pfctl -ef /etc/pf.conf
                 """
+            )
+        }
+
+        let pfConfLoaded: Bool
+        if let content = try? String(contentsOfFile: pfConfPath, encoding: .utf8) {
+            pfConfLoaded =
+                content.contains("rdr-anchor \"\(anchorName)\"") &&
+                content.contains("load anchor \"\(anchorName)\" from \"\(anchorPath)\"")
+        } else {
+            pfConfLoaded = false
+        }
+
+        if !pfConfLoaded {
+            return CheckResult(
+                name: "Port Redirect (PF)",
+                passed: false,
+                detail: "/etc/pf.conf does not currently load the Nest PF anchor.",
+                fixHint: """
+                Add to /etc/pf.conf (before any existing anchor lines):
+                  rdr-anchor "\(anchorName)"
+                  load anchor "\(anchorName)" from "\(anchorPath)"
+
+                Then reload: sudo pfctl -ef /etc/pf.conf
+                """
+            )
+        }
+
+        if isPortRedirectWorking() {
+            return CheckResult(
+                name: "Port Redirect (PF)",
+                passed: true,
+                detail: "PF redirect is active. Local requests on ports 80/443 reach FrankenPHP.",
+                fixHint: ""
+            )
+        }
+
+        if isCaddyAdminReachable() {
+            return CheckResult(
+                name: "Port Redirect (PF)",
+                passed: false,
+                detail: "FrankenPHP is running, but ports 80/443 are not redirecting to 8080/8443 right now.",
+                fixHint: "Reload with: sudo pfctl -ef /etc/pf.conf"
             )
         }
 
         return CheckResult(
             name: "Port Redirect (PF)",
             passed: true,
-            detail: "PF anchor exists at \(anchorPath).",
-            fixHint: "If redirects aren't working, reload with: sudo pfctl -f /etc/pf.conf"
+            detail: "PF rules are configured on disk. Start FrankenPHP to verify live 80/443 redirects.",
+            fixHint: "If redirects aren't working, reload with: sudo pfctl -ef /etc/pf.conf"
         )
     }
 
@@ -177,5 +221,36 @@ public struct PrerequisiteChecker {
         try? process.run()
         process.waitUntilExit()
         return process.terminationStatus == 0
+    }
+
+    private static func isPortRedirectWorking() -> Bool {
+        isHTTPEndpointReachable("http://localhost:80") &&
+            isHTTPEndpointReachable("https://localhost:443", insecureTLS: true)
+    }
+
+    private static func isCaddyAdminReachable() -> Bool {
+        isHTTPEndpointReachable("http://localhost:2019/config/")
+    }
+
+    private static func isHTTPEndpointReachable(_ url: String, insecureTLS: Bool = false) -> Bool {
+        var arguments = [
+            "-I",
+            "--silent",
+            "--output", "/dev/null",
+            "--write-out", "%{http_code}",
+            "--max-time", "2"
+        ]
+
+        if insecureTLS {
+            arguments.append("-k")
+        }
+
+        arguments.append(url)
+
+        let result = SystemProcess.capture("/usr/bin/curl", arguments: arguments)
+        guard result.status == 0 else { return false }
+
+        let statusCode = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !statusCode.isEmpty && statusCode != "000"
     }
 }
