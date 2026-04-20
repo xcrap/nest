@@ -86,6 +86,9 @@ public struct EnvironmentChecksView: View {
             .padding(16)
         }
         .onAppear { runChecks() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            runChecks()
+        }
     }
 
     // MARK: - Components

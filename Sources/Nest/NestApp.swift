@@ -103,13 +103,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
-
-        // Refresh PF helper registration so launchd keeps a current reference to our bundle.
-        // Silent no-op for dev builds and for first-launch cases where the user hasn't
-        // opted in yet (registration succeeds; it just goes to .requiresApproval).
-        if PFHelperManager.isSupported, PFHelperManager.status == .notRegistered {
-            try? PFHelperManager.register()
-        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
