@@ -21,6 +21,7 @@ public struct CloudflareDNSRecord: Codable, Identifiable, Equatable {
 public enum CloudflareServiceError: LocalizedError {
     case missingAPIConfiguration
     case missingLocalConfiguration
+    case invalidTunnelConfiguration([String])
     case requestFailed(String)
     case invalidResponse
 
@@ -30,6 +31,8 @@ public enum CloudflareServiceError: LocalizedError {
             return "Cloudflare API settings are incomplete."
         case .missingLocalConfiguration:
             return "Cloudflare tunnel settings are incomplete."
+        case .invalidTunnelConfiguration(let issues):
+            return "Cloudflare tunnel configuration is invalid: \(issues.joined(separator: " "))"
         case .requestFailed(let message):
             return message
         case .invalidResponse:
@@ -81,6 +84,37 @@ private struct CloudflareTunnelConfigurationPayload: Encodable {
 }
 
 public enum CloudflareService {
+    private static func decodeAPIResponse<ResultType: Decodable>(
+        _ resultType: ResultType.Type,
+        data: Data,
+        response: URLResponse,
+        defaultFailureMessage: String,
+        requireResult: Bool = true
+    ) throws -> ResultType? {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CloudflareServiceError.invalidResponse
+        }
+
+        let decoded = try JSONDecoder().decode(CloudflareAPIResponse<ResultType>.self, from: data)
+        let message = decoded.errors.map { error in
+            if let code = error.code {
+                return "\(code): \(error.message)"
+            }
+            return error.message
+        }.joined(separator: ", ")
+
+        guard (200..<300).contains(httpResponse.statusCode), decoded.success else {
+            let failure = message.isEmpty ? defaultFailureMessage : message
+            throw CloudflareServiceError.requestFailed("Cloudflare HTTP \(httpResponse.statusCode): \(failure)")
+        }
+
+        if requireResult, decoded.result == nil {
+            throw CloudflareServiceError.invalidResponse
+        }
+
+        return decoded.result
+    }
+
     public static func listDNSRecords(settings: CloudflareSettings) async throws -> [CloudflareDNSRecord] {
         guard settings.hasAPIConfiguration else {
             throw CloudflareServiceError.missingAPIConfiguration
@@ -91,13 +125,13 @@ public enum CloudflareService {
         request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let response = try JSONDecoder().decode(CloudflareAPIResponse<[CloudflareDNSRecord]>.self, from: data)
-
-        guard response.success, let records = response.result else {
-            let message = response.errors.map(\.message).joined(separator: ", ")
-            throw CloudflareServiceError.requestFailed(message.isEmpty ? "Cloudflare request failed." : message)
-        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let records = try decodeAPIResponse(
+            [CloudflareDNSRecord].self,
+            data: data,
+            response: response,
+            defaultFailureMessage: "Cloudflare request failed."
+        ) ?? []
 
         return records
             .filter { $0.content == settings.tunnelDomain }
@@ -122,12 +156,14 @@ public enum CloudflareService {
             "ttl": 1
         ])
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let response = try JSONDecoder().decode(CloudflareAPIResponse<CloudflareEmptyPayload>.self, from: data)
-        guard response.success else {
-            let message = response.errors.map(\.message).joined(separator: ", ")
-            throw CloudflareServiceError.requestFailed(message.isEmpty ? "Failed to create DNS record." : message)
-        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        _ = try decodeAPIResponse(
+            CloudflareEmptyPayload.self,
+            data: data,
+            response: response,
+            defaultFailureMessage: "Failed to create DNS record.",
+            requireResult: false
+        )
     }
 
     public static func deleteDNSRecord(id: String, settings: CloudflareSettings) async throws {
@@ -141,12 +177,14 @@ public enum CloudflareService {
         request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let response = try JSONDecoder().decode(CloudflareAPIResponse<CloudflareEmptyPayload>.self, from: data)
-        guard response.success else {
-            let message = response.errors.map(\.message).joined(separator: ", ")
-            throw CloudflareServiceError.requestFailed(message.isEmpty ? "Failed to delete DNS record." : message)
-        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        _ = try decodeAPIResponse(
+            CloudflareEmptyPayload.self,
+            data: data,
+            response: response,
+            defaultFailureMessage: "Failed to delete DNS record.",
+            requireResult: false
+        )
     }
 
     public static func pushTunnelConfiguration(
@@ -163,6 +201,11 @@ public enum CloudflareService {
         }
 
         let renderer = TunnelConfigRenderer(settings: settings)
+        let issues = renderer.validationIssues(routes: routes, sites: sites, projects: projects)
+        guard issues.isEmpty else {
+            throw CloudflareServiceError.invalidTunnelConfiguration(issues)
+        }
+
         let resolvedRoutes = renderer.resolvedRoutes(routes: routes, sites: sites, projects: projects)
         let payload = CloudflareTunnelConfigurationPayload(
             config: .init(
@@ -193,11 +236,13 @@ public enum CloudflareService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(payload)
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let response = try JSONDecoder().decode(CloudflareAPIResponse<CloudflareEmptyPayload>.self, from: data)
-        guard response.success else {
-            let message = response.errors.map(\.message).joined(separator: ", ")
-            throw CloudflareServiceError.requestFailed(message.isEmpty ? "Failed to push tunnel configuration." : message)
-        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        _ = try decodeAPIResponse(
+            CloudflareEmptyPayload.self,
+            data: data,
+            response: response,
+            defaultFailureMessage: "Failed to push tunnel configuration.",
+            requireResult: false
+        )
     }
 }

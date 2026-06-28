@@ -34,7 +34,7 @@ enum ConfigRendererTests {
                 Site(name: "App", domain: "app.test", rootPath: "/var/www/app", documentRoot: "public", status: .running),
             ]
             let caddyfile = renderer.render(sites: sites)
-            assert(caddyfile.contains("import php-app app.test /var/www/app /var/www/app/public"), "should render public doc root")
+            assert(caddyfile.contains("import php-app \"app.test\" \"/var/www/app\" \"/var/www/app/public\""), "should render public doc root")
         }
 
         // Test: renders dot document root
@@ -43,7 +43,7 @@ enum ConfigRendererTests {
                 Site(name: "App", domain: "app.test", rootPath: "/var/www/app", documentRoot: ".", status: .running),
             ]
             let caddyfile = renderer.render(sites: sites)
-            assert(caddyfile.contains("import php-app app.test /var/www/app /var/www/app"), "should render dot doc root")
+            assert(caddyfile.contains("import php-app \"app.test\" \"/var/www/app\" \"/var/www/app\""), "should render dot doc root")
         }
 
         // Test: includes global options
@@ -82,6 +82,29 @@ enum ConfigRendererTests {
         } catch {
             failed += 1
             print("  FAIL: writeAll threw: \(error)")
+        }
+
+        // Test: rejects invalid running sites before writing config.
+        do {
+            let tmpDir = NSTemporaryDirectory() + "nest-test-\(UUID().uuidString)"
+            let r = ConfigRenderer(configDirectory: tmpDir, frankenphpLogPath: tmpDir + "/logs/frankenphp.log")
+            let sites = [
+                Site(name: "Bad", domain: "bad domain.test", rootPath: "/var/www/app", documentRoot: "../public", status: .running),
+            ]
+
+            do {
+                try r.writeAll(sites: sites)
+                failed += 1
+                print("  FAIL: writeAll should reject invalid site")
+            } catch ConfigRendererError.invalidConfiguration(let issues) {
+                assert(issues.contains { $0.contains("invalid DNS label") }, "should report invalid domain")
+                assert(issues.contains { $0.contains("site root") }, "should report unsafe document root")
+            } catch {
+                failed += 1
+                print("  FAIL: writeAll threw unexpected error: \(error)")
+            }
+
+            try? FileManager.default.removeItem(atPath: tmpDir)
         }
 
         return (passed, failed)

@@ -190,12 +190,34 @@ public struct TunnelFormSheet: View {
     }
 
     private func save() {
+        errorMessage = nil
         guard let parsedPort = Int(originPort), parsedPort > 0 else {
             errorMessage = "Port must be a valid number."
             return
         }
 
-        let hostname = "\(subdomain).\(publicDomain)"
+        let normalizedSubdomain = subdomain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedPublicDomain = NestValidation.normalizedDomain(publicDomain)
+        let normalizedLocalDomain = NestValidation.normalizedDomain(localDomain)
+        let hostname = "\(normalizedSubdomain).\(normalizedPublicDomain)"
+        let candidate = TunnelRoute(
+            id: mode.id,
+            kind: kind,
+            subdomain: normalizedSubdomain,
+            publicDomain: normalizedPublicDomain,
+            localDomain: normalizedLocalDomain,
+            originPort: parsedPort,
+            active: active,
+            linkedSiteDomain: linkedSiteDomain.isEmpty ? nil : linkedSiteDomain,
+            linkedProjectID: linkedProjectID.isEmpty ? nil : linkedProjectID
+        )
+
+        let issues = NestValidation.tunnelRouteIssues(candidate)
+        guard issues.isEmpty else {
+            errorMessage = issues.joined(separator: " ")
+            return
+        }
+
         let duplicate = store.tunnelRoutes.contains {
             $0.publicHostname == hostname && $0.id != mode.id
         }
@@ -210,9 +232,9 @@ public struct TunnelFormSheet: View {
                 TunnelRoute(
                     id: TunnelRoute.defaultID(from: hostname),
                     kind: kind,
-                    subdomain: subdomain,
-                    publicDomain: publicDomain,
-                    localDomain: localDomain,
+                    subdomain: normalizedSubdomain,
+                    publicDomain: normalizedPublicDomain,
+                    localDomain: normalizedLocalDomain,
                     originPort: parsedPort,
                     active: active,
                     linkedSiteDomain: linkedSiteDomain.isEmpty ? nil : linkedSiteDomain,
@@ -221,9 +243,9 @@ public struct TunnelFormSheet: View {
             )
         case .edit(var route):
             route.kind = kind
-            route.subdomain = subdomain
-            route.publicDomain = publicDomain
-            route.localDomain = localDomain
+            route.subdomain = normalizedSubdomain
+            route.publicDomain = normalizedPublicDomain
+            route.localDomain = normalizedLocalDomain
             route.originPort = parsedPort
             route.active = active
             route.linkedSiteDomain = linkedSiteDomain.isEmpty ? nil : linkedSiteDomain

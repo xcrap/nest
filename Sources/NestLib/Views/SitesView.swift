@@ -8,6 +8,7 @@ public struct SitesView: View {
     @State private var editingSite: Site?
     @State private var searchText = ""
     @State private var showImportPicker = false
+    @State private var showFolderImportPicker = false
     @State private var showExportPicker = false
     @State private var importResult: ImportResult?
     @State private var hoveredSiteId: String?
@@ -58,6 +59,7 @@ public struct SitesView: View {
 
                 Menu {
                     Button("Import Sites...") { showImportPicker = true }
+                    Button("Import Parked Folder...") { showFolderImportPicker = true }
                     Button("Export Sites...") { showExportPicker = true }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -113,6 +115,9 @@ public struct SitesView: View {
         .fileImporter(isPresented: $showImportPicker, allowedContentTypes: [.json]) { result in
             handleImport(result)
         }
+        .fileImporter(isPresented: $showFolderImportPicker, allowedContentTypes: [.folder]) { result in
+            handleParkedFolderImport(result)
+        }
         .fileExporter(isPresented: $showExportPicker, document: SiteExportDocument(data: (try? store.exportSites()) ?? Data()), contentType: .json, defaultFilename: "nest-sites.json") { _ in }
         .alert("Import Result", isPresented: .init(get: { importResult != nil }, set: { if !$0 { importResult = nil } })) {
             Button("OK") { importResult = nil }
@@ -159,6 +164,22 @@ public struct SitesView: View {
         } catch {
             importResult = ImportResult(message: error.localizedDescription)
         }
+    }
+
+    private func handleParkedFolderImport(_ result: Result<URL, Error>) {
+        guard case .success(let url) = result else { return }
+        guard url.startAccessingSecurityScopedResource() else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+
+        let summary = store.importParkedFolderSites(from: url)
+        var message = "Imported \(summary.imported.count) site(s)."
+        if !summary.skippedExistingDomains.isEmpty {
+            message += "\nSkipped existing domains:\n" + summary.skippedExistingDomains.joined(separator: "\n")
+        }
+        if !summary.skippedInvalidFolders.isEmpty {
+            message += "\nSkipped invalid folders:\n" + summary.skippedInvalidFolders.joined(separator: "\n")
+        }
+        importResult = ImportResult(message: message)
     }
 }
 
@@ -272,7 +293,12 @@ public struct SiteRow: View {
             configDirectory: store.settings.caddyConfigDirectory,
             frankenphpLogPath: store.settings.runtimePaths.frankenphpLog
         )
-        try? renderer.writeAll(sites: store.sites)
+        do {
+            try renderer.writeAll(sites: store.sites)
+        } catch {
+            processController.frankenphpError = error.localizedDescription
+            return
+        }
         if processController.frankenphpRunning {
             processController.reloadFrankenPHP(caddyfilePath: renderer.caddyfilePath)
         }

@@ -50,6 +50,31 @@ enum TunnelConfigRendererTests {
             assert(content.contains("http_status:404"), "should include fallback service")
         }
 
+        // Test: quotes YAML scalars that need escaping.
+        do {
+            let quotedRenderer = TunnelConfigRenderer(
+                settings: CloudflareSettings(
+                    tunnelName: "local testing",
+                    tunnelDomain: "abc.cfargotunnel.com",
+                    configPath: "/tmp/cloudflared/config.yaml",
+                    credentialsFilePath: "/Users/test/Cloudflare Files/abc.json"
+                )
+            )
+            let content = quotedRenderer.render(routes: [], sites: [], projects: [])
+            assert(content.contains("tunnel: \"local testing\""), "should quote tunnel names with spaces")
+            assert(content.contains("credentials-file: \"/Users/test/Cloudflare Files/abc.json\""), "should quote paths with spaces")
+        }
+
+        // Test: validation rejects unresolved active routes.
+        do {
+            let routes = [
+                TunnelRoute(kind: .app, subdomain: "bad route", publicDomain: "waka.pt", localDomain: "", originPort: 0),
+            ]
+            let issues = renderer.validationIssues(routes: routes, sites: [], projects: [])
+            assert(issues.contains { $0.contains("valid DNS label") }, "should validate route hostnames")
+            assert(issues.contains { $0.contains("no resolvable local origin") }, "should reject unresolved routes")
+        }
+
         return (passed, failed)
     }
 }

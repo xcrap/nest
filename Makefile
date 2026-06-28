@@ -46,6 +46,7 @@ package: build
 	mkdir -p $(APP_BUNDLE)/Contents/Library/LaunchDaemons
 	cp $(BUILD_DIR)/Nest $(APP_BUNDLE)/Contents/MacOS/Nest
 	cp $(BUILD_DIR)/NestPFHelper $(APP_BUNDLE)/Contents/MacOS/NestPFHelper
+	cp $(BUILD_DIR)/nestctl $(DIST_DIR)/nestctl
 	cp scripts/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	cp scripts/app.nest.pfhelper.plist $(APP_BUNDLE)/Contents/Library/LaunchDaemons/app.nest.pfhelper.plist
 	mkdir -p $(APP_BUNDLE)/Contents/Frameworks

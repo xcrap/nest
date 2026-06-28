@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 public struct EnvironmentChecksView: View {
     @EnvironmentObject var store: SiteStore
@@ -69,6 +70,24 @@ public struct EnvironmentChecksView: View {
                                     Text(issue)
                                         .font(.callout)
                                         .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !store.persistenceErrors.isEmpty {
+                    sectionCard(title: "Storage", icon: "externaldrive.badge.exclamationmark", color: .orange) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(store.persistenceErrors, id: \.self) { issue in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .font(.callout)
+                                    Text(issue)
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
                                 }
                             }
                         }
@@ -158,8 +177,8 @@ public struct EnvironmentChecksView: View {
     private func prerequisiteRow(_ check: PrerequisiteChecker.CheckResult) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Image(systemName: check.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundStyle(check.passed ? .green : .red)
+                Image(systemName: icon(for: check))
+                    .foregroundStyle(color(for: check))
                     .font(.callout)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(check.name)
@@ -173,6 +192,14 @@ public struct EnvironmentChecksView: View {
                 if check.action != .none {
                     actionButton(for: check.action)
                 }
+                if check.id == .pfAnchor, PFHelperManager.isSupported {
+                    Button("Repair") { repairPFHelper() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    Button("Uninstall") { uninstallPFHelper() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
             }
             if !check.passed && !check.fixHint.isEmpty {
                 Text(check.fixHint)
@@ -184,7 +211,30 @@ public struct EnvironmentChecksView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
                     .padding(.leading, 24)
             }
-            if let helperMessage, check.action == .installPFHelper || check.action == .openPFHelperSettings {
+            if !check.fixCommands.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(check.fixCommands, id: \.self) { command in
+                        HStack(spacing: 8) {
+                            Text(command)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                            Spacer()
+                            Button {
+                                copy(command)
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("Copy command")
+                        }
+                    }
+                }
+                .padding(.leading, 24)
+            }
+            if let helperMessage, check.id == .pfAnchor {
                 Text(helperMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -194,11 +244,37 @@ public struct EnvironmentChecksView: View {
         .padding(.vertical, 6)
     }
 
+    private func icon(for check: PrerequisiteChecker.CheckResult) -> String {
+        if check.passed { return "checkmark.circle.fill" }
+        switch check.severity {
+        case .info: return "info.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .error: return "xmark.circle.fill"
+        }
+    }
+
+    private func color(for check: PrerequisiteChecker.CheckResult) -> Color {
+        if check.passed { return .green }
+        switch check.severity {
+        case .info: return .blue
+        case .warning: return .orange
+        case .error: return .red
+        }
+    }
+
     @ViewBuilder
     private func actionButton(for action: PrerequisiteChecker.CheckAction) -> some View {
         switch action {
         case .installPFHelper:
             Button("Install Helper") { installPFHelper() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        case .repairPFHelper:
+            Button("Repair") { repairPFHelper() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        case .uninstallPFHelper:
+            Button("Uninstall") { uninstallPFHelper() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
         case .openPFHelperSettings:
@@ -237,6 +313,34 @@ public struct EnvironmentChecksView: View {
         runChecks()
     }
 
+    private func repairPFHelper() {
+        if PFHelperManager.repair() {
+            helperMessage = "Helper repair requested. Recheck in a moment."
+        } else {
+            helperMessage = "Helper repair could not be requested. Install or approve the helper first."
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            runChecks()
+        }
+    }
+
+    private func uninstallPFHelper() {
+        do {
+            try PFHelperManager.unregister()
+            let helperPath = (Bundle.main.bundlePath as NSString)
+                .appendingPathComponent("Contents/MacOS/NestPFHelper")
+            helperMessage = "Helper unregistered. To remove existing PF files, run: sudo \"\(helperPath)\" --uninstall"
+        } catch {
+            helperMessage = "Helper uninstall failed: \(error.localizedDescription)"
+        }
+        runChecks()
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
     private func startFrankenPHP() {
         let paths = store.settings.runtimePaths
         guard !paths.frankenphpBinary.isEmpty else { return }
@@ -244,7 +348,12 @@ public struct EnvironmentChecksView: View {
             configDirectory: store.settings.caddyConfigDirectory,
             frankenphpLogPath: paths.frankenphpLog
         )
-        try? renderer.writeAll(sites: store.sites)
+        do {
+            try renderer.writeAll(sites: store.sites)
+        } catch {
+            processController.frankenphpError = error.localizedDescription
+            return
+        }
         processController.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
     }
 
@@ -256,7 +365,12 @@ public struct EnvironmentChecksView: View {
 
     private func startCloudflared() {
         let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
-        try? renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        do {
+            try renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        } catch {
+            processController.cloudflaredError = error.localizedDescription
+            return
+        }
         processController.startCloudflared(settings: store.settings)
     }
 }

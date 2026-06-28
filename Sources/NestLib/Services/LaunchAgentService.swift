@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-public struct LaunchAgentDefinition {
+public struct LaunchAgentDefinition: Sendable {
     public var label: String
     public var programArguments: [String]
     public var workingDirectory: String?

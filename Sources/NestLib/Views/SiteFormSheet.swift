@@ -135,21 +135,35 @@ public struct SiteFormSheet: View {
     }
 
     private func save() {
-        let d = domain.hasSuffix(".test") ? domain : "\(domain).test"
+        errorMessage = nil
+        let normalizedDomain = NestValidation.normalizedDomain(domain, defaultTLD: "test")
+        let candidate = Site(
+            name: name,
+            domain: normalizedDomain,
+            rootPath: rootPath,
+            documentRoot: documentRoot
+        )
 
-        if case .add = mode {
-            if store.site(forDomain: d) != nil {
-                errorMessage = "A site with domain '\(d)' already exists."
-                return
-            }
+        let issues = NestValidation.siteIssues(candidate)
+        guard issues.isEmpty else {
+            errorMessage = issues.joined(separator: " ")
+            return
+        }
+
+        let duplicate = store.sites.contains {
+            $0.domain == normalizedDomain && $0.id != mode.id
+        }
+        if duplicate {
+            errorMessage = "A site with domain '\(normalizedDomain)' already exists."
+            return
         }
 
         switch mode {
         case .add:
-            let _ = store.addSite(name: name, domain: d, rootPath: rootPath, documentRoot: documentRoot)
+            let _ = store.addSite(name: name, domain: normalizedDomain, rootPath: rootPath, documentRoot: documentRoot)
         case .edit(var site):
             site.name = name
-            site.domain = d
+            site.domain = normalizedDomain
             site.rootPath = rootPath
             site.documentRoot = documentRoot
             store.updateSite(site)

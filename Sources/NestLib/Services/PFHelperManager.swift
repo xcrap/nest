@@ -15,6 +15,7 @@ public enum PFHelperManager {
     public static let serviceLabel = "app.nest.pfhelper"
     public static let kickPath = "/tmp/app.nest.pfhelper.kick"
     public static let anchorPath = "/etc/pf.anchors/app.nest"
+    public static let pfConfPath = "/etc/pf.conf"
 
     /// The helper daemon can only be registered from a Developer-ID-signed prod build.
     /// Dev builds (ad-hoc signed) fall back to the legacy osascript flow.
@@ -47,6 +48,11 @@ public enum PFHelperManager {
     public static func unregister() throws {
         guard isSupported else { return }
         try service.unregister()
+    }
+
+    @discardableResult
+    public static func repair() -> Bool {
+        kickstart()
     }
 
     /// Ask launchd to re-run the daemon by touching the WatchPaths file.

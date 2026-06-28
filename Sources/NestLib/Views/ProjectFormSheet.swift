@@ -158,16 +158,33 @@ public struct ProjectFormSheet: View {
     }
 
     private func save() {
+        errorMessage = nil
         guard let parsedPort = Int(port), parsedPort > 0 else {
             errorMessage = "Port must be a valid number."
             return
         }
 
+        let normalizedHostname = NestValidation.normalizedDomain(hostname)
+        let candidate = AppProject(
+            id: mode.id,
+            name: name,
+            hostname: normalizedHostname,
+            directory: directory,
+            port: parsedPort,
+            command: command
+        )
+
+        let issues = NestValidation.projectIssues(candidate)
+        guard issues.isEmpty else {
+            errorMessage = issues.joined(separator: " ")
+            return
+        }
+
         let duplicateHostname = store.appProjects.contains {
-            $0.hostname == hostname && (mode.id != $0.id)
+            $0.hostname == normalizedHostname && (mode.id != $0.id)
         }
         if duplicateHostname {
-            errorMessage = "A project with hostname '\(hostname)' already exists."
+            errorMessage = "A project with hostname '\(normalizedHostname)' already exists."
             return
         }
 
@@ -175,14 +192,14 @@ public struct ProjectFormSheet: View {
         case .add:
             _ = store.addProject(
                 name: name,
-                hostname: hostname,
+                hostname: normalizedHostname,
                 directory: directory,
                 port: parsedPort,
                 command: command
             )
         case .edit(var project):
             project.name = name
-            project.hostname = hostname
+            project.hostname = normalizedHostname
             project.directory = directory
             project.port = parsedPort
             project.command = command

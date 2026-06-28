@@ -1,5 +1,16 @@
 import Foundation
 
+public enum ConfigRendererError: LocalizedError, Equatable {
+    case invalidConfiguration([String])
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidConfiguration(let issues):
+            "Cannot write FrankenPHP config: \(issues.joined(separator: " "))"
+        }
+    }
+}
+
 /// Generates and writes FrankenPHP/Caddy configuration from stored sites.
 public struct ConfigRenderer {
     public let configDirectory: String
@@ -24,6 +35,23 @@ public struct ConfigRenderer {
 
     // MARK: - Caddyfile Generation
 
+    public func validationIssues(sites: [Site]) -> [String] {
+        var issues: [String] = []
+        issues.append(contentsOf: NestValidation.absolutePathIssues(configDirectory, field: "Caddy config directory"))
+
+        if !frankenphpLogPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append(contentsOf: NestValidation.absolutePathIssues(frankenphpLogPath, field: "FrankenPHP log path"))
+        }
+
+        for site in sites where site.status == .running {
+            for issue in NestValidation.siteIssues(site) {
+                issues.append("\(site.domain): \(issue)")
+            }
+        }
+
+        return issues
+    }
+
     public func render(sites: [Site]) -> String {
         var lines: [String] = []
 
@@ -34,7 +62,7 @@ public struct ConfigRenderer {
         lines.append("    local_certs")
         if !frankenphpLogPath.isEmpty {
             lines.append("    log {")
-            lines.append("        output file \"\(frankenphpLogPath)\"")
+            lines.append("        output file \(NestValidation.caddyfileArgument(frankenphpLogPath))")
             lines.append("        format console")
             lines.append("    }")
         }
@@ -51,7 +79,9 @@ public struct ConfigRenderer {
 
         let runningSites = sites.filter { $0.status == .running }
         for site in runningSites {
-            lines.append("import php-app \(site.domain) \(site.rootPath) \(site.resolvedDocumentRoot)")
+            lines.append(
+                "import php-app \(NestValidation.caddyfileArgument(site.domain)) \(NestValidation.caddyfileArgument(site.rootPath)) \(NestValidation.caddyfileArgument(site.resolvedDocumentRoot))"
+            )
         }
 
         if !runningSites.isEmpty {
@@ -91,6 +121,11 @@ public struct ConfigRenderer {
     // MARK: - Write Config Files
 
     public func writeAll(sites: [Site]) throws {
+        let issues = validationIssues(sites: sites)
+        guard issues.isEmpty else {
+            throw ConfigRendererError.invalidConfiguration(issues)
+        }
+
         let fm = FileManager.default
         try fm.createDirectory(atPath: configDirectory, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: snippetsDirectory, withIntermediateDirectories: true)

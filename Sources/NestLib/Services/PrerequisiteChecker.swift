@@ -2,25 +2,63 @@ import Foundation
 
 /// Checks manual system prerequisites for .test domain and HTTPS support.
 public struct PrerequisiteChecker {
+    public enum CheckID: String, CaseIterable {
+        case dnsmasq
+        case resolver
+        case localCA
+        case pfAnchor
+    }
+
+    public enum CheckCategory: String, Equatable {
+        case dns
+        case tls
+        case networking
+    }
+
+    public enum CheckSeverity: String, Equatable {
+        case info
+        case warning
+        case error
+    }
+
     public enum CheckAction: Equatable {
         case none
         case installPFHelper
+        case repairPFHelper
+        case uninstallPFHelper
         case openPFHelperSettings
     }
 
     public struct CheckResult: Identifiable {
-        public let id = UUID()
+        public let id: CheckID
+        public let category: CheckCategory
         public let name: String
         public let passed: Bool
+        public let severity: CheckSeverity
         public let detail: String
         public let fixHint: String
+        public let fixCommands: [String]
         public let action: CheckAction
 
-        public init(name: String, passed: Bool, detail: String, fixHint: String, action: CheckAction = .none) {
+        public init(
+            id: CheckID,
+            category: CheckCategory,
+            name: String,
+            passed: Bool,
+            severity: CheckSeverity? = nil,
+            detail: String,
+            fixHint: String,
+            fixCommands: [String] = [],
+            action: CheckAction = .none
+        ) {
+            self.id = id
+            self.category = category
             self.name = name
             self.passed = passed
+            self.severity = severity ?? (passed ? .info : .error)
             self.detail = detail
             self.fixHint = fixHint
+            self.fixCommands = fixCommands
             self.action = action
         }
     }
@@ -43,6 +81,8 @@ public struct PrerequisiteChecker {
 
         guard fm.fileExists(atPath: binary) else {
             return CheckResult(
+                id: .dnsmasq,
+                category: .dns,
                 name: "dnsmasq",
                 passed: false,
                 detail: "dnsmasq is not installed. It resolves *.test domains to 127.0.0.1.",
@@ -50,7 +90,12 @@ public struct PrerequisiteChecker {
                 brew install dnsmasq
                 printf 'port=5354\\naddress=/.test/127.0.0.1\\nlisten-address=127.0.0.1\\n' > /opt/homebrew/etc/dnsmasq.conf
                 brew services start dnsmasq
-                """
+                """,
+                fixCommands: [
+                    "brew install dnsmasq",
+                    "printf 'port=5354\\naddress=/.test/127.0.0.1\\nlisten-address=127.0.0.1\\n' > /opt/homebrew/etc/dnsmasq.conf",
+                    "brew services start dnsmasq"
+                ]
             )
         }
 
@@ -64,13 +109,19 @@ public struct PrerequisiteChecker {
 
         if !configOK {
             return CheckResult(
+                id: .dnsmasq,
+                category: .dns,
                 name: "dnsmasq",
                 passed: false,
                 detail: "dnsmasq is installed but not configured for .test domains.",
                 fixHint: """
                 printf 'port=5354\\naddress=/.test/127.0.0.1\\nlisten-address=127.0.0.1\\n' > /opt/homebrew/etc/dnsmasq.conf
                 brew services restart dnsmasq
-                """
+                """,
+                fixCommands: [
+                    "printf 'port=5354\\naddress=/.test/127.0.0.1\\nlisten-address=127.0.0.1\\n' > /opt/homebrew/etc/dnsmasq.conf",
+                    "brew services restart dnsmasq"
+                ]
             )
         }
 
@@ -78,14 +129,19 @@ public struct PrerequisiteChecker {
         let running = isProcessRunning("dnsmasq")
         if !running {
             return CheckResult(
+                id: .dnsmasq,
+                category: .dns,
                 name: "dnsmasq",
                 passed: false,
                 detail: "dnsmasq is configured but not running.",
-                fixHint: "brew services start dnsmasq"
+                fixHint: "brew services start dnsmasq",
+                fixCommands: ["brew services start dnsmasq"]
             )
         }
 
         return CheckResult(
+            id: .dnsmasq,
+            category: .dns,
             name: "dnsmasq",
             passed: true,
             detail: "dnsmasq is running and configured for *.test domains.",
@@ -100,16 +156,21 @@ public struct PrerequisiteChecker {
 
         guard fm.fileExists(atPath: path) else {
             return CheckResult(
+                id: .resolver,
+                category: .dns,
                 name: "DNS Resolver",
                 passed: false,
                 detail: "/etc/resolver/test does not exist.",
-                fixHint: "sudo bash -c 'printf \"nameserver 127.0.0.1\\nport 5354\\n\" > /etc/resolver/test'"
+                fixHint: "sudo bash -c 'printf \"nameserver 127.0.0.1\\nport 5354\\n\" > /etc/resolver/test'",
+                fixCommands: ["sudo bash -c 'printf \"nameserver 127.0.0.1\\nport 5354\\n\" > /etc/resolver/test'"]
             )
         }
 
         if let content = try? String(contentsOfFile: path, encoding: .utf8),
            content.contains("127.0.0.1"), content.contains("5354") {
             return CheckResult(
+                id: .resolver,
+                category: .dns,
                 name: "DNS Resolver",
                 passed: true,
                 detail: "/etc/resolver/test is configured (port 5354).",
@@ -118,10 +179,13 @@ public struct PrerequisiteChecker {
         }
 
         return CheckResult(
+            id: .resolver,
+            category: .dns,
             name: "DNS Resolver",
             passed: false,
             detail: "/etc/resolver/test exists but may be misconfigured.",
-            fixHint: "sudo bash -c 'printf \"nameserver 127.0.0.1\\nport 5354\\n\" > /etc/resolver/test'"
+            fixHint: "sudo bash -c 'printf \"nameserver 127.0.0.1\\nport 5354\\n\" > /etc/resolver/test'",
+            fixCommands: ["sudo bash -c 'printf \"nameserver 127.0.0.1\\nport 5354\\n\" > /etc/resolver/test'"]
         )
     }
 
@@ -132,18 +196,27 @@ public struct PrerequisiteChecker {
 
         guard FileManager.default.fileExists(atPath: caCertPath) else {
             return CheckResult(
+                id: .localCA,
+                category: .tls,
                 name: "Local CA Certificate",
                 passed: false,
                 detail: "Caddy local CA certificate not found. Start FrankenPHP once to generate it.",
-                fixHint: "brew services start frankenphp\nThen trust the CA:\n  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\""
+                fixHint: "brew services start frankenphp\nThen trust the CA:\n  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\"",
+                fixCommands: [
+                    "brew services start frankenphp",
+                    "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\""
+                ]
             )
         }
 
         return CheckResult(
+            id: .localCA,
+            category: .tls,
             name: "Local CA Certificate",
             passed: true,
             detail: "Caddy local CA certificate exists.\nIf HTTPS doesn't work, ensure it's trusted in Keychain.",
-            fixHint: "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\""
+            fixHint: "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\"",
+            fixCommands: ["sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \"\(caCertPath)\""]
         )
     }
 
@@ -160,6 +233,8 @@ public struct PrerequisiteChecker {
         case .enabled:
             if isPortRedirectWorking() {
                 return CheckResult(
+                    id: .pfAnchor,
+                    category: .networking,
                     name: "Port Redirect (PF)",
                     passed: true,
                     detail: "Managed by Nest helper. Ports 80/443 redirect to 8080/8443 automatically on every boot.",
@@ -168,14 +243,19 @@ public struct PrerequisiteChecker {
             }
             if isCaddyAdminReachable() {
                 return CheckResult(
+                    id: .pfAnchor,
+                    category: .networking,
                     name: "Port Redirect (PF)",
                     passed: false,
+                    severity: .warning,
                     detail: "Nest helper is enabled but redirect isn't live. It will retry automatically; you can also re-run it now.",
                     fixHint: "",
-                    action: .installPFHelper
+                    action: .repairPFHelper
                 )
             }
             return CheckResult(
+                id: .pfAnchor,
+                category: .networking,
                 name: "Port Redirect (PF)",
                 passed: true,
                 detail: "Nest helper is enabled. Start FrankenPHP to verify live 80/443 redirects.",
@@ -183,6 +263,8 @@ public struct PrerequisiteChecker {
             )
         case .requiresApproval:
             return CheckResult(
+                id: .pfAnchor,
+                category: .networking,
                 name: "Port Redirect (PF)",
                 passed: false,
                 detail: "Nest helper needs one-time approval in System Settings → General → Login Items & Extensions.",
@@ -191,6 +273,8 @@ public struct PrerequisiteChecker {
             )
         case .notRegistered, .notFound, .unknown, .unsupported:
             return CheckResult(
+                id: .pfAnchor,
+                category: .networking,
                 name: "Port Redirect (PF)",
                 passed: false,
                 detail: "Install the Nest privileged helper so ports 80/443 redirect to 8080/8443 automatically on every boot.",
@@ -207,6 +291,8 @@ public struct PrerequisiteChecker {
 
         guard FileManager.default.fileExists(atPath: anchorPath) else {
             return CheckResult(
+                id: .pfAnchor,
+                category: .networking,
                 name: "Port Redirect (PF)",
                 passed: false,
                 detail: "PF anchor not found. Ports 80/443 won't redirect to 8080/8443.",
@@ -218,7 +304,11 @@ public struct PrerequisiteChecker {
                   load anchor "dev.nest.app" from "/etc/pf.anchors/dev.nest.app"
 
                 Then reload: sudo pfctl -ef /etc/pf.conf
-                """
+                """,
+                fixCommands: [
+                    "sudo bash -c 'printf \"rdr pass on lo0 inet proto tcp from any to any port 80 -> 127.0.0.1 port 8080\\nrdr pass on lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443\\n\" > /etc/pf.anchors/dev.nest.app'",
+                    "sudo pfctl -ef /etc/pf.conf"
+                ]
             )
         }
 
@@ -233,6 +323,8 @@ public struct PrerequisiteChecker {
 
         if !pfConfLoaded {
             return CheckResult(
+                id: .pfAnchor,
+                category: .networking,
                 name: "Port Redirect (PF)",
                 passed: false,
                 detail: "/etc/pf.conf does not currently load the Nest PF anchor.",
@@ -242,12 +334,15 @@ public struct PrerequisiteChecker {
                   load anchor "\(anchorName)" from "\(anchorPath)"
 
                 Then reload: sudo pfctl -ef /etc/pf.conf
-                """
+                """,
+                fixCommands: ["sudo pfctl -ef /etc/pf.conf"]
             )
         }
 
         if isPortRedirectWorking() {
             return CheckResult(
+                id: .pfAnchor,
+                category: .networking,
                 name: "Port Redirect (PF)",
                 passed: true,
                 detail: "PF redirect is active. Local requests on ports 80/443 reach FrankenPHP.",
@@ -257,18 +352,24 @@ public struct PrerequisiteChecker {
 
         if isCaddyAdminReachable() {
             return CheckResult(
+                id: .pfAnchor,
+                category: .networking,
                 name: "Port Redirect (PF)",
                 passed: false,
                 detail: "FrankenPHP is running, but ports 80/443 are not redirecting to 8080/8443 right now.",
-                fixHint: "Reload with: sudo pfctl -ef /etc/pf.conf"
+                fixHint: "Reload with: sudo pfctl -ef /etc/pf.conf",
+                fixCommands: ["sudo pfctl -ef /etc/pf.conf"]
             )
         }
 
         return CheckResult(
+            id: .pfAnchor,
+            category: .networking,
             name: "Port Redirect (PF)",
             passed: true,
             detail: "PF rules are configured on disk. Start FrankenPHP to verify live 80/443 redirects.",
-            fixHint: "If redirects aren't working, reload with: sudo pfctl -ef /etc/pf.conf"
+            fixHint: "If redirects aren't working, reload with: sudo pfctl -ef /etc/pf.conf",
+            fixCommands: ["sudo pfctl -ef /etc/pf.conf"]
         )
     }
 

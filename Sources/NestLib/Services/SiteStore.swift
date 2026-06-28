@@ -8,6 +8,7 @@ public final class SiteStore: ObservableObject {
     @Published public var appProjects: [AppProject] = []
     @Published public var tunnelRoutes: [TunnelRoute] = []
     @Published public var settings: AppSettings
+    @Published public private(set) var persistenceErrors: [String] = []
 
     private let sitesFileURL: URL
     private let projectsFileURL: URL
@@ -16,18 +17,43 @@ public final class SiteStore: ObservableObject {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
 
-    public init() {
+    private enum StoreSource {
+        case envelope
+        case legacy
+    }
+
+    private struct LoadedValue<T> {
+        var value: T
+        var source: StoreSource
+    }
+
+    public convenience init() {
         let defaults = AppSettings.defaultSettings()
         AppSettings.prepareStorage()
-        let nestDir = AppSettings.nestDataDirectory
+        self.init(
+            dataDirectory: URL(fileURLWithPath: AppSettings.nestDataDirectory),
+            defaults: defaults,
+            runOneTimeMigrations: true
+        )
+    }
 
+    public init(
+        dataDirectory: URL,
+        defaults: AppSettings = AppSettings.defaultSettings(),
+        runOneTimeMigrations: Bool = true
+    ) {
+        var initialPersistenceErrors: [String] = []
         let fm = FileManager.default
-        try? fm.createDirectory(atPath: nestDir, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        } catch {
+            initialPersistenceErrors.append("Cannot create Nest data directory: \(error.localizedDescription)")
+        }
 
-        self.sitesFileURL = URL(fileURLWithPath: nestDir).appendingPathComponent("sites.json")
-        self.projectsFileURL = URL(fileURLWithPath: nestDir).appendingPathComponent("projects.json")
-        self.tunnelRoutesFileURL = URL(fileURLWithPath: nestDir).appendingPathComponent("tunnels.json")
-        self.settingsFileURL = URL(fileURLWithPath: nestDir).appendingPathComponent("settings.json")
+        self.sitesFileURL = dataDirectory.appendingPathComponent("sites.json")
+        self.projectsFileURL = dataDirectory.appendingPathComponent("projects.json")
+        self.tunnelRoutesFileURL = dataDirectory.appendingPathComponent("tunnels.json")
+        self.settingsFileURL = dataDirectory.appendingPathComponent("settings.json")
 
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -52,56 +78,65 @@ public final class SiteStore: ObservableObject {
         self.decoder = dec
 
         self.settings = defaults
+        self.persistenceErrors = initialPersistenceErrors
 
         loadSettings()
         loadSites()
         loadProjects()
         loadTunnelRoutes()
         reconcileTunnelLinks()
-        runOneTimeMindMigrationIfNeeded()
+        if runOneTimeMigrations {
+            runOneTimeMindMigrationIfNeeded()
+        }
     }
 
     // MARK: - Persistence
 
     private func loadSites() {
-        guard let data = try? Data(contentsOf: sitesFileURL) else { return }
-        if let loaded = try? decoder.decode([Site].self, from: data) {
+        if let result: LoadedValue<[Site]> = loadStoredValue([Site].self, from: sitesFileURL, label: "sites") {
+            let loaded = result.value
             sites = loaded
+            if result.source == .legacy {
+                saveSites()
+            }
         }
     }
 
     private func saveSites() {
-        guard let data = try? encoder.encode(sites) else { return }
-        try? data.write(to: sitesFileURL, options: .atomic)
+        saveEncodable(sites, to: sitesFileURL, label: "sites")
     }
 
     private func loadProjects() {
-        guard let data = try? Data(contentsOf: projectsFileURL) else { return }
-        if let loaded = try? decoder.decode([AppProject].self, from: data) {
+        if let result: LoadedValue<[AppProject]> = loadStoredValue([AppProject].self, from: projectsFileURL, label: "projects") {
+            let loaded = result.value
             appProjects = loaded
+            if result.source == .legacy {
+                saveProjects()
+            }
         }
     }
 
     private func saveProjects() {
-        guard let data = try? encoder.encode(appProjects) else { return }
-        try? data.write(to: projectsFileURL, options: .atomic)
+        saveEncodable(appProjects, to: projectsFileURL, label: "projects")
     }
 
     private func loadTunnelRoutes() {
-        guard let data = try? Data(contentsOf: tunnelRoutesFileURL) else { return }
-        if let loaded = try? decoder.decode([TunnelRoute].self, from: data) {
+        if let result: LoadedValue<[TunnelRoute]> = loadStoredValue([TunnelRoute].self, from: tunnelRoutesFileURL, label: "tunnel routes") {
+            let loaded = result.value
             tunnelRoutes = loaded
+            if result.source == .legacy {
+                saveTunnelRoutes()
+            }
         }
     }
 
     private func saveTunnelRoutes() {
-        guard let data = try? encoder.encode(tunnelRoutes) else { return }
-        try? data.write(to: tunnelRoutesFileURL, options: .atomic)
+        saveEncodable(tunnelRoutes, to: tunnelRoutesFileURL, label: "tunnel routes")
     }
 
     private func loadSettings() {
-        guard let data = try? Data(contentsOf: settingsFileURL) else { return }
-        if let loaded = try? decoder.decode(AppSettings.self, from: data) {
+        if let result: LoadedValue<AppSettings> = loadStoredValue(AppSettings.self, from: settingsFileURL, label: "settings") {
+            let loaded = result.value
             settings = loaded
             let normalizedRuntimePaths = settings.runtimePaths.fillingMissingValues()
             var migratedRuntimePaths = normalizedRuntimePaths
@@ -113,7 +148,7 @@ public final class SiteStore: ObservableObject {
                 migratedRuntimePaths.cloudflaredLog = preferredCloudflaredLog
             }
 
-            if migratedRuntimePaths != settings.runtimePaths {
+            if migratedRuntimePaths != settings.runtimePaths || result.source == .legacy {
                 settings.runtimePaths = migratedRuntimePaths
                 saveSettings()
             }
@@ -121,18 +156,120 @@ public final class SiteStore: ObservableObject {
     }
 
     public func saveSettings() {
-        guard let data = try? encoder.encode(settings) else { return }
-        try? data.write(to: settingsFileURL, options: .atomic)
+        saveEncodable(settings, to: settingsFileURL, label: "settings")
+    }
+
+    private func loadStoredValue<T: Codable>(_ type: T.Type, from url: URL, label: String) -> LoadedValue<T>? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
+        } catch {
+            recordPersistenceError("Cannot read \(label): \(error.localizedDescription)")
+            return nil
+        }
+
+        do {
+            let envelope = try decoder.decode(StoreEnvelope<T>.self, from: data)
+            guard envelope.schemaVersion <= StoreSchema.currentVersion else {
+                let backupMessage = backupInvalidFile(url)
+                recordPersistenceError("Cannot decode \(label): schema version \(envelope.schemaVersion) is newer than supported version \(StoreSchema.currentVersion). \(backupMessage)")
+                return nil
+            }
+            return LoadedValue(value: envelope.payload, source: .envelope)
+        } catch let envelopeError {
+            do {
+                let legacy = try decoder.decode(type, from: data)
+                let backupMessage = backupLegacyFile(url)
+                recordPersistenceError("Migrated legacy \(label) storage to schema version \(StoreSchema.currentVersion). \(backupMessage)")
+                return LoadedValue(value: legacy, source: .legacy)
+            } catch {
+                let backupMessage = backupInvalidFile(url)
+                recordPersistenceError("Cannot decode \(label): \(envelopeError.localizedDescription). \(backupMessage)")
+                return nil
+            }
+        }
+    }
+
+    private func saveEncodable<T: Codable>(_ value: T, to url: URL, label: String) {
+        do {
+            let envelope = StoreEnvelope(payload: value)
+            let data = try encoder.encode(envelope)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            recordPersistenceError("Cannot save \(label): \(error.localizedDescription)")
+        }
+    }
+
+    private func backupLegacyFile(_ url: URL) -> String {
+        backupFile(url, suffix: "legacy")
+    }
+
+    private func backupInvalidFile(_ url: URL) -> String {
+        backupFile(url, suffix: "invalid")
+    }
+
+    private func backupFile(_ url: URL, suffix: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let timestamp = formatter.string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let backupURL = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.lastPathComponent).\(suffix)-\(timestamp)")
+
+        do {
+            if FileManager.default.fileExists(atPath: backupURL.path) {
+                try FileManager.default.removeItem(at: backupURL)
+            }
+            try FileManager.default.copyItem(at: url, to: backupURL)
+            return "A backup was written to \(backupURL.path)."
+        } catch {
+            return "Could not back up the \(suffix) file: \(error.localizedDescription)."
+        }
+    }
+
+    private func recordPersistenceError(_ message: String) {
+        guard !persistenceErrors.contains(message) else { return }
+        persistenceErrors.append(message)
+    }
+
+    private func normalizedSite(_ site: Site) -> Site {
+        var updated = site
+        updated.name = NestValidation.normalizedName(site.name)
+        updated.domain = NestValidation.normalizedDomain(site.domain, defaultTLD: "test")
+        updated.rootPath = site.rootPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.documentRoot = NestValidation.normalizedRelativePath(site.documentRoot)
+        return updated
+    }
+
+    private func normalizedProject(_ project: AppProject) -> AppProject {
+        var updated = project
+        updated.name = NestValidation.normalizedName(project.name)
+        updated.hostname = NestValidation.normalizedDomain(project.hostname)
+        updated.directory = project.directory.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.command = project.command.trimmingCharacters(in: .whitespacesAndNewlines)
+        return updated
+    }
+
+    private func normalizedTunnelRoute(_ route: TunnelRoute) -> TunnelRoute {
+        var updated = route
+        updated.subdomain = route.subdomain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        updated.publicDomain = NestValidation.normalizedDomain(route.publicDomain)
+        updated.localDomain = NestValidation.normalizedDomain(route.localDomain)
+        let linkedSiteDomain = route.linkedSiteDomain.map { NestValidation.normalizedDomain($0, defaultTLD: "test") }
+        updated.linkedSiteDomain = linkedSiteDomain?.isEmpty == true ? nil : linkedSiteDomain
+        return updated
     }
 
     // MARK: - Site CRUD
 
     public func addSite(name: String, domain: String, rootPath: String, documentRoot: String) -> Site {
         let site = Site(
-            name: name,
-            domain: domain.hasSuffix(".test") ? domain : "\(domain).test",
-            rootPath: rootPath,
-            documentRoot: documentRoot
+            name: NestValidation.normalizedName(name),
+            domain: NestValidation.normalizedDomain(domain, defaultTLD: "test"),
+            rootPath: rootPath.trimmingCharacters(in: .whitespacesAndNewlines),
+            documentRoot: NestValidation.normalizedRelativePath(documentRoot)
         )
         sites.append(site)
         saveSites()
@@ -141,7 +278,7 @@ public final class SiteStore: ObservableObject {
 
     public func updateSite(_ site: Site) {
         guard let index = sites.firstIndex(where: { $0.id == site.id }) else { return }
-        var updated = site
+        var updated = normalizedSite(site)
         updated.updatedAt = Date()
         sites[index] = updated
         saveSites()
@@ -174,11 +311,11 @@ public final class SiteStore: ObservableObject {
     public func addProject(name: String, hostname: String, directory: String, port: Int, command: String) -> AppProject {
         let project = AppProject(
             id: AppProject.defaultID(from: name).isEmpty ? UUID().uuidString : AppProject.defaultID(from: name),
-            name: name,
-            hostname: hostname,
-            directory: directory,
+            name: NestValidation.normalizedName(name),
+            hostname: NestValidation.normalizedDomain(hostname),
+            directory: directory.trimmingCharacters(in: .whitespacesAndNewlines),
             port: port,
-            command: command
+            command: command.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         appProjects.append(project)
         saveProjects()
@@ -188,7 +325,7 @@ public final class SiteStore: ObservableObject {
 
     public func updateProject(_ project: AppProject) {
         guard let index = appProjects.firstIndex(where: { $0.id == project.id }) else { return }
-        var updated = project
+        var updated = normalizedProject(project)
         updated.updatedAt = Date()
         appProjects[index] = updated
         saveProjects()
@@ -213,14 +350,14 @@ public final class SiteStore: ObservableObject {
     // MARK: - Tunnel CRUD
 
     public func addTunnelRoute(_ route: TunnelRoute) {
-        tunnelRoutes.append(route)
+        tunnelRoutes.append(normalizedTunnelRoute(route))
         saveTunnelRoutes()
         reconcileTunnelLinks()
     }
 
     public func updateTunnelRoute(_ route: TunnelRoute) {
         guard let index = tunnelRoutes.firstIndex(where: { $0.id == route.id }) else { return }
-        var updated = route
+        var updated = normalizedTunnelRoute(route)
         updated.updatedAt = Date()
         tunnelRoutes[index] = updated
         saveTunnelRoutes()
@@ -237,13 +374,13 @@ public final class SiteStore: ObservableObject {
     }
 
     public func replaceTunnelRoutes(_ routes: [TunnelRoute]) {
-        tunnelRoutes = routes
+        tunnelRoutes = routes.map(normalizedTunnelRoute)
         saveTunnelRoutes()
         reconcileTunnelLinks()
     }
 
     public func replaceCloudflareSettings(_ cloudflareSettings: CloudflareSettings) {
-        settings.cloudflareSettings = cloudflareSettings
+        settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
         saveSettings()
     }
 
@@ -253,7 +390,7 @@ public final class SiteStore: ObservableObject {
 
     public func importCloudflareSettings(from data: Data) throws {
         let imported = try decoder.decode(CloudflareSettings.self, from: data)
-        settings.cloudflareSettings = imported
+        settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(imported)
         saveSettings()
     }
 
@@ -287,10 +424,14 @@ public final class SiteStore: ObservableObject {
             }
         }
 
-        appProjects = updatedProjects.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        tunnelRoutes = updatedRoutes.sorted { $0.publicHostname.localizedCaseInsensitiveCompare($1.publicHostname) == .orderedAscending }
+        appProjects = updatedProjects
+            .map(normalizedProject)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        tunnelRoutes = updatedRoutes
+            .map(normalizedTunnelRoute)
+            .sorted { $0.publicHostname.localizedCaseInsensitiveCompare($1.publicHostname) == .orderedAscending }
 
-        settings.cloudflareSettings = payload.cloudflareSettings
+        settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(payload.cloudflareSettings)
         settings.mindProjectDirectory = payload.sourceDirectory.path
         settings.hasCompletedMindMigration = true
 
@@ -336,7 +477,7 @@ public final class SiteStore: ObservableObject {
                 continue
             }
 
-            let domain = entry.domain.hasSuffix(".test") ? entry.domain : "\(entry.domain).test"
+            let domain = NestValidation.normalizedDomain(entry.domain, defaultTLD: "test")
 
             if existingDomains.contains(domain) || imported.contains(where: { $0.domain == domain }) {
                 errors.append(.duplicateDomain(domain: domain))
@@ -346,10 +487,10 @@ public final class SiteStore: ObservableObject {
             let docRoot = Site.inferDocumentRoot(rootPath: entry.rootPath, specified: entry.documentRoot)
 
             let site = Site(
-                name: name,
+                name: NestValidation.normalizedName(name),
                 domain: domain,
-                rootPath: entry.rootPath,
-                documentRoot: docRoot
+                rootPath: entry.rootPath.trimmingCharacters(in: .whitespacesAndNewlines),
+                documentRoot: NestValidation.normalizedRelativePath(docRoot)
             )
             imported.append(site)
         }
@@ -375,6 +516,36 @@ public final class SiteStore: ObservableObject {
             }
         )
         return try encoder.encode(export)
+    }
+
+    public func importParkedFolderSites(from directory: URL) -> ParkedFolderImportSummary {
+        let scan = ParkedFolderScanner.scan(
+            directory: directory,
+            existingDomains: Set(sites.map(\.domain))
+        )
+        var imported: [Site] = []
+
+        for candidate in scan.candidates {
+            let site = Site(
+                name: candidate.name,
+                domain: candidate.domain,
+                rootPath: candidate.rootPath,
+                documentRoot: candidate.documentRoot
+            )
+            sites.append(site)
+            imported.append(site)
+        }
+
+        if !imported.isEmpty {
+            saveSites()
+            reconcileTunnelLinks()
+        }
+
+        return ParkedFolderImportSummary(
+            imported: imported,
+            skippedExistingDomains: scan.skippedExisting,
+            skippedInvalidFolders: scan.skippedInvalid
+        )
     }
 
     // MARK: - Linking

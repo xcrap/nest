@@ -107,6 +107,15 @@ public struct RuntimePathsView: View {
                 .controlSize(.small)
 
                 Button("Save") {
+                    let issues = paths.validate()
+                    guard issues.isEmpty else {
+                        withAnimation {
+                            validationIssues = issues
+                            saved = false
+                        }
+                        return
+                    }
+
                     store.settings.runtimePaths = paths
                     store.saveSettings()
                     withAnimation {

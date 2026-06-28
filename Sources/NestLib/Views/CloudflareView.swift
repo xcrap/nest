@@ -19,6 +19,7 @@ public struct CloudflareView: View {
                 VStack(spacing: 12) {
                     essentialsCard
                     advancedCard
+                    validationCard
                     serviceCard
                 }
                 .padding(16)
@@ -171,8 +172,9 @@ public struct CloudflareView: View {
                     if processController.cloudflaredRunning {
                         processController.stopCloudflared()
                     } else {
-                        writeTunnelConfig()
-                        processController.startCloudflared(settings: store.settings)
+                        if writeTunnelConfig() {
+                            processController.startCloudflared(settings: store.settings)
+                        }
                     }
                 }
                 .buttonStyle(.bordered)
@@ -193,6 +195,37 @@ public struct CloudflareView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var validationCard: some View {
+        let issues = TunnelConfigRenderer(settings: cloudflareSettings)
+            .validationIssues(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        if !issues.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Configuration Issues")
+                        .font(.callout)
+                        .fontWeight(.semibold)
+                }
+
+                ForEach(issues, id: \.self) { issue in
+                    Text(issue)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.orange.opacity(0.06))
+                    .strokeBorder(Color.orange.opacity(0.15), lineWidth: 1)
+            )
+        }
     }
 
     // MARK: - Components
@@ -235,22 +268,25 @@ public struct CloudflareView: View {
     // MARK: - Actions
 
     private func persistSettings() {
-        store.settings.cloudflareSettings = cloudflareSettings
-        store.saveSettings()
+        cloudflareSettings = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
+        store.replaceCloudflareSettings(cloudflareSettings)
     }
 
-    private func writeTunnelConfig() {
+    @discardableResult
+    private func writeTunnelConfig() -> Bool {
         do {
             let renderer = TunnelConfigRenderer(settings: cloudflareSettings)
             try renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
             statusMessage = "cloudflared config written to \(cloudflareSettings.configPath)"
+            return true
         } catch {
             statusMessage = error.localizedDescription
+            return false
         }
     }
 
     private func syncTunnelConfig() {
-        writeTunnelConfig()
+        guard writeTunnelConfig() else { return }
         Task {
             do {
                 try await CloudflareService.pushTunnelConfiguration(

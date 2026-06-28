@@ -25,6 +25,12 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
+            name: "nestctl",
+            dependencies: ["NestLib"],
+            path: "Sources/NestCTL",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(
             name: "NestTests",
             dependencies: ["NestLib"],
             path: "Tests/NestTests",

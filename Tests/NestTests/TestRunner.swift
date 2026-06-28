@@ -3,6 +3,7 @@ import NestLib
 
 @main
 struct TestRunner {
+    @MainActor
     static func main() {
         print("Running Nest tests...\n")
 
@@ -20,7 +21,14 @@ struct TestRunner {
         run("Site Model", SiteTests.runAll)
         run("AppSettings", AppSettingsTests.runAll)
         run("RuntimePaths", RuntimePathsTests.runAll)
+        run("Validation", ValidationTests.runAll)
+        run("PrerequisiteChecker", PrerequisiteCheckerTests.runAll)
+        run("ProjectCommandResolver", ProjectCommandResolverTests.runAll)
+        run("ProjectLaunchPlanner", ProjectLaunchPlannerTests.runAll)
+        run("PFRestorePlanner", PFRestorePlannerTests.runAll)
+        run("ParkedFolderScanner", ParkedFolderScannerTests.runAll)
         run("ConfigRenderer", ConfigRendererTests.runAll)
+        run("SiteStorePersistence", SiteStorePersistenceTests.runAll)
         run("LogTailReader", LogTailReaderTests.runAll)
         run("TunnelConfigRenderer", TunnelConfigRendererTests.runAll)
         run("MindImportService", MindImportServiceTests.runAll)

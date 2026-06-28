@@ -148,13 +148,23 @@ public struct ContentView: View {
             configDirectory: store.settings.caddyConfigDirectory,
             frankenphpLogPath: paths.frankenphpLog
         )
-        try? renderer.writeAll(sites: store.sites)
+        do {
+            try renderer.writeAll(sites: store.sites)
+        } catch {
+            processController.frankenphpError = error.localizedDescription
+            return
+        }
         processController.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
     }
 
     private func startCloudflared() {
         let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
-        try? renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        do {
+            try renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        } catch {
+            processController.cloudflaredError = error.localizedDescription
+            return
+        }
         processController.startCloudflared(settings: store.settings)
     }
 }
