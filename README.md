@@ -10,6 +10,7 @@ Nest is a native macOS SwiftUI app for managing local PHP development sites with
 - Edit Caddyfile, security.conf, php.ini, and MariaDB config from the app
 - View FrankenPHP and MariaDB logs
 - HTTPS with `.test` domains via Caddy's local CA
+- Optional `nestctl` CLI for automation (`start`, `stop`, `reload`, `render`, `doctor`, `push-cloudflare`)
 
 ## Prerequisites
 
@@ -97,6 +98,7 @@ FrankenPHP, MariaDB, and dnsmasq all run via `brew services`.
 - `Sources/NestLib/`: library target (models, services, views)
 - `Sources/Nest/`: app entry point (`@main`)
 - `Sources/NestPFHelper/`: privileged root daemon for PF port redirects (prod bundle only)
+- `Sources/NestCTL/`: `nestctl` command-line helper
 - `Tests/NestTests/`: test runner
 - `scripts/`: Info.plist template, entitlements, PF helper launchd plist
 - `.github/workflows/`: release CI
@@ -109,6 +111,7 @@ make dev        # Build and open the dev app
 make run        # Alias for make dev
 make test       # Run tests
 make package    # Package into Nest.app
+dist/nestctl help
 ```
 
 ## Versioning
@@ -117,6 +120,7 @@ make package    # Package into Nest.app
 make bump VERSION_NEW=x.y.z
 git push origin main
 git push origin vx.y.z    # triggers GitHub release
+gh run list --limit 1     # verify release workflow status
 ```
 
 ## Notes

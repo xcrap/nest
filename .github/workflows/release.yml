@@ -37,6 +37,23 @@ jobs:
       - name: Resolve dependencies
         run: swift package resolve
 
+      - name: Check Apple notarization account
+        run: |
+          set +e
+          OUTPUT=$(xcrun notarytool history \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1)
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -qi "agreement"; then
+              echo "::error title=Apple developer agreement missing or expired::Apple rejected notarization credentials because a required developer agreement is missing or expired. Sign in to Apple Developer/App Store Connect with the team owner/admin account and accept the pending agreement, then rerun this release."
+            fi
+            exit "$STATUS"
+          fi
+
       - name: Run tests
         run: make test
 
@@ -47,12 +64,16 @@ jobs:
             --sign "$CSC_NAME" \
             --entitlements scripts/entitlements.plist \
             dist/Nest.app
+          codesign --force --options runtime \
+            --sign "$CSC_NAME" \
+            dist/nestctl
 
       - name: Create DMG and notarize
         run: |
           VERSION=$(cat version.txt)
           mkdir -p .dmg-staging
           cp -R dist/Nest.app .dmg-staging/
+          cp dist/nestctl .dmg-staging/
           ln -sf /Applications .dmg-staging/Applications
           hdiutil create -volname "Nest" -srcfolder .dmg-staging -ov -format UDZO "dist/Nest-${VERSION}.dmg"
           rm -rf .dmg-staging

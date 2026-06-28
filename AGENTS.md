@@ -17,7 +17,7 @@ Core responsibilities:
 
 ## High-Level Architecture
 
-Single Swift Package with three executable targets plus a library:
+Single Swift Package with four executable targets plus a library:
 
 - `NestLib`: library target containing models, services, and views
   - `Models/`: `Site`, `RuntimePaths`, `AppSettings`, `MigrationManifest`
@@ -25,6 +25,7 @@ Single Swift Package with three executable targets plus a library:
   - `Views/`: `ContentView`, `SitesView`, `SiteFormSheet`, `RuntimePathsView`, `ConfigPreviewView`, `MigrationView`, `EnvironmentChecksView`
 - `Nest`: executable target with the SwiftUI `@main` app entry point
 - `NestPFHelper`: privileged root daemon embedded in the prod app bundle. Writes `/etc/pf.anchors/app.nest`, repairs `/etc/pf.conf` if macOS resets it, runs `pfctl -Ef` on boot. Registered via `SMAppService.daemon`; dev builds (ad-hoc signed) can't bless it, so they keep the legacy osascript fallback in `ProcessController.reloadPFRules`.
+- `nestctl`: small CLI for automation (`start`, `stop`, `reload`, `render`, `doctor`, `push-cloudflare`). Packaged releases include it next to `Nest.app` in the DMG.
 - `NestTests`: test runner executable
 
 Other directories:
@@ -74,6 +75,7 @@ When the user asks to bump the version, complete the full release handoff unless
 3. Commit the version bump and related release changes.
 4. Create tag `vX.Y.Z` on the release commit.
 5. Push the branch and the tag.
+6. Check the GitHub Actions release run. Do not report the release as done until the release workflow succeeds.
 
 ## Common Commands
 

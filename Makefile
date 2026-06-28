@@ -55,12 +55,14 @@ package: build
 	sed 's/$${VERSION}/$(VERSION)/g; s/$${BUILD_ID}/$(BUILD_ID)/g; s/$${BUNDLE_ID}/$(RELEASE_BUNDLE_ID)/g' \
 		scripts/Info.plist > $(APP_BUNDLE)/Contents/Info.plist
 	codesign --force --deep --sign - --timestamp=none $(APP_BUNDLE)
+	codesign --force --sign - --timestamp=none $(DIST_DIR)/nestctl
 	@echo "$(APP_BUNDLE) created (version $(VERSION), build $(BUILD_ID))"
 
 dmg: package
 	rm -f $(DIST_DIR)/$(APP_NAME)-$(VERSION).dmg
 	mkdir -p .dmg-staging
 	cp -R $(APP_BUNDLE) .dmg-staging/
+	cp $(DIST_DIR)/nestctl .dmg-staging/
 	ln -sf /Applications .dmg-staging/Applications
 	hdiutil create -volname "$(APP_NAME)" -srcfolder .dmg-staging -ov -format UDZO $(DIST_DIR)/$(APP_NAME)-$(VERSION).dmg
 	rm -rf .dmg-staging
