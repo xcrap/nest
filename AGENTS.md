@@ -67,6 +67,14 @@ make bump VERSION_NEW=x.y.z
 
 Git tags use the `vX.Y.Z` format. Pushing a `v*` tag triggers the GitHub release workflow.
 
+When the user asks to bump the version, complete the full release handoff unless they explicitly say not to:
+
+1. Run `make bump VERSION_NEW=x.y.z`.
+2. Run tests and package verification.
+3. Commit the version bump and related release changes.
+4. Create tag `vX.Y.Z` on the release commit.
+5. Push the branch and the tag.
+
 ## Common Commands
 
 Build:

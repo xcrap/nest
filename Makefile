@@ -76,6 +76,8 @@ ifndef VERSION_NEW
 endif
 	echo "$(VERSION_NEW)" > version.txt
 	git add version.txt
-	@echo "Version updated to $(VERSION_NEW). Commit and tag manually:"
+	@echo "Version updated to $(VERSION_NEW). Commit, tag, and push for release:"
 	@echo "  git commit -m 'Bump version to $(VERSION_NEW)'"
 	@echo "  git tag v$(VERSION_NEW)"
+	@echo "  git push origin HEAD"
+	@echo "  git push origin v$(VERSION_NEW)"
