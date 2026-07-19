@@ -83,6 +83,7 @@ struct NestCTL {
             _ = SystemProcess.capture("/usr/bin/killall", arguments: ["mariadbd"])
         case "cloudflared":
             _ = LaunchAgentService.stop(label: ProcessController.cloudflaredLaunchAgentLabel)
+            ProcessController.removeLegacyCloudflaredLaunchAgents()
             _ = SystemProcess.capture("/usr/bin/pkill", arguments: ["-f", "cloudflared.*tunnel.*run"])
         case "all":
             stop("cloudflared")
@@ -201,6 +202,8 @@ struct NestCTL {
         guard settings.cloudflareSettings.hasLocalConfiguration else {
             throw CloudflareServiceError.missingLocalConfiguration
         }
+
+        ProcessController.removeLegacyCloudflaredLaunchAgents()
 
         let definition = LaunchAgentDefinition(
             label: ProcessController.cloudflaredLaunchAgentLabel,

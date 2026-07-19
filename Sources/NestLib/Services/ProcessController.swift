@@ -50,11 +50,14 @@ public final class ProcessController: ObservableObject {
     /// PID of an externally-started MariaDB process.
     private var externalMariaDBPid: Int32?
     /// Label used for the Nest-managed Cloudflared launch agent.
-    public static var cloudflaredLaunchAgentLabel: String {
+    public nonisolated static var cloudflaredLaunchAgentLabel: String {
         "\(launchAgentNamespace).cloudflared"
     }
 
-    private static var launchAgentNamespace: String {
+    /// Launch-agent labels used before tunnel processes were namespaced per app bundle.
+    public nonisolated static let legacyCloudflaredLaunchAgentLabels = ["app.nest.cloudflared"]
+
+    private nonisolated static var launchAgentNamespace: String {
         "app.nest.\(AppSettings.storageRootName.replacingOccurrences(of: ".", with: "-"))"
     }
 
@@ -224,7 +227,6 @@ public final class ProcessController: ObservableObject {
     // MARK: - Cloudflared
 
     public func startCloudflared(settings: AppSettings) {
-        guard !cloudflaredRunning else { return }
         cloudflaredError = nil
 
         guard !settings.runtimePaths.cloudflaredBinary.isEmpty else {
@@ -240,6 +242,8 @@ public final class ProcessController: ObservableObject {
             cloudflaredError = "Cloudflare tunnel configuration is incomplete."
             return
         }
+
+        Self.removeLegacyCloudflaredLaunchAgents()
 
         let definition = LaunchAgentDefinition(
             label: Self.cloudflaredLaunchAgentLabel,
@@ -266,8 +270,16 @@ public final class ProcessController: ObservableObject {
 
     public func stopCloudflared() {
         _ = LaunchAgentService.stop(label: Self.cloudflaredLaunchAgentLabel)
+        Self.removeLegacyCloudflaredLaunchAgents()
         _ = SystemProcess.capture("/usr/bin/pkill", arguments: ["-f", "cloudflared.*tunnel.*run"])
         cloudflaredRunning = false
+    }
+
+    public nonisolated static func removeLegacyCloudflaredLaunchAgents() {
+        for label in legacyCloudflaredLaunchAgentLabels where label != cloudflaredLaunchAgentLabel {
+            guard LaunchAgentService.isInstalled(label: label) else { continue }
+            _ = LaunchAgentService.stop(label: label)
+        }
     }
 
     public func refreshStatusSnapshot(settings: AppSettings, projects: [AppProject]) {
@@ -475,7 +487,7 @@ public final class ProcessController: ObservableObject {
     }
 
     private func isCloudflaredProcessRunning() -> Bool {
-        SystemProcess.capture("/usr/bin/pgrep", arguments: ["-f", "cloudflared.*tunnel.*run"]).status == 0
+        LaunchAgentService.isRunning(label: Self.cloudflaredLaunchAgentLabel)
     }
 
     private nonisolated static func performProjectStart(_ plan: ProjectLaunchPlan) -> ProjectLaunchOutcome {

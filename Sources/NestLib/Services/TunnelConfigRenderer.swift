@@ -107,6 +107,7 @@ public struct TunnelConfigRenderer {
         var lines: [String] = []
         lines.append("tunnel: \(NestValidation.yamlScalar(settings.tunnelName))")
         lines.append("credentials-file: \(NestValidation.yamlScalar(settings.credentialsFilePath))")
+        lines.append("protocol: http2")
         lines.append("")
         lines.append("ingress:")
 

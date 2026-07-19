@@ -47,7 +47,20 @@ enum TunnelConfigRendererTests {
             let content = renderer.render(routes: [], sites: [], projects: [])
             assert(content.contains("tunnel: local-testing"), "should include tunnel name")
             assert(content.contains("credentials-file: /Users/test/.cloudflared/abc.json"), "should include credentials file")
+            assert(content.contains("protocol: http2"), "should use HTTP/2 when QUIC is unavailable")
             assert(content.contains("http_status:404"), "should include fallback service")
+        }
+
+        // Test: the active launch-agent label cannot also be considered legacy.
+        do {
+            assert(
+                !ProcessController.legacyCloudflaredLaunchAgentLabels.contains(ProcessController.cloudflaredLaunchAgentLabel),
+                "current cloudflared launch agent should not be removed as legacy"
+            )
+            assert(
+                ProcessController.legacyCloudflaredLaunchAgentLabels.contains("app.nest.cloudflared"),
+                "should recognize the pre-namespaced cloudflared launch agent"
+            )
         }
 
         // Test: quotes YAML scalars that need escaping.

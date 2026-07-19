@@ -92,6 +92,14 @@ public enum LaunchAgentService {
         FileManager.default.fileExists(atPath: plistPath(for: label))
     }
 
+    public static func isRunning(label: String) -> Bool {
+        let result = SystemProcess.capture(
+            "/bin/launchctl",
+            arguments: ["print", serviceTarget(for: label)]
+        )
+        return result.status == 0 && result.output.contains("state = running")
+    }
+
     private static func write(_ definition: LaunchAgentDefinition) throws {
         let fm = FileManager.default
         try fm.createDirectory(atPath: launchAgentsDirectory, withIntermediateDirectories: true)
