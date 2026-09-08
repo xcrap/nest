@@ -1,0 +1,22 @@
+name: Build and Test
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build app, helper and CLI
+        run: swift build -c debug
+      - name: Run regression tests
+        run: make test
+      - name: Verify packaged application
+        run: |
+          make package
+          codesign --verify --deep --strict dist/Nest.app
+          test -x dist/Nest.app/Contents/MacOS/NestPFHelper
+          dist/nestctl help

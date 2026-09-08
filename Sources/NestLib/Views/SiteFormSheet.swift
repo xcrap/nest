@@ -168,6 +168,7 @@ public struct SiteFormSheet: View {
             site.documentRoot = documentRoot
             store.updateSite(site)
         }
+        if let error = store.lastSaveError { errorMessage = error; return }
         dismiss()
     }
 

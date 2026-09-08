@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import ObjectiveC
 import NestLib
 import ServiceManagement
 import Sparkle
@@ -14,7 +13,8 @@ struct NestApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var store = SiteStore()
     @StateObject private var processController = ProcessController()
-    private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    @StateObject private var configDocuments = ConfigDocumentStore()
+    private let updaterController = SPUStandardUpdaterController(startingUpdater: AppSettings.reviewDirectory == nil, updaterDelegate: nil, userDriverDelegate: nil)
 
     var body: some Scene {
         Window("Nest", id: MainWindowScene.id) {
@@ -24,6 +24,8 @@ struct NestApp: App {
                 processController: processController,
                 updaterController: updaterController
             )
+            .environmentObject(configDocuments)
+            .onAppear { appDelegate.configDocuments = configDocuments }
         }
         .defaultSize(width: 960, height: 640)
         .windowResizability(.contentMinSize)
@@ -64,9 +66,6 @@ private struct MainWindowSceneView: View {
                 DispatchQueue.main.async {
                     processController.reconcileSystemNetworkState()
                 }
-                DispatchQueue.main.async {
-                    AppDelegate.refreshWindowCorners()
-                }
             }
     }
 }
@@ -75,6 +74,7 @@ private struct MainWindowSceneView: View {
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
+    var configDocuments: ConfigDocumentStore?
     var statusItem: NSStatusItem?
     var store: SiteStore?
     var processController: ProcessController?
@@ -94,7 +94,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        Self.swizzleWindowCornerRadius(6.0)
         NSApp.setActivationPolicy(.regular)
 
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -103,6 +102,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard configDocuments?.drafts.values.contains(where: { $0.dirty }) == true else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Discard unsaved configuration changes?"
+        alert.informativeText = "Your editor drafts have not been saved. Return to Settings → Config to save them."
+        alert.addButton(withTitle: "Keep Editing")
+        alert.addButton(withTitle: "Discard and Quit")
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -139,7 +148,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let store, let processController {
             processController.refreshStatusSnapshot(settings: store.settings, projects: store.appProjects)
         }
-
         let menu = NSMenu()
         let phpRunning = processController?.frankenphpRunning ?? false
         let dbRunning = processController?.mariadbRunning ?? false
@@ -208,57 +216,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
-    static func swizzleWindowCornerRadius(_ radius: CGFloat) {
-        guard let cls = NSClassFromString("NSThemeFrame") else { return }
-
-        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_cornerRadius")) {
-            let block: @convention(block) (AnyObject) -> CGFloat = { _ in radius }
-            method_setImplementation(m, imp_implementationWithBlock(block))
-        }
-        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_getCachedWindowCornerRadius")) {
-            let block: @convention(block) (AnyObject) -> CGFloat = { _ in radius }
-            method_setImplementation(m, imp_implementationWithBlock(block))
-        }
-        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_topCornerSize")) {
-            let block: @convention(block) (AnyObject) -> CGSize = { _ in CGSize(width: radius, height: radius) }
-            method_setImplementation(m, imp_implementationWithBlock(block))
-        }
-        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_bottomCornerSize")) {
-            let block: @convention(block) (AnyObject) -> CGSize = { _ in CGSize(width: radius, height: radius) }
-            method_setImplementation(m, imp_implementationWithBlock(block))
-        }
-        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_cornerPath")) {
-            let block: @convention(block) (AnyObject) -> CGPath = { obj in
-                let view = obj as! NSView
-                return CGPath(roundedRect: view.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
-            }
-            method_setImplementation(m, imp_implementationWithBlock(block))
-        }
-        if let m = class_getInstanceMethod(cls, NSSelectorFromString("_getCachedWindowCornerPath")) {
-            let block: @convention(block) (AnyObject) -> CGPath = { obj in
-                let view = obj as! NSView
-                return CGPath(roundedRect: view.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
-            }
-            method_setImplementation(m, imp_implementationWithBlock(block))
-        }
-    }
-
-    static func refreshWindowCorners() {
-        for window in NSApp.windows {
-            guard let frameView = window.contentView?.superview else { continue }
-            let sel = NSSelectorFromString("windowCornerMaskChanged")
-            if frameView.responds(to: sel) {
-                frameView.perform(sel)
-            }
-            let sel2 = NSSelectorFromString("_updateCornerInsets")
-            if frameView.responds(to: sel2) {
-                frameView.perform(sel2)
-            }
-            window.display()
-            window.invalidateShadow()
-        }
-    }
-
     @objc func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.title == "Nest" }) {
@@ -285,14 +242,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let store, let pc = processController else { return }
         let paths = store.settings.runtimePaths
         if !pc.frankenphpRunning && !paths.frankenphpBinary.isEmpty {
-            let renderer = ConfigRenderer(configDirectory: store.settings.caddyConfigDirectory, frankenphpLogPath: paths.frankenphpLog)
-            try? renderer.writeAll(sites: store.sites)
-            pc.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
+            pc.startFrankenPHP(settings: store.settings, sites: store.sites)
         }
         if !pc.cloudflaredRunning && !paths.cloudflaredBinary.isEmpty && store.settings.cloudflareSettings.hasLocalConfiguration {
-            let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
-            try? renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
-            pc.startCloudflared(settings: store.settings)
+            pc.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
         }
         if !pc.mariadbRunning && !paths.mariadbServer.isEmpty {
             pc.startMariaDB(serverBinary: paths.mariadbServer)
@@ -304,10 +257,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if pc.frankenphpRunning {
             pc.stopFrankenPHP()
         } else {
-            let paths = store.settings.runtimePaths
-            let renderer = ConfigRenderer(configDirectory: store.settings.caddyConfigDirectory, frankenphpLogPath: paths.frankenphpLog)
-            try? renderer.writeAll(sites: store.sites)
-            pc.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
+            pc.startFrankenPHP(settings: store.settings, sites: store.sites)
         }
     }
 
@@ -325,9 +275,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if pc.cloudflaredRunning {
             pc.stopCloudflared()
         } else {
-            let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
-            try? renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
-            pc.startCloudflared(settings: store.settings)
+            pc.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
         }
     }
 

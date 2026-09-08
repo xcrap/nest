@@ -109,24 +109,47 @@ public struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationSplitViewStyle(.balanced)
+        .onChange(of: store.sites) {
+            guard store.lastSaveError == nil else { return }
+            processController.applyCaddy(settings: store.settings, sites: store.sites)
+            processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        }
+        .onChange(of: store.tunnelRoutes) { processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects) }
+        .onChange(of: store.appProjects) { processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects) }
+        .onChange(of: store.settings) {
+            processController.caddyApplyState = .pending
+            processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let error = store.lastSaveError {
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled).padding(8)
+            }
+        }
     }
 
     private func serviceRow(_ name: String, running: Bool, onToggle: @escaping () -> Void) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(running ? Color.green : Color.secondary.opacity(0.2))
-                .frame(width: 7, height: 7)
-            Text(name)
-                .font(.callout)
-                .foregroundStyle(.primary)
-            Spacer()
-            Button(running ? "Stop" : "Start") {
-                onToggle()
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle().fill(running ? Color.green : Color.secondary.opacity(0.2)).frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
+                Text(name).font(.callout).lineLimit(1)
+                Spacer()
+                Button(processController.isServiceBusy(name) ? "…" : (running ? "Stop" : "Start"), action: onToggle)
+                    .font(.callout).buttonStyle(.bordered).controlSize(.small)
+                    .disabled(processController.isServiceBusy(name))
+                    .accessibilityLabel("\(running ? "Stop" : "Start") \(name)")
             }
-            .font(.callout)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .tint(running ? .red : .green)
+            if let error = serviceError(name) {
+                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+    }
+
+    private func serviceError(_ name: String) -> String? {
+        switch name {
+        case "FrankenPHP": return processController.frankenphpError
+        case "MariaDB": return processController.mariadbError
+        default: return processController.cloudflaredError
         }
     }
 
@@ -142,29 +165,11 @@ public struct ContentView: View {
     }
 
     private func startFrankenPHP() {
-        let paths = store.settings.runtimePaths
-        guard !paths.frankenphpBinary.isEmpty else { return }
-        let renderer = ConfigRenderer(
-            configDirectory: store.settings.caddyConfigDirectory,
-            frankenphpLogPath: paths.frankenphpLog
-        )
-        do {
-            try renderer.writeAll(sites: store.sites)
-        } catch {
-            processController.frankenphpError = error.localizedDescription
-            return
-        }
-        processController.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
+        processController.startFrankenPHP(settings: store.settings, sites: store.sites)
     }
 
     private func startCloudflared() {
-        let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
-        do {
-            try renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
-        } catch {
-            processController.cloudflaredError = error.localizedDescription
-            return
-        }
-        processController.startCloudflared(settings: store.settings)
+        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
     }
+
 }

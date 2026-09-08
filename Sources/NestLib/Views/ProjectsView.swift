@@ -34,6 +34,8 @@ public struct ProjectsView: View {
 
             if store.appProjects.isEmpty {
                 emptyState
+            } else if filteredProjects.isEmpty {
+                ContentUnavailableView.search(text: searchText)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -70,9 +72,6 @@ public struct ProjectsView: View {
             ProjectLogSheet(project: project)
         }
         .onAppear(perform: refreshStatuses)
-        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
-            refreshStatuses()
-        }
     }
 
     private var toolbar: some View {

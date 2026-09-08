@@ -68,7 +68,8 @@ public struct ConfigRenderer {
         }
         lines.append("}")
         lines.append("")
-        lines.append("import \(snippetsDirectory)/*")
+        lines.append("import \(NestValidation.caddyfileArgument(snippetsDirectory + "/*"))")
+        lines.append("import \(NestValidation.caddyfileArgument(configDirectory + "/overrides/*.caddy"))")
         lines.append("")
 
         lines.append("localhost {")
@@ -95,7 +96,7 @@ public struct ConfigRenderer {
         """
         (php-app) {
             {args[0]} {
-                import \(securityConfPath)
+                import \(NestValidation.caddyfileArgument(securityConfPath))
                 root * {args[2]}
                 @blocked path */.* *.sql *.log *.bak *.env
                 respond @blocked 404
@@ -126,16 +127,25 @@ public struct ConfigRenderer {
             throw ConfigRendererError.invalidConfiguration(issues)
         }
 
+        try writeSupportFiles()
+        let caddyfile = render(sites: sites)
+        try caddyfile.write(toFile: caddyfilePath, atomically: true, encoding: .utf8)
+    }
+
+    public func writeSupportFiles() throws {
         let fm = FileManager.default
         try fm.createDirectory(atPath: configDirectory, withIntermediateDirectories: true)
         try fm.createDirectory(atPath: snippetsDirectory, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: configDirectory + "/overrides", withIntermediateDirectories: true)
 
-        let caddyfile = render(sites: sites)
-        try caddyfile.write(toFile: caddyfilePath, atomically: true, encoding: .utf8)
-        try securityConf.write(toFile: securityConfPath, atomically: true, encoding: .utf8)
+        if !fm.fileExists(atPath: securityConfPath) {
+            try securityConf.write(toFile: securityConfPath, atomically: true, encoding: .utf8)
+        }
 
         let snippetPath = (snippetsDirectory as NSString).appendingPathComponent("php-app")
-        try phpAppSnippet.write(toFile: snippetPath, atomically: true, encoding: .utf8)
+        if !fm.fileExists(atPath: snippetPath) {
+            try phpAppSnippet.write(toFile: snippetPath, atomically: true, encoding: .utf8)
+        }
 
     }
 }

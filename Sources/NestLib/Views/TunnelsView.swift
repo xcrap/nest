@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct TunnelsView: View {
     @EnvironmentObject private var store: SiteStore
+    @EnvironmentObject private var processController: ProcessController
 
     @State private var editingRoute: TunnelRoute?
     @State private var showAddSheet = false
@@ -30,9 +31,19 @@ public struct TunnelsView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
+            HStack {
+                Text(processController.tunnelApplyState.label).font(.callout).textSelection(.enabled)
+                Spacer()
+                Button("Apply Changes") {
+                    processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+                }.disabled(processController.isServiceBusy("Cloudflared") || store.lastSaveError != nil)
+            }.padding(12)
+            Divider()
 
             if store.tunnelRoutes.isEmpty {
                 emptyState
+            } else if filteredRoutes.isEmpty {
+                ContentUnavailableView.search(text: searchText)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -91,7 +102,7 @@ public struct TunnelsView: View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .font(.callout)
                 TextField("Filter...", text: $searchText)
                     .textFieldStyle(.plain)
@@ -102,7 +113,7 @@ public struct TunnelsView: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -113,7 +124,7 @@ public struct TunnelsView: View {
 
             Spacer()
 
-            Text("\(activeCount)/\(store.tunnelRoutes.count) active")
+            Text("\(activeCount)/\(store.tunnelRoutes.count) enabled")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -156,6 +167,7 @@ public struct TunnelsView: View {
 
 private struct TunnelRouteRow: View {
     @EnvironmentObject private var store: SiteStore
+    @EnvironmentObject private var processController: ProcessController
 
     let route: TunnelRoute
     let isHovered: Bool
@@ -187,19 +199,26 @@ private struct TunnelRouteRow: View {
                 .font(.caption2)
                 .foregroundStyle(.quaternary)
 
-            Text("\(route.localDomain):\(route.originPort)")
+            Text(route.localDomain + ":" + String(route.originPort))
                 .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let health = processController.routeHealth[route.id] {
+                Text(health).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(health)
+            }
+            Button("Check") { processController.checkRoute(route) }
+                .controlSize(.small).disabled(processController.routeHealth[route.id] == "Checking…")
+                .accessibilityLabel("Check public reachability of \(route.publicHostname)")
 
             HStack(spacing: 0) {
                 rowAction(icon: "pencil", help: "Edit") { onEdit() }
                 rowAction(icon: "trash", help: "Delete") { onDelete() }
             }
-            .opacity(isHovered ? 1 : 0)
 
-            Toggle("", isOn: Binding(
+
+            Toggle("Enable \(route.publicHostname)", isOn: Binding(
                 get: { route.active },
                 set: { newValue in
                     var updated = route
@@ -210,6 +229,7 @@ private struct TunnelRouteRow: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.mini)
+            .disabled(processController.isServiceBusy("Cloudflared"))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -246,5 +266,6 @@ private struct TunnelRouteRow: View {
         .foregroundStyle(hoveredAction == icon ? .primary : .secondary)
         .onHover { h in hoveredAction = h ? icon : nil }
         .help(help)
+        .accessibilityLabel("\(help) \(route.publicHostname)")
     }
 }

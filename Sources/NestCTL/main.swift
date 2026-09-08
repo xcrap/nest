@@ -11,14 +11,16 @@ struct NestCTL {
             exit(64)
         }
 
+        if ["help", "--help", "-h"].contains(command) { usage(); return }
         let store = SiteStore()
+        if let error = store.lastSaveError { fputs("\(error)\n", stderr); exit(1) }
 
         do {
             switch command {
             case "start":
-                try start(arguments.dropFirst().first ?? "all", store: store)
+                try await start(arguments.dropFirst().first ?? "all", store: store)
             case "stop":
-                stop(arguments.dropFirst().first ?? "all")
+                try await stop(arguments.dropFirst().first ?? "all")
             case "reload":
                 try await reload(store: store)
             case "render":
@@ -53,62 +55,44 @@ struct NestCTL {
     }
 
     @MainActor
-    private static func start(_ target: String, store: SiteStore) throws {
+    private static func start(_ target: String, store: SiteStore) async throws {
         switch target {
         case "frankenphp":
-            try writeCaddyConfig(store: store)
+            let ready = await SystemProcess.captureAsync("/usr/bin/curl", arguments: ["--silent", "--fail", "--max-time", "2", "--output", "/dev/null", "http://localhost:2019/config/"])
+            _ = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, running: ready.status == 0)
             try runBrew(.start, service: "frankenphp")
         case "mariadb":
             try runBrew(.start, service: "mariadb")
         case "cloudflared":
-            try writeCloudflaredConfig(store: store)
-            try startCloudflared(store: store)
+            try await applyCloudflared(store: store, start: true, push: false)
         case "all":
-            try start("frankenphp", store: store)
-            try start("mariadb", store: store)
-            try start("cloudflared", store: store)
+            try await start("frankenphp", store: store)
+            try await start("mariadb", store: store)
+            try await start("cloudflared", store: store)
         default:
             throw CLIError.invalidTarget(target)
         }
     }
 
     @MainActor
-    private static func stop(_ target: String) {
+    private static func stop(_ target: String) async throws {
         switch target {
-        case "frankenphp":
-            _ = SystemProcess.capture(BrewServiceController.brewPath, arguments: ["services", "stop", "frankenphp"])
-            _ = SystemProcess.capture("/usr/bin/killall", arguments: ["frankenphp"])
-        case "mariadb":
-            _ = SystemProcess.capture(BrewServiceController.brewPath, arguments: ["services", "stop", "mariadb"])
-            _ = SystemProcess.capture("/usr/bin/killall", arguments: ["mariadbd"])
+        case "frankenphp", "mariadb":
+            try runBrew(.stop, service: target)
         case "cloudflared":
-            _ = LaunchAgentService.stop(label: ProcessController.cloudflaredLaunchAgentLabel)
-            ProcessController.removeLegacyCloudflaredLaunchAgents()
-            _ = SystemProcess.capture("/usr/bin/pkill", arguments: ["-f", "cloudflared.*tunnel.*run"])
+            let result = await Task.detached { LaunchAgentService.stop(label: ProcessController.cloudflaredLaunchAgentLabel) }.value
+            guard result.status == 0 else { throw CLIError.requestFailed(result.output) }
         case "all":
-            stop("cloudflared")
-            stop("frankenphp")
-            stop("mariadb")
-        default:
-            print("Unknown target: \(target)")
+            for service in ["cloudflared", "frankenphp", "mariadb"] { try await stop(service) }
+        default: throw CLIError.invalidTarget(target)
         }
+        print("Stopped managed service: \(target). Externally managed processes are left running.")
     }
 
     @MainActor
     private static func reload(store: SiteStore) async throws {
-        let renderer = try writeCaddyConfig(store: store)
-        let caddyfile = try String(contentsOfFile: renderer.caddyfilePath, encoding: .utf8)
-        var request = URLRequest(url: URL(string: "http://localhost:2019/load")!)
-        request.httpMethod = "POST"
-        request.setValue("text/caddyfile", forHTTPHeaderField: "Content-Type")
-        request.httpBody = caddyfile.data(using: .utf8)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw CLIError.requestFailed("Caddy reload failed: \(body)")
-        }
-        print("Reloaded FrankenPHP/Caddy config.")
+        let message = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, running: true)
+        print(message)
     }
 
     @MainActor
@@ -154,30 +138,17 @@ struct NestCTL {
 
     @MainActor
     private static func pushCloudflare(store: SiteStore) async throws {
-        try writeCloudflaredConfig(store: store)
-        try await CloudflareService.pushTunnelConfiguration(
-            settings: store.settings.cloudflareSettings,
-            routes: store.tunnelRoutes,
-            sites: store.sites,
-            projects: store.appProjects
-        )
-        print("Pushed tunnel configuration to Cloudflare.")
+        try await applyCloudflared(store: store, start: false, push: true)
     }
 
     @MainActor
-    @discardableResult
-    private static func writeCaddyConfig(store: SiteStore) throws -> ConfigRenderer {
-        let renderer = caddyRenderer(store: store)
-        try renderer.writeAll(sites: store.sites)
-        print("Wrote \(renderer.caddyfilePath)")
-        return renderer
-    }
-
-    @MainActor
-    private static func writeCloudflaredConfig(store: SiteStore) throws {
-        let renderer = tunnelRenderer(store: store)
-        try renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
-        print("Wrote \(store.settings.cloudflareSettings.configPath)")
+    private static func applyCloudflared(store: SiteStore, start: Bool, push: Bool) async throws {
+        let settings = store.settings
+        let running = await Task.detached { LaunchAgentService.isRunning(label: ProcessController.cloudflaredLaunchAgentLabel) }.value
+        let message = try await ConfigurationService.shared.applyTunnel(settings: settings, routes: store.tunnelRoutes,
+            sites: store.sites, projects: store.appProjects, running: start || running, push: push,
+            restart: { try await ProcessController.restartConnector(settings: settings) })
+        print(message)
     }
 
     @MainActor
@@ -193,45 +164,13 @@ struct NestCTL {
         TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
     }
 
-    @MainActor
-    private static func startCloudflared(store: SiteStore) throws {
-        let settings = store.settings
-        guard FileManager.default.isExecutableFile(atPath: settings.runtimePaths.cloudflaredBinary) else {
-            throw CLIError.requestFailed("cloudflared binary is not executable at \(settings.runtimePaths.cloudflaredBinary).")
-        }
-        guard settings.cloudflareSettings.hasLocalConfiguration else {
-            throw CloudflareServiceError.missingLocalConfiguration
-        }
-
-        ProcessController.removeLegacyCloudflaredLaunchAgents()
-
-        let definition = LaunchAgentDefinition(
-            label: ProcessController.cloudflaredLaunchAgentLabel,
-            programArguments: [
-                settings.runtimePaths.cloudflaredBinary,
-                "--config",
-                settings.cloudflareSettings.configPath,
-                "tunnel",
-                "run",
-                settings.cloudflareSettings.tunnelName
-            ],
-            standardOutPath: settings.runtimePaths.cloudflaredLog,
-            standardErrorPath: settings.runtimePaths.cloudflaredLog
-        )
-        let result = LaunchAgentService.start(definition)
-        guard result.status == 0 else {
-            throw CLIError.requestFailed(result.output.isEmpty ? "Failed to start cloudflared." : result.output)
-        }
-        print("Started cloudflared.")
-    }
-
     private static func runBrew(_ action: BrewServiceAction, service: String) throws {
         guard FileManager.default.isExecutableFile(atPath: BrewServiceController.brewPath) else {
             throw CLIError.requestFailed("Homebrew is not available at \(BrewServiceController.brewPath).")
         }
         let result = SystemProcess.capture(
             BrewServiceController.brewPath,
-            arguments: ["services", action.rawValue, service]
+            arguments: ["services", action.rawValue, service], timeout: 120
         )
         guard result.status == 0 else {
             throw CLIError.requestFailed(result.output.isEmpty ? "brew services \(action.rawValue) \(service) failed." : result.output)

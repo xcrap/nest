@@ -49,6 +49,15 @@ public struct AppSettings: Codable, Equatable {
         )
     }
 
+    /// Debug UI verification uses an isolated fixture directory and no service monitoring/repair.
+    public static var reviewDirectory: String? {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let index = args.firstIndex(of: "--review-data"), args.indices.contains(index + 1) { return args[index + 1] }
+        #endif
+        return nil
+    }
+
     public static let developmentBundleIdentifier = "dev.nest.app"
     public static let productionBundleIdentifier = "app.nest"
 

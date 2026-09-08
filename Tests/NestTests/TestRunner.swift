@@ -4,7 +4,7 @@ import NestLib
 @main
 struct TestRunner {
     @MainActor
-    static func main() {
+    static func main() async {
         print("Running Nest tests...\n")
 
         var totalPassed = 0
@@ -33,6 +33,12 @@ struct TestRunner {
         run("TunnelConfigRenderer", TunnelConfigRendererTests.runAll)
         run("MindImportService", MindImportServiceTests.runAll)
         run("MigrationService", MigrationServiceTests.runAll)
+
+        print("Suite: Reliability")
+        let reliability = await ReliabilityTests.runAll()
+        totalPassed += reliability.passed
+        totalFailed += reliability.failed
+        print("  \(reliability.passed) passed, \(reliability.failed) failed\n")
 
         print("Total: \(totalPassed) passed, \(totalFailed) failed")
 

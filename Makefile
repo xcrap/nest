@@ -10,7 +10,7 @@ APP_BUNDLE := $(DIST_DIR)/$(APP_NAME).app
 DEV_APP_BUNDLE := .build/$(APP_NAME)-dev.app
 VERSION := $(shell cat version.txt 2>/dev/null || echo 0.0.0)
 BUILD_ID := $(shell date -u +%Y%m%d%H%M%S)-$(shell git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)
-DEV_PROCESS_PATTERN := '(^|/)\\.build/arm64-apple-macosx/debug/Nest$$|(^|/)\\.build/Nest-dev\\.app/Contents/MacOS/Nest$$'
+DEV_PROCESS_PATTERN := '$(CURDIR)/[.]build/(arm64-apple-macosx/debug/Nest|Nest-dev[.]app/Contents/MacOS/Nest)([[:space:]]|$$)'
 
 .PHONY: dev build test run package dmg clean bump
 
@@ -35,7 +35,7 @@ dev:
 	sed 's/$${VERSION}/$(VERSION)/g; s/$${BUILD_ID}/$(BUILD_ID)/g; s/$${BUNDLE_ID}/$(DEV_BUNDLE_ID)/g' \
 		scripts/Info.plist > $(DEV_APP_BUNDLE)/Contents/Info.plist
 	codesign --force --deep --sign - --timestamp=none $(DEV_APP_BUNDLE)
-	open $(DEV_APP_BUNDLE)
+	open $(DEV_APP_BUNDLE) --args $(DEV_ARGS)
 
 run: dev
 

@@ -4,6 +4,8 @@ Nest is a native macOS SwiftUI app for managing local PHP development sites with
 
 ## What It Does
 
+- Manage command-based projects, Cloudflare tunnel routes, and DNS records
+
 - Manage website records with `.test` domains
 - Start/stop FrankenPHP and MariaDB via Homebrew services
 - Generate and reload FrankenPHP/Caddy config automatically
@@ -67,7 +69,7 @@ The app's **Environment** screen verifies all prerequisites with copy-pasteable 
 
 1. Complete the prerequisites above.
 2. Open `Nest.app` (or `make dev` for development).
-3. Go to **Runtime Paths** and click **Auto-Detect** (or configure paths manually), then **Save**.
+3. Go to **Settings → Paths** and click **Auto-Detect** (or configure paths manually), then **Save**.
 4. Add sites in the **Sites** screen.
 5. Start FrankenPHP and MariaDB from the sidebar controls.
 6. Open `https://your-site.test`.
@@ -128,3 +130,28 @@ gh run list --limit 1     # verify release workflow status
 - All runtimes are installed and managed via Homebrew — Nest does not install anything.
 - `.test` domain routing requires dnsmasq + resolver + PF rules (see Prerequisites). Packaged builds manage PF via a privileged SMAppService helper; dev builds require a one-time manual pfctl setup.
 - HTTPS requires trusting Caddy's local CA certificate once.
+
+## Daily Workflow
+
+- **Sites** supports sorting by name, domain, or folder; pinned sites stay first. Use the All / Pinned / Recent filter, or search names, domains, and paths. Select a row with the keyboard and use **Cmd+O** (browser), **Cmd+Shift+F** (Finder), **Cmd+Shift+T** (Terminal), or **Cmd+E** (edit).
+- A site's **Enabled** switch controls its generated Caddy route. It does not claim that PHP, DNS, TLS, or the application itself is healthy. Changes to site records are validated and applied automatically; the status strip reports pending, applying, applied, or failed changes. **Apply** retries a failed operation.
+- **Projects** manages commands through per-project launch agents. A port used by an unrelated process is reported as a conflict. Stop only targets the project's launch agent; Nest does not kill arbitrary processes using that port.
+- **Tunnels** stores the desired public-to-local routes. Changes remain pending until **Apply Changes** validates the YAML and restarts the running local connector. **Check** performs a separate public HTTPS request and shows its HTTP result. A running connector does not imply a healthy public route.
+- **DNS** manages Cloudflare DNS records separately from tunnel ingress. **Settings → Cloudflare → Push to Cloudflare** applies local configuration and also pushes API ingress. Partial failures identify which step completed.
+- **Settings → Environment** contains prerequisites and service diagnostics. **Settings → Paths** contains runtime paths. Service failures also appear directly in the sidebar.
+
+## Configuration Safety
+
+**Settings → Config** displays generated Caddyfile and cloudflared YAML as read-only. Use site/route records to change generated routing. Add custom Caddy configuration in **Overrides** (`overrides/custom.caddy`), or edit `security.conf` and `php-app`; these files are preserved during regeneration.
+
+Editor drafts survive tab and section changes. Quit asks before discarding unsaved drafts. The editor detects external file changes, reports write failures, and offers **Recovery → Restore Previous Version** or **Discard & Reload**. Caddy support files are validated in an isolated staging directory before saving and reloading. PHP and MariaDB configuration saves require a service restart to take effect.
+
+Before replacing a file, Nest saves its previous contents in a `.nest-backups` directory one level above the file's parent. Backups are kept outside Caddy import globs. A rejected apply restores the previous file; failed tunnel restart recovery also attempts to restart the previous configuration. A failed remote API push reports partial success instead of pretending the whole operation completed.
+
+Cloudflare API tokens are stored in the macOS Keychain under the app's bundle-specific service and excluded from JSON settings and exports. Existing plaintext tokens migrate only after Keychain storage succeeds. Importing a token-free export preserves the existing token. Historical backups created by older Nest versions are not automatically removed and may still contain old credentials.
+
+## Verification
+
+`make test` includes configuration rollback, rejected reload/validation, preserved overrides, editor draft/write/conflict handling, process ownership, subprocess deadlines/cancellation/output, and credential migration/export tests. The build-and-test workflow also runs on main pushes and pull requests, with a package signature check.
+
+For isolated debug UI verification, use `make dev DEV_ARGS="--review-data /absolute/path/to/fixture-config"`. This loads fixture JSON with an in-memory credential store and disables automatic service monitoring/network repair and update checks. It is available only in debug builds; fixture paths should point exclusively to disposable config files. Explicit service buttons still perform their normal actions.

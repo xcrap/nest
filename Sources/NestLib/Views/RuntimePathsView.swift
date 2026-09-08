@@ -6,6 +6,7 @@ public struct RuntimePathsView: View {
     @State private var validationIssues: [String] = []
     @State private var saved = false
     @State private var detected = false
+    @State private var validated = false
 
     public init() {}
 
@@ -71,6 +72,9 @@ public struct RuntimePathsView: View {
                         .foregroundStyle(.green)
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
+                if validated {
+                    Label("Valid", systemImage: "checkmark.circle").font(.callout).foregroundStyle(.green)
+                }
                 if saved {
                     Label("Saved", systemImage: "checkmark.circle.fill")
                         .font(.callout)
@@ -83,12 +87,8 @@ public struct RuntimePathsView: View {
                 Button("Validate") {
                     let issues = paths.validate()
                     withAnimation { validationIssues = issues }
-                    if issues.isEmpty {
-                        withAnimation { saved = true }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                            withAnimation { saved = false }
-                        }
-                    }
+                    validated = issues.isEmpty
+                    saved = false
                 }
                 .controlSize(.small)
 
@@ -117,7 +117,11 @@ public struct RuntimePathsView: View {
                     }
 
                     store.settings.runtimePaths = paths
-                    store.saveSettings()
+                    guard store.saveSettings() else {
+                        validationIssues = [store.lastSaveError ?? "Could not save settings."]
+                        saved = false
+                        return
+                    }
                     withAnimation {
                         validationIssues = []
                         saved = true

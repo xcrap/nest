@@ -4,6 +4,7 @@ import AppKit
 public struct EnvironmentChecksView: View {
     @EnvironmentObject var store: SiteStore
     @EnvironmentObject var processController: ProcessController
+    @State private var checkTask: Task<Void, Never>?
     @State private var checks: [PrerequisiteChecker.CheckResult] = []
     @State private var runtimeIssues: [String] = []
     @State private var helperMessage: String?
@@ -163,6 +164,7 @@ public struct EnvironmentChecksView: View {
                 .controlSize(.small)
                 .buttonStyle(.bordered)
                 .tint(running ? .red : .green)
+                .disabled(processController.isServiceBusy(name))
             }
             if let error {
                 Text(error)
@@ -289,8 +291,14 @@ public struct EnvironmentChecksView: View {
     // MARK: - Actions
 
     private func runChecks() {
-        checks = PrerequisiteChecker.checkAll()
-        runtimeIssues = store.settings.runtimePaths.validate()
+        checkTask?.cancel()
+        let paths = store.settings.runtimePaths
+        checkTask = Task {
+            let result = await Task.detached { (PrerequisiteChecker.checkAll(), paths.validate()) }.value
+            guard !Task.isCancelled else { return }
+            checks = result.0
+            runtimeIssues = result.1
+        }
     }
 
     private func installPFHelper() {
@@ -342,19 +350,7 @@ public struct EnvironmentChecksView: View {
     }
 
     private func startFrankenPHP() {
-        let paths = store.settings.runtimePaths
-        guard !paths.frankenphpBinary.isEmpty else { return }
-        let renderer = ConfigRenderer(
-            configDirectory: store.settings.caddyConfigDirectory,
-            frankenphpLogPath: paths.frankenphpLog
-        )
-        do {
-            try renderer.writeAll(sites: store.sites)
-        } catch {
-            processController.frankenphpError = error.localizedDescription
-            return
-        }
-        processController.startFrankenPHP(binary: paths.frankenphpBinary, caddyfilePath: renderer.caddyfilePath)
+        processController.startFrankenPHP(settings: store.settings, sites: store.sites)
     }
 
     private func startMariaDB() {
@@ -364,13 +360,7 @@ public struct EnvironmentChecksView: View {
     }
 
     private func startCloudflared() {
-        let renderer = TunnelConfigRenderer(settings: store.settings.cloudflareSettings)
-        do {
-            try renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
-        } catch {
-            processController.cloudflaredError = error.localizedDescription
-            return
-        }
-        processController.startCloudflared(settings: store.settings)
+        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
     }
+
 }

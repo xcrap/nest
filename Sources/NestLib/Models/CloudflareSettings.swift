@@ -30,6 +30,31 @@ public struct CloudflareSettings: Codable, Equatable {
         self.credentialsFilePath = credentialsFilePath
     }
 
+    enum CodingKeys: String, CodingKey { case apiToken, zoneId, accountId, tunnelId, tunnelName, tunnelDomain, configPath, credentialsFilePath }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        apiToken = try values.decodeIfPresent(String.self, forKey: .apiToken) ?? "" // Legacy import only.
+        zoneId = try values.decodeIfPresent(String.self, forKey: .zoneId) ?? ""
+        accountId = try values.decodeIfPresent(String.self, forKey: .accountId) ?? ""
+        tunnelId = try values.decodeIfPresent(String.self, forKey: .tunnelId) ?? ""
+        tunnelName = try values.decodeIfPresent(String.self, forKey: .tunnelName) ?? ""
+        tunnelDomain = try values.decodeIfPresent(String.self, forKey: .tunnelDomain) ?? ""
+        configPath = try values.decodeIfPresent(String.self, forKey: .configPath) ?? ""
+        credentialsFilePath = try values.decodeIfPresent(String.self, forKey: .credentialsFilePath) ?? ""
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(zoneId, forKey: .zoneId)
+        try values.encode(accountId, forKey: .accountId)
+        try values.encode(tunnelId, forKey: .tunnelId)
+        try values.encode(tunnelName, forKey: .tunnelName)
+        try values.encode(tunnelDomain, forKey: .tunnelDomain)
+        try values.encode(configPath, forKey: .configPath)
+        try values.encode(credentialsFilePath, forKey: .credentialsFilePath)
+    }
+
     public static func detectDefaults(homeDirectory: String = NSHomeDirectory()) -> CloudflareSettings {
         let configDirectory = (homeDirectory as NSString).appendingPathComponent(".cloudflared")
         let yamlPath = (configDirectory as NSString).appendingPathComponent("config.yaml")

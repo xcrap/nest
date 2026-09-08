@@ -10,6 +10,10 @@ public final class SiteStore: ObservableObject {
     @Published public var settings: AppSettings
     @Published public private(set) var persistenceErrors: [String] = []
 
+    private let credentialStore: CredentialStore
+    private var loadedToken: String?
+    @Published public private(set) var lastSaveError: String?
+
     private let sitesFileURL: URL
     private let projectsFileURL: URL
     private let tunnelRoutesFileURL: URL
@@ -28,6 +32,10 @@ public final class SiteStore: ObservableObject {
     }
 
     public convenience init() {
+        if let directory = AppSettings.reviewDirectory {
+            self.init(dataDirectory: URL(fileURLWithPath: directory), defaults: AppSettings(caddyConfigDirectory: directory + "/caddy"), runOneTimeMigrations: false, credentialStore: MemoryCredentialStore())
+            return
+        }
         let defaults = AppSettings.defaultSettings()
         AppSettings.prepareStorage()
         self.init(
@@ -40,8 +48,10 @@ public final class SiteStore: ObservableObject {
     public init(
         dataDirectory: URL,
         defaults: AppSettings = AppSettings.defaultSettings(),
-        runOneTimeMigrations: Bool = true
+        runOneTimeMigrations: Bool = true,
+        credentialStore: CredentialStore? = nil
     ) {
+        self.credentialStore = credentialStore ?? (runOneTimeMigrations ? KeychainCredentialStore() as CredentialStore : MemoryCredentialStore())
         var initialPersistenceErrors: [String] = []
         let fm = FileManager.default
         do {
@@ -81,6 +91,7 @@ public final class SiteStore: ObservableObject {
         self.persistenceErrors = initialPersistenceErrors
 
         loadSettings()
+        loadCredential()
         loadSites()
         loadProjects()
         loadTunnelRoutes()
@@ -150,13 +161,44 @@ public final class SiteStore: ObservableObject {
 
             if migratedRuntimePaths != settings.runtimePaths || result.source == .legacy {
                 settings.runtimePaths = migratedRuntimePaths
-                saveSettings()
             }
         }
     }
 
-    public func saveSettings() {
-        saveEncodable(settings, to: settingsFileURL, label: "settings")
+    @discardableResult
+    public func saveSettings() -> Bool {
+        do {
+            if loadedToken == nil && settings.cloudflareSettings.apiToken.isEmpty {
+                throw ConfigurationFailure("The Cloudflare token could not be loaded. Reopen Nest to retry Keychain access before saving settings.")
+            }
+            if loadedToken != settings.cloudflareSettings.apiToken {
+                try credentialStore.save(settings.cloudflareSettings.apiToken)
+                loadedToken = settings.cloudflareSettings.apiToken
+            }
+            return saveEncodable(settings, to: settingsFileURL, label: "settings")
+        } catch {
+            lastSaveError = error.localizedDescription
+            recordPersistenceError(error.localizedDescription)
+            return false
+        }
+    }
+
+    private func loadCredential() {
+        do {
+            let legacy = settings.cloudflareSettings.apiToken
+            if !legacy.isEmpty {
+                try credentialStore.save(legacy)
+                loadedToken = legacy
+                saveSettings() // Remove plaintext only after Keychain succeeds.
+            } else {
+                let token = try credentialStore.load()
+                settings.cloudflareSettings.apiToken = token
+                loadedToken = token
+            }
+        } catch {
+            lastSaveError = error.localizedDescription
+            recordPersistenceError(error.localizedDescription)
+        }
     }
 
     private func loadStoredValue<T: Codable>(_ type: T.Type, from url: URL, label: String) -> LoadedValue<T>? {
@@ -192,13 +234,18 @@ public final class SiteStore: ObservableObject {
         }
     }
 
-    private func saveEncodable<T: Codable>(_ value: T, to url: URL, label: String) {
+    @discardableResult
+    private func saveEncodable<T: Codable>(_ value: T, to url: URL, label: String) -> Bool {
         do {
             let envelope = StoreEnvelope(payload: value)
             let data = try encoder.encode(envelope)
             try data.write(to: url, options: .atomic)
+            lastSaveError = nil
+            return true
         } catch {
-            recordPersistenceError("Cannot save \(label): \(error.localizedDescription)")
+            lastSaveError = "Cannot save \(label): \(error.localizedDescription)"
+            recordPersistenceError(lastSaveError!)
+            return false
         }
     }
 
@@ -379,9 +426,10 @@ public final class SiteStore: ObservableObject {
         reconcileTunnelLinks()
     }
 
-    public func replaceCloudflareSettings(_ cloudflareSettings: CloudflareSettings) {
+    @discardableResult
+    public func replaceCloudflareSettings(_ cloudflareSettings: CloudflareSettings) -> Bool {
         settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
-        saveSettings()
+        return saveSettings()
     }
 
     public func exportCloudflareSettings() throws -> Data {
@@ -390,8 +438,10 @@ public final class SiteStore: ObservableObject {
 
     public func importCloudflareSettings(from data: Data) throws {
         let imported = try decoder.decode(CloudflareSettings.self, from: data)
-        settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(imported)
-        saveSettings()
+        var merged = imported
+        if merged.apiToken.isEmpty { merged.apiToken = settings.cloudflareSettings.apiToken }
+        settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(merged)
+        guard saveSettings() else { throw ConfigurationFailure(lastSaveError ?? "Could not save imported settings.") }
     }
 
     public func applyMindImport(_ payload: MindImportPayload) -> MindImportSummary {

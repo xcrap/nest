@@ -74,6 +74,15 @@ public enum LaunchAgentService {
     public static func stop(label: String, removePlist: Bool = true) -> CommandResult {
         let plistPath = plistPath(for: label)
         let serviceTarget = serviceTarget(for: label)
+        let inspection = SystemProcess.capture("/bin/launchctl", arguments: ["print", serviceTarget], timeout: 3)
+        if inspection.status != 0 {
+            guard inspection.output.contains("Could not find service") else { return inspection }
+            if removePlist, FileManager.default.fileExists(atPath: plistPath) {
+                do { try FileManager.default.removeItem(atPath: plistPath) }
+                catch { return CommandResult(status: -1, output: error.localizedDescription) }
+            }
+            return CommandResult(status: 0, output: "Service is already stopped.")
+        }
         _ = SystemProcess.capture("/bin/launchctl", arguments: ["disable", serviceTarget])
 
         var result = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", serviceTarget])
@@ -81,8 +90,9 @@ public enum LaunchAgentService {
             result = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", domainTarget, plistPath])
         }
 
-        if removePlist {
-            try? FileManager.default.removeItem(atPath: plistPath)
+        if removePlist && result.status == 0 && FileManager.default.fileExists(atPath: plistPath) {
+            do { try FileManager.default.removeItem(atPath: plistPath) }
+            catch { return CommandResult(status: -1, output: error.localizedDescription) }
         }
 
         return result
@@ -95,9 +105,29 @@ public enum LaunchAgentService {
     public static func isRunning(label: String) -> Bool {
         let result = SystemProcess.capture(
             "/bin/launchctl",
-            arguments: ["print", serviceTarget(for: label)]
+            arguments: ["print", serviceTarget(for: label)], timeout: 3
         )
         return result.status == 0 && result.output.contains("state = running")
+    }
+
+    /// Only the process tree registered under this exact launchd label is owned by Nest.
+    public static func processTree(label: String) -> Set<Int32> {
+        let result = SystemProcess.capture("/bin/launchctl", arguments: ["print", serviceTarget(for: label)], timeout: 3)
+        guard result.status == 0,
+              let line = result.output.split(separator: "\n").first(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("pid = ") }),
+              let pid = Int32(line.split(separator: "=").last?.trimmingCharacters(in: .whitespaces) ?? "") else { return [] }
+        let table = SystemProcess.capture("/bin/ps", arguments: ["-axo", "pid=,ppid="], timeout: 3)
+        let pairs = table.output.split(separator: "\n").compactMap { line -> (Int32, Int32)? in
+            let values = line.split(whereSeparator: { $0.isWhitespace }).compactMap { Int32($0) }
+            return values.count == 2 ? (values[0], values[1]) : nil
+        }
+        var tree: Set<Int32> = [pid]
+        var previous = 0
+        while tree.count != previous {
+            previous = tree.count
+            for (child, parent) in pairs where tree.contains(parent) { tree.insert(child) }
+        }
+        return tree
     }
 
     private static func write(_ definition: LaunchAgentDefinition) throws {
@@ -114,6 +144,7 @@ public enum LaunchAgentService {
             "ProgramArguments": definition.programArguments,
             "RunAtLoad": true,
             "KeepAlive": definition.keepAlive,
+            "AbandonProcessGroup": false,
             "StandardOutPath": definition.standardOutPath,
             "StandardErrorPath": definition.standardErrorPath,
         ]

@@ -96,8 +96,9 @@ public struct CloudflareView: View {
                         .font(.callout)
                         .fontWeight(.medium)
                         .foregroundStyle(.secondary)
-                    SecureField("cfut_...", text: $cloudflareSettings.apiToken)
+                    SecureField("Stored in Keychain", text: $cloudflareSettings.apiToken)
                         .textFieldStyle(.roundedBorder)
+                    Text("Stored in Keychain; excluded from exports.").font(.caption).foregroundStyle(.secondary)
                 }
             }
 
@@ -152,15 +153,15 @@ public struct CloudflareView: View {
             }
 
             HStack(spacing: 8) {
-                Button("Write Config") {
-                    persistSettings()
-                    writeTunnelConfig()
+                Button("Apply Locally") {
+                    guard persistSettings() else { return }
+                    processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
                 Button("Push to Cloudflare") {
-                    persistSettings()
+                    guard persistSettings() else { return }
                     syncTunnelConfig()
                 }
                 .buttonStyle(.bordered)
@@ -168,13 +169,11 @@ public struct CloudflareView: View {
                 .help("Writes the local tunnel config, then pushes the generated ingress rules to Cloudflare.")
 
                 Button(processController.cloudflaredRunning ? "Stop" : "Start") {
-                    persistSettings()
+                    guard persistSettings() else { return }
                     if processController.cloudflaredRunning {
                         processController.stopCloudflared()
                     } else {
-                        if writeTunnelConfig() {
-                            processController.startCloudflared(settings: store.settings)
-                        }
+                        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
                     }
                 }
                 .buttonStyle(.bordered)
@@ -182,9 +181,13 @@ public struct CloudflareView: View {
                 .tint(processController.cloudflaredRunning ? .red : .green)
             }
 
-            Text("Write Config updates the local cloudflared config on this Mac. Push to Cloudflare also sends the generated tunnel routes to Cloudflare's API.")
+            .disabled(processController.isServiceBusy("Cloudflared"))
+
+            Text("Apply Locally validates and saves routes, then restarts the running connector. Push to Cloudflare also updates API ingress. Public reachability can be checked from Tunnels.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Text(processController.tunnelApplyState.label).font(.callout).textSelection(.enabled)
 
             if let error = processController.cloudflaredError, !error.isEmpty {
                 Text(error)
@@ -267,43 +270,16 @@ public struct CloudflareView: View {
 
     // MARK: - Actions
 
-    private func persistSettings() {
-        cloudflareSettings = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
-        store.replaceCloudflareSettings(cloudflareSettings)
-    }
-
     @discardableResult
-    private func writeTunnelConfig() -> Bool {
-        do {
-            let renderer = TunnelConfigRenderer(settings: cloudflareSettings)
-            try renderer.writeConfig(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
-            statusMessage = "cloudflared config written to \(cloudflareSettings.configPath)"
-            return true
-        } catch {
-            statusMessage = error.localizedDescription
-            return false
-        }
+    private func persistSettings() -> Bool {
+        cloudflareSettings = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
+        let saved = store.replaceCloudflareSettings(cloudflareSettings)
+        if !saved { statusMessage = store.lastSaveError }
+        return saved
     }
 
     private func syncTunnelConfig() {
-        guard writeTunnelConfig() else { return }
-        Task {
-            do {
-                try await CloudflareService.pushTunnelConfiguration(
-                    settings: cloudflareSettings,
-                    routes: store.tunnelRoutes,
-                    sites: store.sites,
-                    projects: store.appProjects
-                )
-                await MainActor.run {
-                    statusMessage = "Tunnel routes pushed to Cloudflare."
-                }
-            } catch {
-                await MainActor.run {
-                    statusMessage = error.localizedDescription
-                }
-            }
-        }
+        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, push: true)
     }
 
     private func handleSettingsImport(_ result: Result<URL, Error>) {

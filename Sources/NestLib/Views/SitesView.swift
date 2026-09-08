@@ -15,135 +15,144 @@ public struct SitesView: View {
 
     public init() {}
 
+    @State private var selection: String?
+    @State private var sortOrder = [KeyPathComparator(\Site.name)]
+    @State private var filter = "All"
+    @State private var pendingDeletion: Site?
+    @AppStorage("pinnedSites") private var pinnedSites = ""
+    @AppStorage("recentSites") private var recentSites = ""
+
+    private var pinned: Set<String> { Set(pinnedSites.split(separator: ",").map(String.init)) }
+    private var recent: [String] { recentSites.split(separator: ",").map(String.init) }
+    private var selectedSite: Site? { store.sites.first { $0.id == selection } }
     private var filteredSites: [Site] {
-        let sorted = store.sites.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        if searchText.isEmpty { return sorted }
-        let q = searchText.lowercased()
-        return sorted.filter {
-            $0.name.lowercased().contains(q) || $0.domain.lowercased().contains(q)
-        }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var sites = store.sites.filter { site in
+            (query.isEmpty || [site.name, site.domain, site.rootPath].contains { $0.localizedCaseInsensitiveContains(query) })
+            && (filter != "Pinned" || pinned.contains(site.id))
+            && (filter != "Recent" || recent.contains(site.id))
+        }.sorted(using: sortOrder)
+        if filter == "Recent" { sites.sort { (recent.firstIndex(of: $0.id) ?? Int.max) < (recent.firstIndex(of: $1.id) ?? Int.max) } }
+        else { sites = sites.filter { pinned.contains($0.id) } + sites.filter { !pinned.contains($0.id) } }
+        return sites
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Toolbar row
             HStack(spacing: 10) {
-                // Search
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.tertiary)
-                        .font(.callout)
-                    TextField("Filter...", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.callout)
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-
+                TextField("Filter sites…", text: $searchText).textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Filter sites by name, domain or path")
+                Picker("Show", selection: $filter) {
+                    Text("All").tag("All"); Text("Pinned").tag("Pinned"); Text("Recent").tag("Recent")
+                }.frame(width: 115)
+                Text("\(store.runningSites.count)/\(store.sites.count) enabled").font(.callout).foregroundStyle(.secondary)
+                Menu("Import / Export") {
+                    Button("Import Sites…") { showImportPicker = true }
+                    Button("Import Parked Folder…") { showFolderImportPicker = true }
+                    Button("Export Sites…") { showExportPicker = true }
+                }.fixedSize()
+                Button { showAddSheet = true } label: { Label("Add Site", systemImage: "plus") }
+                    .labelStyle(.iconOnly).keyboardShortcut("n", modifiers: .command)
+            }.padding(12).background(.bar)
+            HStack {
+                Text(processController.caddyApplyState.label).font(.callout).textSelection(.enabled)
                 Spacer()
-
-                Text("\(store.runningSites.count)/\(store.sites.count) active")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-
-                Menu {
-                    Button("Import Sites...") { showImportPicker = true }
-                    Button("Import Parked Folder...") { showFolderImportPicker = true }
-                    Button("Export Sites...") { showExportPicker = true }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .foregroundStyle(.secondary)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-
-                Button {
-                    showAddSheet = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.callout)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .keyboardShortcut("n", modifiers: .command)
-                .help("Add Site (Cmd+N)")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.bar)
-
+                Button("Apply") { processController.applyCaddy(settings: store.settings, sites: store.sites) }
+                    .disabled(processController.caddyApplyState.isBusy || store.lastSaveError != nil)
+            }.padding(.horizontal, 12).padding(.vertical, 6)
             Divider()
-
             if store.sites.isEmpty {
-                emptyState
+                ContentUnavailableView {
+                    Label("No sites yet", systemImage: "globe")
+                } actions: { Button("Add Site") { showAddSheet = true } }
+            } else if filteredSites.isEmpty {
+                ContentUnavailableView.search(text: searchText.isEmpty ? filter : searchText)
             } else {
-                // Sites table
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(filteredSites) { site in
-                            SiteRow(site: site, isHovered: hoveredSiteId == site.id, onEdit: { editingSite = site })
-                                .onHover { h in
-                                    withAnimation(.easeInOut(duration: 0.15)) {
-                                        hoveredSiteId = h ? site.id : nil
-                                    }
-                                }
-                            if site.id != filteredSites.last?.id {
-                                Divider()
-                            }
-                        }
+                Table(filteredSites, selection: $selection, sortOrder: $sortOrder) {
+                    TableColumn("Pin") { site in
+                        Button { togglePin(site) } label: {
+                            Image(systemName: pinned.contains(site.id) ? "pin.fill" : "pin")
+                        }.buttonStyle(.plain).accessibilityLabel("\(pinned.contains(site.id) ? "Unpin" : "Pin") \(site.name)")
+                    }.width(28)
+                    TableColumn("Name", value: \.name).width(min: 100, ideal: 150)
+                    TableColumn("Domain", value: \.domain) { site in
+                        Text(site.domain).font(.system(.callout, design: .monospaced))
+                    }.width(min: 110, ideal: 170)
+                    TableColumn("Folder", value: \.rootPath) { site in
+                        Text(site.rootPath).foregroundStyle(.secondary).truncationMode(.middle).help(site.rootPath)
+                    }.width(min: 100, ideal: 230)
+                    TableColumn("Open") { site in
+                        HStack(spacing: 10) {
+                            Button { openSite(site) } label: { Image(systemName: "globe") }
+                                .help("Open in Browser").accessibilityLabel("Open \(site.name) in browser")
+                            Button { SiteActions.reveal(site) } label: { Image(systemName: "folder") }
+                                .help("Show in Finder").accessibilityLabel("Show \(site.name) in Finder")
+                            Button { SiteActions.terminal(site) } label: { Image(systemName: "terminal") }
+                                .help("Open Terminal").accessibilityLabel("Open Terminal at \(site.name)")
+                            Button { editingSite = site } label: { Image(systemName: "pencil") }
+                                .help("Edit Site").accessibilityLabel("Edit \(site.name)")
+                        }.buttonStyle(.borderless)
+                    }.width(105)
+                    TableColumn("Enabled") { site in
+                        Toggle("Enable \(site.name)", isOn: Binding(
+                            get: { site.status == .running },
+                            set: { store.setSiteStatus(id: site.id, status: $0 ? .running : .stopped) }
+                        )).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                            .disabled(processController.caddyApplyState.isBusy || processController.isServiceBusy("FrankenPHP"))
+                    }.width(58)
+                }
+                .contextMenu(forSelectionType: String.self) { ids in
+                    if let site = store.sites.first(where: { ids.contains($0.id) }) {
+                        Button("Open in Browser") { openSite(site) }
+                        Button("Show in Finder") { SiteActions.reveal(site) }
+                        Button("Open Terminal") { SiteActions.terminal(site) }
+                        Button("Edit…") { editingSite = site }
+                        Button(pinned.contains(site.id) ? "Unpin" : "Pin") { togglePin(site) }
+                        Divider()
+                        Button("Delete Site…", role: .destructive) { pendingDeletion = site }
                     }
+                } primaryAction: { ids in
+                    if let site = store.sites.first(where: { ids.contains($0.id) }) { openSite(site) }
                 }
             }
+            if let site = selectedSite {
+                HStack {
+                    Text(site.domain).font(.callout)
+                    Spacer()
+                    Button("Open") { openSite(site) }.keyboardShortcut("o", modifiers: .command)
+                    Button("Finder") { SiteActions.reveal(site) }.keyboardShortcut("f", modifiers: [.command, .shift])
+                    Button("Terminal") { SiteActions.terminal(site) }.keyboardShortcut("t", modifiers: [.command, .shift])
+                    Button("Edit") { editingSite = site }.keyboardShortcut("e", modifiers: .command)
+                    Button("Delete…", role: .destructive) { pendingDeletion = site }
+                }.padding(10).background(.bar).id(site.id)
+            }
         }
-        .sheet(isPresented: $showAddSheet) {
-            SiteFormSheet(mode: .add)
+        .sheet(isPresented: $showAddSheet) { SiteFormSheet(mode: .add) }
+        .sheet(item: $editingSite) { SiteFormSheet(mode: .edit($0)) }
+        .fileImporter(isPresented: $showImportPicker, allowedContentTypes: [.json], onCompletion: handleImport)
+        .fileImporter(isPresented: $showFolderImportPicker, allowedContentTypes: [.folder], onCompletion: handleParkedFolderImport)
+        .fileExporter(isPresented: $showExportPicker, document: SiteExportDocument(data: (try? store.exportSites()) ?? Data()), contentType: .json, defaultFilename: "nest-sites.json") { result in
+            if case .failure(let error) = result { importResult = ImportResult(message: error.localizedDescription) }
         }
-        .sheet(item: $editingSite) { site in
-            SiteFormSheet(mode: .edit(site))
-        }
-        .fileImporter(isPresented: $showImportPicker, allowedContentTypes: [.json]) { result in
-            handleImport(result)
-        }
-        .fileImporter(isPresented: $showFolderImportPicker, allowedContentTypes: [.folder]) { result in
-            handleParkedFolderImport(result)
-        }
-        .fileExporter(isPresented: $showExportPicker, document: SiteExportDocument(data: (try? store.exportSites()) ?? Data()), contentType: .json, defaultFilename: "nest-sites.json") { _ in }
-        .alert("Import Result", isPresented: .init(get: { importResult != nil }, set: { if !$0 { importResult = nil } })) {
+        .alert("Import / Export", isPresented: .init(get: { importResult != nil }, set: { if !$0 { importResult = nil } })) {
             Button("OK") { importResult = nil }
-        } message: {
-            if let result = importResult {
-                Text(result.message)
+        } message: { Text(importResult?.message ?? "") }
+        .alert("Delete Site?", isPresented: .init(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let site = pendingDeletion { store.deleteSite(id: site.id) }
+                pendingDeletion = nil
             }
-        }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: { Text("Remove \(pendingDeletion?.name ?? "this site") from Nest? Its files will stay on disk.") }
     }
-
-    private var emptyState: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            VStack(spacing: 14) {
-                Image(systemName: "globe")
-                    .font(.system(size: 36, weight: .light))
-                    .foregroundStyle(.quaternary)
-                Text("No sites yet")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Button("Add Site") { showAddSheet = true }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
-            Spacer()
-        }
+    private func togglePin(_ site: Site) {
+        var ids = pinned
+        if ids.contains(site.id) { ids.remove(site.id) } else { ids.insert(site.id) }
+        pinnedSites = ids.sorted().joined(separator: ",")
+    }
+    private func openSite(_ site: Site) {
+        recentSites = ([site.id] + recent.filter { $0 != site.id }).prefix(20).joined(separator: ",")
+        SiteActions.open(site)
     }
 
     private func handleImport(_ result: Result<URL, Error>) {
@@ -186,123 +195,6 @@ public struct SitesView: View {
 public struct ImportResult {
     public let message: String
     public init(message: String) { self.message = message }
-}
-
-// MARK: - Compact Site Row (single line, stable height)
-
-public struct SiteRow: View {
-    @EnvironmentObject var store: SiteStore
-    @EnvironmentObject var processController: ProcessController
-    public let site: Site
-    public let isHovered: Bool
-    public let onEdit: () -> Void
-
-    public init(site: Site, isHovered: Bool = false, onEdit: @escaping () -> Void) {
-        self.site = site
-        self.isHovered = isHovered
-        self.onEdit = onEdit
-    }
-
-    private var isRunning: Bool { site.status == .running }
-
-    public var body: some View {
-        HStack(spacing: 10) {
-            // Status
-            Circle()
-                .fill(isRunning ? Color.green : Color.secondary.opacity(0.2))
-                .frame(width: 8, height: 8)
-
-            // Name
-            Text(site.name)
-                .font(.callout)
-                .fontWeight(.medium)
-                .lineLimit(1)
-                .frame(width: 150, alignment: .leading)
-
-            // Domain
-            Text(site.domain)
-                .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .frame(width: 180, alignment: .leading)
-
-            // Path
-            Text(site.rootPath)
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            // Hover actions — always rendered, opacity-controlled
-            HStack(spacing: 0) {
-                rowAction(icon: "pencil", help: "Edit") { onEdit() }
-                rowAction(icon: "trash", help: "Delete") {
-                    store.deleteSite(id: site.id)
-                    reloadConfig()
-                }
-            }
-            .opacity(isHovered ? 1 : 0)
-
-            // Start/Stop
-            StartStopButton(isRunning: isRunning) {
-                let newStatus: SiteStatus = isRunning ? .stopped : .running
-                store.setSiteStatus(id: site.id, status: newStatus)
-                reloadConfig()
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
-        .contentShape(Rectangle())
-        .contextMenu {
-            Button("Edit...") { onEdit() }
-            Button(isRunning ? "Stop" : "Start") {
-                store.setSiteStatus(id: site.id, status: isRunning ? .stopped : .running)
-                reloadConfig()
-            }
-            Divider()
-            Button("Delete", role: .destructive) {
-                store.deleteSite(id: site.id)
-                reloadConfig()
-            }
-        }
-    }
-
-    @State private var hoveredAction: String?
-
-    private func rowAction(icon: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.callout)
-                .frame(width: 26, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(hoveredAction == icon ? Color.primary.opacity(0.08) : Color.clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(hoveredAction == icon ? .primary : .secondary)
-        .onHover { h in hoveredAction = h ? icon : nil }
-        .help(help)
-    }
-
-    private func reloadConfig() {
-        let renderer = ConfigRenderer(
-            configDirectory: store.settings.caddyConfigDirectory,
-            frankenphpLogPath: store.settings.runtimePaths.frankenphpLog
-        )
-        do {
-            try renderer.writeAll(sites: store.sites)
-        } catch {
-            processController.frankenphpError = error.localizedDescription
-            return
-        }
-        if processController.frankenphpRunning {
-            processController.reloadFrankenPHP(caddyfilePath: renderer.caddyfilePath)
-        }
-    }
 }
 
 // MARK: - Export Document
