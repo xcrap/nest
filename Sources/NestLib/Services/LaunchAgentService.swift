@@ -110,6 +110,26 @@ public enum LaunchAgentService {
         return result.status == 0 && result.output.contains("state = running")
     }
 
+    /// A project may still be running under the other Nest build's namespace.
+    /// Require the same project ID, directory and port before recognizing that job.
+    public static func compatibleProjectLabels(for plan: ProjectLaunchPlan, directory: String = launchAgentsDirectory) -> [String] {
+        let projectID = plan.projectID.lowercased().replacingOccurrences(of: "[^a-z0-9-]", with: "-", options: .regularExpression)
+        guard let workingDirectory = plan.definition.workingDirectory, !workingDirectory.isEmpty else { return [] }
+        let expectedDirectory = URL(fileURLWithPath: workingDirectory).resolvingSymlinksInPath().standardizedFileURL
+        return ["app.nest.app-nest.project.", "app.nest.dev-nest-app.project."].compactMap { prefix in
+            let label = prefix + projectID
+            guard label != plan.definition.label,
+                  let data = try? Data(contentsOf: URL(fileURLWithPath: directory).appendingPathComponent(label + ".plist")),
+                  let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+                  plist["Label"] as? String == label,
+                  let path = plist["WorkingDirectory"] as? String, !path.isEmpty,
+                  URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL == expectedDirectory,
+                  let environment = plist["EnvironmentVariables"] as? [String: String],
+                  environment["PORT"] == String(plan.port) else { return nil }
+            return label
+        }
+    }
+
     /// Only the process tree registered under this exact launchd label is owned by Nest.
     public static func processTree(label: String) -> Set<Int32> {
         let result = SystemProcess.capture("/bin/launchctl", arguments: ["print", serviceTarget(for: label)], timeout: 3)

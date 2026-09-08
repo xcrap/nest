@@ -25,6 +25,7 @@ struct TestRunner {
         run("PrerequisiteChecker", PrerequisiteCheckerTests.runAll)
         run("ProjectCommandResolver", ProjectCommandResolverTests.runAll)
         run("ProjectLaunchPlanner", ProjectLaunchPlannerTests.runAll)
+        run("ProjectLifecycle", ProjectLifecycleTests.runAll)
         run("PFRestorePlanner", PFRestorePlannerTests.runAll)
         run("ParkedFolderScanner", ParkedFolderScannerTests.runAll)
         run("ConfigRenderer", ConfigRendererTests.runAll)
