@@ -5,9 +5,13 @@ public struct EnvironmentChecksView: View {
     @EnvironmentObject var store: SiteStore
     @EnvironmentObject var processController: ProcessController
     @State private var checkTask: Task<Void, Never>?
+    @State private var recheckRequested = false
     @State private var checks: [PrerequisiteChecker.CheckResult] = []
     @State private var runtimeIssues: [String] = []
+    @State private var optionalRuntimeIssues: [String] = []
+    @State private var helperStatus: PFHelperStatus = .unsupported
     @State private var helperMessage: String?
+    @State private var confirmUninstall = false
 
     public init() {}
 
@@ -52,6 +56,11 @@ public struct EnvironmentChecksView: View {
                 }
 
                 sectionCard(title: "Runtime Binaries", icon: "wrench.and.screwdriver.fill", color: .purple) {
+                    ForEach(optionalRuntimeIssues, id: \.self) { issue in
+                        Label(issue, systemImage: "info.circle")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     if runtimeIssues.isEmpty {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.circle.fill")
@@ -106,8 +115,21 @@ public struct EnvironmentChecksView: View {
             .padding(16)
         }
         .onAppear { runChecks() }
+        .onDisappear {
+            checkTask?.cancel()
+            checkTask = nil
+            recheckRequested = false
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             runChecks()
+        }
+        // Redirect and CA results depend on FrankenPHP; refresh them when it starts or stops.
+        .onChange(of: processController.frankenphpRunning) { runChecks() }
+        .alert("Uninstall the Nest Helper?", isPresented: $confirmUninstall) {
+            Button("Uninstall", role: .destructive) { uninstallPFHelper() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Ports 80 and 443 will stop redirecting to FrankenPHP after the next restart, and .test sites will need the port in their URL.")
         }
     }
 
@@ -194,11 +216,15 @@ public struct EnvironmentChecksView: View {
                 if check.action != .none {
                     actionButton(for: check.action)
                 }
-                if check.id == .pfAnchor, PFHelperManager.isSupported {
-                    Button("Repair") { repairPFHelper() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    Button("Uninstall") { uninstallPFHelper() }
+                // Repair/Uninstall only make sense once the helper is registered; the check's own
+                // action already offers Repair when the redirect is broken.
+                if check.id == .pfAnchor, [.enabled, .requiresApproval].contains(helperStatus) {
+                    if helperStatus == .enabled, check.action != .repairPFHelper {
+                        Button("Repair") { repairPFHelper() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                    Button("Uninstall…") { confirmUninstall = true }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
@@ -276,7 +302,7 @@ public struct EnvironmentChecksView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
         case .uninstallPFHelper:
-            Button("Uninstall") { uninstallPFHelper() }
+            Button("Uninstall…") { confirmUninstall = true }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
         case .openPFHelperSettings:
@@ -290,14 +316,29 @@ public struct EnvironmentChecksView: View {
 
     // MARK: - Actions
 
+    /// Checks launch several processes (curl, pgrep, security). A request while a run is in
+    /// flight schedules one follow-up run instead of stacking another.
     private func runChecks() {
-        checkTask?.cancel()
+        guard checkTask == nil else {
+            recheckRequested = true
+            return
+        }
         let paths = store.settings.runtimePaths
         checkTask = Task {
-            let result = await Task.detached { (PrerequisiteChecker.checkAll(), paths.validate()) }.value
+            let result = await BlockingWork.run(qos: .userInitiated) {
+                (PrerequisiteChecker.checkAll(), paths.validate(), paths.optionalIssues(), PFHelperManager.status)
+            }
+            // A cancelled run was already detached from checkTask by onDisappear.
             guard !Task.isCancelled else { return }
+            checkTask = nil
             checks = result.0
             runtimeIssues = result.1
+            optionalRuntimeIssues = result.2
+            helperStatus = result.3
+            if recheckRequested {
+                recheckRequested = false
+                runChecks()
+            }
         }
     }
 
@@ -323,11 +364,12 @@ public struct EnvironmentChecksView: View {
 
     private func repairPFHelper() {
         if PFHelperManager.repair() {
-            helperMessage = "Helper repair requested. Recheck in a moment."
+            helperMessage = "Helper repair requested. Checks will refresh in a few seconds."
         } else {
             helperMessage = "Helper repair could not be requested. Install or approve the helper first."
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        // launchd throttles the helper to one run every 5 seconds.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
             runChecks()
         }
     }
@@ -354,9 +396,7 @@ public struct EnvironmentChecksView: View {
     }
 
     private func startMariaDB() {
-        let paths = store.settings.runtimePaths
-        guard !paths.mariadbServer.isEmpty else { return }
-        processController.startMariaDB(serverBinary: paths.mariadbServer)
+        processController.startMariaDB(serverBinary: store.settings.runtimePaths.mariadbServer)
     }
 
     private func startCloudflared() {

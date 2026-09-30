@@ -18,6 +18,11 @@ public enum NestValidation {
         return domain
     }
 
+    /// The editable label for a `.test` site domain: only the trailing TLD is removed.
+    public static func siteDomainLabel(_ domain: String) -> String {
+        domain.hasSuffix(".test") ? String(domain.dropLast(".test".count)) : domain
+    }
+
     public static func normalizedRelativePath(_ value: String, fallback: String = ".") -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
@@ -34,8 +39,17 @@ public enum NestValidation {
         issues.append(contentsOf: absolutePathIssues(site.rootPath, field: "Site root path"))
         issues.append(contentsOf: relativePathIssues(site.documentRoot, field: "Document root"))
         issues.append(contentsOf: pathIssues(site.resolvedDocumentRoot, field: "Resolved document root"))
+        issues.append(contentsOf: caddyPathIssues(site.resolvedDocumentRoot, field: "Site path"))
 
         return issues
+    }
+
+    /// Caddy expands `{…}` placeholders and has no backslash escape inside quoted tokens,
+    /// so paths containing these characters would silently point somewhere else.
+    public static func caddyPathIssues(_ value: String, field: String) -> [String] {
+        value.contains(where: { "{}\\".contains($0) })
+            ? ["\(field) cannot contain {, } or \\ characters."]
+            : []
     }
 
     public static func projectIssues(_ project: AppProject) -> [String] {
@@ -195,8 +209,10 @@ public enum NestValidation {
         }
     }
 
+    /// Caddy only recognizes `\"` inside a quoted token; any other backslash is kept literally.
+    /// Values reaching here are validated with `caddyPathIssues`, so only quotes need escaping.
     public static func caddyfileArgument(_ value: String) -> String {
-        "\"\(escapedString(value))\""
+        "\"\(value.replacingOccurrences(of: "\"", with: "\\\""))\""
     }
 
     public static func yamlScalar(_ value: String) -> String {
@@ -212,14 +228,23 @@ public enum NestValidation {
         }
     }
 
+    private static let yamlReservedWords: Set<String> = [
+        "y", "n", "yes", "no", "true", "false", "on", "off", "null", "~"
+    ]
+
+    /// Plain scalars must stay strings: no leading indicator, trailing colon, keyword or number.
     private static func isPlainYAMLScalar(_ value: String) -> Bool {
-        guard !value.isEmpty else { return false }
-        return value.unicodeScalars.allSatisfy { scalar in
+        guard let first = value.unicodeScalars.first, let last = value.unicodeScalars.last else { return false }
+        let safeCharacters = value.unicodeScalars.allSatisfy { scalar in
             (48...57).contains(scalar.value)
                 || (65...90).contains(scalar.value)
                 || (97...122).contains(scalar.value)
                 || "-._~:/@".unicodeScalars.contains(scalar)
         }
+        guard safeCharacters else { return false }
+        guard !"-:~@.".unicodeScalars.contains(first), last != ":" else { return false }
+        guard !yamlReservedWords.contains(value.lowercased()) else { return false }
+        return Double(value) == nil && Int(value) == nil
     }
 
     private static func escapedString(_ value: String) -> String {

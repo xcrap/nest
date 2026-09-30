@@ -8,7 +8,8 @@ public struct ProjectsView: View {
     @State private var editingProject: AppProject?
     @State private var logProject: AppProject?
     @State private var searchText = ""
-    @State private var hoveredProjectId: String?
+    @State private var pendingDeletion: AppProject?
+    @State private var deletionError: String?
 
     public init() {}
 
@@ -23,38 +24,31 @@ public struct ProjectsView: View {
         }
     }
 
-    private var runningCount: Int {
-        filteredProjects.filter(processController.isProjectRunning).count
-    }
-
     public var body: some View {
+        let projects = filteredProjects
+        let lastID = projects.last?.id
         VStack(spacing: 0) {
-            toolbar
+            toolbar(projects: projects)
             Divider()
 
             if store.appProjects.isEmpty {
                 emptyState
-            } else if filteredProjects.isEmpty {
+            } else if projects.isEmpty {
                 ContentUnavailableView.search(text: searchText)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(filteredProjects) { project in
+                        ForEach(projects) { project in
                             ProjectRow(
                                 project: project,
                                 isRunning: processController.isProjectRunning(project),
                                 operation: processController.projectOperation(for: project.id),
-                                isHovered: hoveredProjectId == project.id,
                                 error: processController.projectError(for: project.id),
                                 onEdit: { editingProject = project },
-                                onShowLog: { logProject = project }
+                                onShowLog: { logProject = project },
+                                onDelete: { pendingDeletion = project }
                             )
-                            .onHover { h in
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    hoveredProjectId = h ? project.id : nil
-                                }
-                            }
-                            if project.id != filteredProjects.last?.id {
+                            if project.id != lastID {
                                 Divider().padding(.leading, 36)
                             }
                         }
@@ -71,10 +65,36 @@ public struct ProjectsView: View {
         .sheet(item: $logProject) { project in
             ProjectLogSheet(project: project)
         }
+        .alert("Delete Project?", isPresented: .init(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let project = pendingDeletion { delete(project) }
+                pendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: {
+            Text("Stop \(pendingDeletion?.name ?? "this project") and remove it from Nest? Its files stay on disk.")
+        }
+        .alert("Could Not Delete Project", isPresented: .init(get: { deletionError != nil }, set: { if !$0 { deletionError = nil } })) {
+            Button("OK") { deletionError = nil }
+        } message: {
+            Text(deletionError ?? "")
+        }
         .onAppear(perform: refreshStatuses)
     }
 
-    private var toolbar: some View {
+    /// The record is removed only once its launch agent is gone; otherwise it would keep
+    /// starting at login with no row left to stop it.
+    private func delete(_ project: AppProject) {
+        Task {
+            if let error = await processController.stopProjectForDeletion(project) {
+                deletionError = error
+            } else {
+                store.deleteProject(id: project.id)
+            }
+        }
+    }
+
+    private func toolbar(projects: [AppProject]) -> some View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
@@ -100,7 +120,7 @@ public struct ProjectsView: View {
 
             Spacer()
 
-            Text("\(runningCount)/\(filteredProjects.count) running")
+            Text("\(projects.filter(processController.isProjectRunning).count)/\(projects.count) running")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -156,17 +176,18 @@ public struct ProjectsView: View {
 // MARK: - Project Row
 
 private struct ProjectRow: View {
-    @EnvironmentObject var store: SiteStore
     @EnvironmentObject var processController: ProcessController
 
     let project: AppProject
     let isRunning: Bool
     let operation: ProcessController.ProjectOperation?
-    let isHovered: Bool
     let error: String?
     let onEdit: () -> Void
     let onShowLog: () -> Void
+    let onDelete: () -> Void
 
+    /// Row-local so hovering redraws one row, not the whole list.
+    @State private var isHovered = false
     @State private var hoveredAction: String?
 
     private var isBusy: Bool {
@@ -207,10 +228,7 @@ private struct ProjectRow: View {
                 HStack(spacing: 0) {
                     rowAction(icon: "doc.text", help: "Logs") { onShowLog() }
                     rowAction(icon: "pencil", help: "Edit") { onEdit() }
-                    rowAction(icon: "trash", help: "Delete") {
-                        processController.stopProject(project)
-                        store.deleteProject(id: project.id)
-                    }
+                    rowAction(icon: "trash", help: "Delete") { onDelete() }
                 }
                 .opacity(isHovered ? 1 : 0)
                 .disabled(isBusy)
@@ -239,6 +257,9 @@ private struct ProjectRow: View {
         .padding(.vertical, 8)
         .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
         .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+        }
         .contextMenu {
             Button("Edit...") { onEdit() }
                 .disabled(isBusy)
@@ -253,11 +274,8 @@ private struct ProjectRow: View {
             }
             .disabled(isBusy)
             Divider()
-            Button("Delete", role: .destructive) {
-                processController.stopProject(project)
-                store.deleteProject(id: project.id)
-            }
-            .disabled(isBusy)
+            Button("Delete…", role: .destructive) { onDelete() }
+                .disabled(isBusy)
         }
     }
 

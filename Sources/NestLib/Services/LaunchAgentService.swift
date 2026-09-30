@@ -57,17 +57,28 @@ public enum LaunchAgentService {
         let plistPath = plistPath(for: definition.label)
         let serviceTarget = serviceTarget(for: definition.label)
         _ = SystemProcess.capture("/bin/launchctl", arguments: ["enable", serviceTarget])
-        _ = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", serviceTarget])
-        _ = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", domainTarget, plistPath])
-        let bootstrap = SystemProcess.capture("/bin/launchctl", arguments: ["bootstrap", domainTarget, plistPath])
-        if bootstrap.status != 0 {
-            return bootstrap
+        if isLoaded(label: definition.label) {
+            _ = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", serviceTarget])
+            _ = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", domainTarget, plistPath])
+            // bootout returns before launchd has torn the job down; bootstrapping early fails.
+            let deadline = Date().addingTimeInterval(5)
+            while isLoaded(label: definition.label) && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
         }
 
-        return SystemProcess.capture(
-            "/bin/launchctl",
-            arguments: ["kickstart", "-k", serviceTarget]
-        )
+        // RunAtLoad starts the job on bootstrap, so no kickstart is needed (it would restart it).
+        var bootstrap = CommandResult(status: -1, output: "launchctl bootstrap did not run.")
+        for attempt in 0..<5 {
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
+            bootstrap = SystemProcess.capture("/bin/launchctl", arguments: ["bootstrap", domainTarget, plistPath])
+            if bootstrap.status == 0 { break }
+        }
+        return bootstrap
+    }
+
+    public static func isLoaded(label: String) -> Bool {
+        SystemProcess.capture("/bin/launchctl", arguments: ["print", serviceTarget(for: label)], timeout: 3).status == 0
     }
 
     @discardableResult
@@ -136,16 +147,51 @@ public enum LaunchAgentService {
         guard result.status == 0,
               let line = result.output.split(separator: "\n").first(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("pid = ") }),
               let pid = Int32(line.split(separator: "=").last?.trimmingCharacters(in: .whitespaces) ?? "") else { return [] }
-        let table = SystemProcess.capture("/bin/ps", arguments: ["-axo", "pid=,ppid="], timeout: 3)
-        let pairs = table.output.split(separator: "\n").compactMap { line -> (Int32, Int32)? in
-            let values = line.split(whereSeparator: { $0.isWhitespace }).compactMap { Int32($0) }
-            return values.count == 2 ? (values[0], values[1]) : nil
+        return processTree(root: pid, children: childProcesses())
+    }
+
+    /// Main PIDs of every running job in the user's launchd domain, from a single `launchctl list`.
+    public static func runningJobs() -> [String: Int32] {
+        let result = SystemProcess.capture("/bin/launchctl", arguments: ["list"], timeout: 3)
+        guard result.status == 0 else { return [:] }
+        return parseRunningJobs(result.output)
+    }
+
+    /// Parses `launchctl list` rows (`PID<TAB>Status<TAB>Label`); jobs without a PID are not running.
+    public static func parseRunningJobs(_ output: String) -> [String: Int32] {
+        var jobs: [String: Int32] = [:]
+        for line in output.split(separator: "\n") {
+            let columns = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard columns.count >= 3, let pid = Int32(columns[0]) else { continue }
+            jobs[String(columns[2])] = pid
         }
-        var tree: Set<Int32> = [pid]
-        var previous = 0
-        while tree.count != previous {
-            previous = tree.count
-            for (child, parent) in pairs where tree.contains(parent) { tree.insert(child) }
+        return jobs
+    }
+
+    /// Parent → children map for every process, from a single `ps` call.
+    public static func childProcesses() -> [Int32: [Int32]] {
+        let table = SystemProcess.capture("/bin/ps", arguments: ["-axo", "pid=,ppid="], timeout: 3)
+        guard table.status == 0 else { return [:] }
+        return parseChildProcesses(table.output)
+    }
+
+    public static func parseChildProcesses(_ output: String) -> [Int32: [Int32]] {
+        var children: [Int32: [Int32]] = [:]
+        for line in output.split(separator: "\n") {
+            let values = line.split(whereSeparator: { $0.isWhitespace }).compactMap { Int32($0) }
+            guard values.count == 2 else { continue }
+            children[values[1], default: []].append(values[0])
+        }
+        return children
+    }
+
+    public static func processTree(root: Int32, children: [Int32: [Int32]]) -> Set<Int32> {
+        var tree: Set<Int32> = [root]
+        var pending = [root]
+        while let pid = pending.popLast() {
+            for child in children[pid] ?? [] where tree.insert(child).inserted {
+                pending.append(child)
+            }
         }
         return tree
     }

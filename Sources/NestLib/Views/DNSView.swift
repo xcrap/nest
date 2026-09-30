@@ -5,11 +5,13 @@ public struct DNSView: View {
 
     @State private var records: [CloudflareDNSRecord] = []
     @State private var isLoading = false
+    @State private var isMutating = false
+    @State private var loadError: String?
     @State private var errorMessage: String?
     @State private var showAddSheet = false
     @State private var newSubdomain = ""
+    @State private var addError: String?
     @State private var recordPendingDeletion: CloudflareDNSRecord?
-    @State private var hoveredRecordId: String?
 
     public init() {}
 
@@ -23,22 +25,36 @@ public struct DNSView: View {
             } else if isLoading && records.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let loadError, records.isEmpty {
+                ContentUnavailableView {
+                    Label("Could not load DNS routes", systemImage: "exclamationmark.icloud")
+                } description: {
+                    Text(loadError).textSelection(.enabled)
+                } actions: {
+                    Button("Retry") { reload() }
+                }
             } else if records.isEmpty {
                 emptyState
             } else {
+                if let loadError {
+                    // The list below is from the last successful load; say so instead of failing silently.
+                    Label("Could not refresh: \(loadError)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                    Divider()
+                }
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(records) { record in
                             DNSRouteRow(
                                 record: record,
-                                isHovered: hoveredRecordId == record.id,
                                 onDelete: { recordPendingDeletion = record }
                             )
-                            .onHover { h in
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    hoveredRecordId = h ? record.id : nil
-                                }
-                            }
+                            .disabled(isMutating)
                             if record.id != records.last?.id {
                                 Divider().padding(.leading, 16)
                             }
@@ -50,9 +66,12 @@ public struct DNSView: View {
         .sheet(isPresented: $showAddSheet) {
             DNSAddRecordSheet(
                 subdomain: $newSubdomain,
+                isSubmitting: isMutating,
+                errorMessage: addError,
                 onCancel: {
                     showAddSheet = false
                     newSubdomain = ""
+                    addError = nil
                 },
                 onSave: { createRecord() }
             )
@@ -115,7 +134,7 @@ public struct DNSView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!store.settings.cloudflareSettings.hasAPIConfiguration || isLoading)
+            .disabled(!store.settings.cloudflareSettings.hasAPIConfiguration || isLoading || isMutating)
             .help("Add DNS Route")
         }
         .padding(.horizontal, 16)
@@ -162,63 +181,56 @@ public struct DNSView: View {
     }
 
     private func reload() {
-        guard store.settings.cloudflareSettings.hasAPIConfiguration else { return }
+        guard store.settings.cloudflareSettings.hasAPIConfiguration, !isLoading else { return }
         isLoading = true
         Task {
             do {
-                let loaded = try await CloudflareService.listDNSRecords(settings: store.settings.cloudflareSettings)
-                await MainActor.run {
-                    records = loaded
-                    isLoading = false
-                }
+                records = try await CloudflareService.listDNSRecords(settings: store.settings.cloudflareSettings)
+                loadError = nil
             } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    isLoading = false
-                }
+                loadError = error.localizedDescription
             }
+            isLoading = false
         }
     }
 
+    /// One request at a time; failures stay in the sheet, where the user is looking.
     private func createRecord() {
         let subdomain = newSubdomain.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !subdomain.isEmpty else { return }
+        guard !subdomain.isEmpty, !isMutating else { return }
 
-        isLoading = true
+        isMutating = true
+        addError = nil
         Task {
+            defer { isMutating = false }
             do {
                 try await CloudflareService.createDNSRecord(
                     subdomain: subdomain,
                     settings: store.settings.cloudflareSettings
                 )
-                await MainActor.run {
-                    showAddSheet = false
-                    newSubdomain = ""
-                }
+                showAddSheet = false
+                newSubdomain = ""
                 reload()
             } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    isLoading = false
-                }
+                addError = error.localizedDescription
             }
         }
     }
 
     private func delete(_ record: CloudflareDNSRecord) {
-        isLoading = true
+        guard !isMutating else { return }
+        isMutating = true
         Task {
+            defer { isMutating = false }
             do {
                 try await CloudflareService.deleteDNSRecord(
                     id: record.id,
                     settings: store.settings.cloudflareSettings
                 )
+                records.removeAll { $0.id == record.id }
                 reload()
             } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    isLoading = false
-                }
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -228,9 +240,9 @@ public struct DNSView: View {
 
 private struct DNSRouteRow: View {
     let record: CloudflareDNSRecord
-    let isHovered: Bool
     let onDelete: () -> Void
 
+    @State private var isHovered = false
     @State private var hoveredAction: String?
 
     var body: some View {
@@ -296,6 +308,9 @@ private struct DNSRouteRow: View {
         .padding(.vertical, 8)
         .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
         .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+        }
         .contextMenu {
             Button("Delete Route", role: .destructive) { onDelete() }
         }
@@ -306,6 +321,8 @@ private struct DNSRouteRow: View {
 
 private struct DNSAddRecordSheet: View {
     @Binding var subdomain: String
+    let isSubmitting: Bool
+    let errorMessage: String?
     let onCancel: () -> Void
     let onSave: () -> Void
     @FocusState private var isFocused: Bool
@@ -334,6 +351,13 @@ private struct DNSAddRecordSheet: View {
                 TextField("mysite", text: $subdomain)
                     .textFieldStyle(.roundedBorder)
                     .focused($isFocused)
+                    .disabled(isSubmitting)
+                if let errorMessage {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
             }
             .padding(20)
 
@@ -343,10 +367,13 @@ private struct DNSAddRecordSheet: View {
                 Button("Cancel") { onCancel() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
+                if isSubmitting {
+                    ProgressView().controlSize(.small)
+                }
                 Button("Add Route") { onSave() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(subdomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(isSubmitting || subdomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(20)
         }

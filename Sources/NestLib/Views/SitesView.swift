@@ -10,6 +10,7 @@ public struct SitesView: View {
     @State private var showImportPicker = false
     @State private var showFolderImportPicker = false
     @State private var showExportPicker = false
+    @State private var exportDocument: SiteExportDocument?
     @State private var importResult: ImportResult?
     @State private var hoveredSiteId: String?
 
@@ -25,19 +26,24 @@ public struct SitesView: View {
     private var pinned: Set<String> { Set(pinnedSites.split(separator: ",").map(String.init)) }
     private var recent: [String] { recentSites.split(separator: ",").map(String.init) }
     private var selectedSite: Site? { store.sites.first { $0.id == selection } }
-    private var filteredSites: [Site] {
+
+    /// Computed once per body: the stored ID lists are parsed once and recency is a dictionary lookup.
+    private func filteredSites(pinned: Set<String>, recent: [String]) -> [Site] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let recentRank = Dictionary(recent.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         var sites = store.sites.filter { site in
             (query.isEmpty || [site.name, site.domain, site.rootPath].contains { $0.localizedCaseInsensitiveContains(query) })
             && (filter != "Pinned" || pinned.contains(site.id))
-            && (filter != "Recent" || recent.contains(site.id))
+            && (filter != "Recent" || recentRank[site.id] != nil)
         }.sorted(using: sortOrder)
-        if filter == "Recent" { sites.sort { (recent.firstIndex(of: $0.id) ?? Int.max) < (recent.firstIndex(of: $1.id) ?? Int.max) } }
+        if filter == "Recent" { sites.sort { (recentRank[$0.id] ?? Int.max) < (recentRank[$1.id] ?? Int.max) } }
         else { sites = sites.filter { pinned.contains($0.id) } + sites.filter { !pinned.contains($0.id) } }
         return sites
     }
 
     public var body: some View {
+        let pinned = self.pinned
+        let visibleSites = filteredSites(pinned: pinned, recent: recent)
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 TextField("Filter sites…", text: $searchText).textFieldStyle(.roundedBorder)
@@ -49,7 +55,7 @@ public struct SitesView: View {
                 Menu("Import / Export") {
                     Button("Import Sites…") { showImportPicker = true }
                     Button("Import Parked Folder…") { showFolderImportPicker = true }
-                    Button("Export Sites…") { showExportPicker = true }
+                    Button("Export Sites…") { prepareExport() }
                 }.fixedSize()
                 Button { showAddSheet = true } label: { Label("Add Site", systemImage: "plus") }
                     .labelStyle(.iconOnly).keyboardShortcut("n", modifiers: .command)
@@ -58,17 +64,17 @@ public struct SitesView: View {
                 Text(processController.caddyApplyState.label).font(.callout).textSelection(.enabled)
                 Spacer()
                 Button("Apply") { processController.applyCaddy(settings: store.settings, sites: store.sites) }
-                    .disabled(processController.caddyApplyState.isBusy || store.lastSaveError != nil)
+                    .disabled(processController.caddyApplyState.isBusy || store.saveError(.sites) != nil)
             }.padding(.horizontal, 12).padding(.vertical, 6)
             Divider()
             if store.sites.isEmpty {
                 ContentUnavailableView {
                     Label("No sites yet", systemImage: "globe")
                 } actions: { Button("Add Site") { showAddSheet = true } }
-            } else if filteredSites.isEmpty {
+            } else if visibleSites.isEmpty {
                 ContentUnavailableView.search(text: searchText.isEmpty ? filter : searchText)
             } else {
-                Table(filteredSites, selection: $selection, sortOrder: $sortOrder) {
+                Table(visibleSites, selection: $selection, sortOrder: $sortOrder) {
                     TableColumn("Pin") { site in
                         Button { togglePin(site) } label: {
                             Image(systemName: pinned.contains(site.id) ? "pin.fill" : "pin")
@@ -131,7 +137,8 @@ public struct SitesView: View {
         .sheet(item: $editingSite) { SiteFormSheet(mode: .edit($0)) }
         .fileImporter(isPresented: $showImportPicker, allowedContentTypes: [.json], onCompletion: handleImport)
         .fileImporter(isPresented: $showFolderImportPicker, allowedContentTypes: [.folder], onCompletion: handleParkedFolderImport)
-        .fileExporter(isPresented: $showExportPicker, document: SiteExportDocument(data: (try? store.exportSites()) ?? Data()), contentType: .json, defaultFilename: "nest-sites.json") { result in
+        .fileExporter(isPresented: $showExportPicker, document: exportDocument, contentType: .json, defaultFilename: "nest-sites.json") { result in
+            exportDocument = nil
             if case .failure(let error) = result { importResult = ImportResult(message: error.localizedDescription) }
         }
         .alert("Import / Export", isPresented: .init(get: { importResult != nil }, set: { if !$0 { importResult = nil } })) {
@@ -145,6 +152,16 @@ public struct SitesView: View {
             Button("Cancel", role: .cancel) { pendingDeletion = nil }
         } message: { Text("Remove \(pendingDeletion?.name ?? "this site") from Nest? Its files will stay on disk.") }
     }
+    /// Encode only when exporting, and surface failures instead of writing an empty file.
+    private func prepareExport() {
+        do {
+            exportDocument = SiteExportDocument(data: try store.exportSites())
+            showExportPicker = true
+        } catch {
+            importResult = ImportResult(message: "Could not export sites: \(error.localizedDescription)")
+        }
+    }
+
     private func togglePin(_ site: Site) {
         var ids = pinned
         if ids.contains(site.id) { ids.remove(site.id) } else { ids.insert(site.id) }
@@ -157,8 +174,9 @@ public struct SitesView: View {
 
     private func handleImport(_ result: Result<URL, Error>) {
         guard case .success(let url) = result else { return }
-        guard url.startAccessingSecurityScopedResource() else { return }
-        defer { url.stopAccessingSecurityScopedResource() }
+        // Nest is not sandboxed, so the URL is usually readable without a security scope.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else {
             importResult = ImportResult(message: "Could not read file.")
             return
@@ -177,8 +195,8 @@ public struct SitesView: View {
 
     private func handleParkedFolderImport(_ result: Result<URL, Error>) {
         guard case .success(let url) = result else { return }
-        guard url.startAccessingSecurityScopedResource() else { return }
-        defer { url.stopAccessingSecurityScopedResource() }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
         let summary = store.importParkedFolderSites(from: url)
         var message = "Imported \(summary.imported.count) site(s)."

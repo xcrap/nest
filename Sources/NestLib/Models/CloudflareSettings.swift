@@ -1,6 +1,6 @@
 import Foundation
 
-public struct CloudflareSettings: Codable, Equatable {
+public struct CloudflareSettings: Codable, Equatable, Sendable {
     public var apiToken: String
     public var zoneId: String
     public var accountId: String
@@ -90,6 +90,21 @@ public struct CloudflareSettings: Codable, Equatable {
         }
 
         return settings
+    }
+
+    /// Applies auto-detected local tunnel values on top of these settings. Detection never
+    /// knows the API token, zone or account, so those are always kept.
+    public func mergingDetected(_ detected: CloudflareSettings) -> CloudflareSettings {
+        var merged = self
+        if !detected.tunnelName.isEmpty { merged.tunnelName = detected.tunnelName }
+        if !detected.tunnelId.isEmpty { merged.tunnelId = detected.tunnelId }
+        if !detected.tunnelDomain.isEmpty { merged.tunnelDomain = detected.tunnelDomain }
+        if !detected.credentialsFilePath.isEmpty { merged.credentialsFilePath = detected.credentialsFilePath }
+        // detectDefaults always proposes ~/.cloudflared/config.yml; only take it if it exists.
+        if !detected.configPath.isEmpty, FileManager.default.fileExists(atPath: detected.configPath) || configPath.isEmpty {
+            merged.configPath = detected.configPath
+        }
+        return merged
     }
 
     public var hasLocalConfiguration: Bool {

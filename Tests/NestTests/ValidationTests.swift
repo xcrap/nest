@@ -43,6 +43,34 @@ enum ValidationTests {
             assert(NestValidation.yamlScalar("/Users/test/My App/config.yml") == "\"/Users/test/My App/config.yml\"", "should quote YAML scalars with spaces")
         }
 
+        // Test: only a trailing .test is removed when editing a site domain.
+        do {
+            assert(NestValidation.siteDomainLabel("api.testapp.test") == "api.testapp", "should keep inner .test labels")
+            assert(NestValidation.siteDomainLabel("api.testing.test") == "api.testing", "should keep labels starting with test")
+            assert(NestValidation.siteDomainLabel("plain") == "plain", "should leave domains without .test alone")
+        }
+
+        // Test: Caddy keeps backslashes literally and expands braces, so neither may reach a path.
+        do {
+            assert(NestValidation.caddyfileArgument("/x/back\\slash") == "\"/x/back\\slash\"", "should not double backslashes for Caddy")
+            assert(NestValidation.caddyfileArgument("/x/say \"hi\"") == "\"/x/say \\\"hi\\\"\"", "should escape quotes for Caddy")
+            let braced = Site(name: "App", domain: "app.test", rootPath: "/Users/test/{$HOME}", documentRoot: ".")
+            assert(NestValidation.siteIssues(braced).contains { $0.contains("{, }") }, "should reject Caddy placeholders in site paths")
+            let slashed = Site(name: "App", domain: "app.test", rootPath: "/Users/test/back\\slash", documentRoot: ".")
+            assert(!NestValidation.siteIssues(slashed).isEmpty, "should reject backslashes in site paths")
+        }
+
+        // Test: YAML plain scalars never change type or meaning.
+        do {
+            assert(NestValidation.yamlScalar("app.example.com") == "app.example.com", "should keep hostnames plain")
+            assert(NestValidation.yamlScalar("https://localhost:443") == "https://localhost:443", "should keep service URLs plain")
+            assert(NestValidation.yamlScalar("~") == "\"~\"", "should quote the YAML null shorthand")
+            assert(NestValidation.yamlScalar("@tunnel") == "\"@tunnel\"", "should quote reserved leading indicators")
+            assert(NestValidation.yamlScalar("tunnel:") == "\"tunnel:\"", "should quote trailing colons")
+            assert(NestValidation.yamlScalar("12345") == "\"12345\"", "should quote numbers")
+            assert(NestValidation.yamlScalar("yes") == "\"yes\"", "should quote YAML booleans")
+        }
+
         return (passed, failed)
     }
 }

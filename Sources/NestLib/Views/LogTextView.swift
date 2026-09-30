@@ -18,6 +18,13 @@ struct LogTextView: NSViewRepresentable {
 final class LogContainerView: NSView {
     private let scrollView = NSScrollView()
     private let textView = NSTextView()
+    /// Mirrors the displayed text so updates compare Swift strings instead of bridging
+    /// the whole NSTextView contents on every refresh.
+    private var displayedText = ""
+    private let textAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+        .foregroundColor: NSColor.textColor
+    ]
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -33,12 +40,33 @@ final class LogContainerView: NSView {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
 
+    /// New lines are appended (keeping selection and layout); the view follows the end of the
+    /// log while the reader is at the bottom, and stays put when they have scrolled up.
     func update(text: String) {
-        guard textView.string != text else {
-            return
-        }
+        guard text != displayedText else { return }
+        let followTail = displayedText.isEmpty || isScrolledToBottom
+        let savedOrigin = scrollView.contentView.bounds.origin
 
-        textView.string = text
+        if !displayedText.isEmpty, text.hasPrefix(displayedText), let storage = textView.textStorage {
+            let appended = String(text.utf16.dropFirst(displayedText.utf16.count)) ?? ""
+            storage.append(NSAttributedString(string: appended, attributes: textAttributes))
+        } else {
+            textView.string = text
+        }
+        displayedText = text
+
+        if followTail {
+            textView.scrollToEndOfDocument(nil)
+        } else {
+            if let container = textView.textContainer { textView.layoutManager?.ensureLayout(for: container) }
+            scrollView.contentView.scroll(to: savedOrigin)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+    }
+
+    private var isScrolledToBottom: Bool {
+        let visible = scrollView.contentView.bounds
+        return visible.maxY >= textView.frame.height - 24
     }
 
     private func setup() {

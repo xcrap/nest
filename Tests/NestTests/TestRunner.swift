@@ -34,6 +34,7 @@ struct TestRunner {
         run("TunnelConfigRenderer", TunnelConfigRendererTests.runAll)
         run("MindImportService", MindImportServiceTests.runAll)
         run("MigrationService", MigrationServiceTests.runAll)
+        run("Robustness", RobustnessTests.runAll)
 
         print("Suite: Reliability")
         let reliability = await ReliabilityTests.runAll()

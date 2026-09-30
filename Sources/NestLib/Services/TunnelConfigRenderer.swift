@@ -1,16 +1,5 @@
 import Foundation
 
-public enum TunnelConfigRendererError: LocalizedError, Equatable {
-    case invalidConfiguration([String])
-
-    public var errorDescription: String? {
-        switch self {
-        case .invalidConfiguration(let issues):
-            "Cannot write cloudflared config: \(issues.joined(separator: " "))"
-        }
-    }
-}
-
 public struct ResolvedTunnelRoute: Equatable {
     public var hostname: String
     public var service: String
@@ -124,25 +113,5 @@ public struct TunnelConfigRenderer {
 
         lines.append("  - service: http_status:404")
         return lines.joined(separator: "\n")
-    }
-
-    public func writeConfig(
-        routes: [TunnelRoute],
-        sites: [Site],
-        projects: [AppProject]
-    ) throws {
-        let issues = validationIssues(routes: routes, sites: sites, projects: projects)
-        guard issues.isEmpty else {
-            throw TunnelConfigRendererError.invalidConfiguration(issues)
-        }
-
-        let path = settings.configPath
-        let parentDirectory = (path as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(atPath: parentDirectory, withIntermediateDirectories: true)
-        try render(routes: routes, sites: sites, projects: projects).write(
-            toFile: path,
-            atomically: true,
-            encoding: .utf8
-        )
     }
 }

@@ -47,6 +47,25 @@ enum ParkedFolderScannerTests {
             print("  FAIL: parked folder duplicate test threw: \(error)")
         }
 
+        // Test: symlinked project folders are imported like real ones.
+        do {
+            let directory = temporaryDirectory()
+            let target = temporaryDirectory()
+            defer {
+                try? FileManager.default.removeItem(at: directory)
+                try? FileManager.default.removeItem(at: target)
+            }
+            try FileManager.default.createDirectory(at: target.appendingPathComponent("public"), withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("linked"), withDestinationURL: target)
+
+            let scan = ParkedFolderScanner.scan(directory: directory)
+            assert(scan.candidates.map(\.domain) == ["linked.test"], "should follow symlinked project folders")
+        } catch {
+            failed += 1
+            print("  FAIL: parked folder symlink test threw: \(error)")
+        }
+
         return (passed, failed)
     }
 

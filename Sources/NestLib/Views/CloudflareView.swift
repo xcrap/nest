@@ -4,14 +4,30 @@ import UniformTypeIdentifiers
 public struct CloudflareView: View {
     @EnvironmentObject var store: SiteStore
     @EnvironmentObject var processController: ProcessController
+    @EnvironmentObject var documents: ConfigDocumentStore
 
-    @State private var cloudflareSettings = CloudflareSettings()
     @State private var statusMessage: String?
     @State private var exportSettings = false
     @State private var importSettings = false
     @State private var showAdvancedSettings = false
+    @State private var confirmPush = false
 
     public init() {}
+
+    /// Edits live in the shared document store until saved, so they survive tab switches.
+    private var draft: Binding<CloudflareSettings> {
+        Binding(
+            get: { documents.cloudflareDraft ?? store.settings.cloudflareSettings },
+            set: { documents.cloudflareDraft = $0 }
+        )
+    }
+
+    private var cloudflareSettings: CloudflareSettings { draft.wrappedValue }
+
+    private var hasUnsavedChanges: Bool {
+        guard let pending = documents.cloudflareDraft else { return false }
+        return NestValidation.normalizedCloudflareSettings(pending) != store.settings.cloudflareSettings
+    }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -43,8 +59,16 @@ public struct CloudflareView: View {
         } message: {
             Text(statusMessage ?? "")
         }
+        .alert("Push to Cloudflare?", isPresented: $confirmPush) {
+            Button("Push") {
+                guard persistSettings() else { return }
+                syncTunnelConfig()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This replaces the tunnel's ingress rules on Cloudflare with Nest's active routes. Hostnames added only in the Cloudflare dashboard will be removed. WARP routing settings are kept.")
+        }
         .onAppear {
-            cloudflareSettings = store.settings.cloudflareSettings
             processController.refreshStatusSnapshot(settings: store.settings, projects: store.appProjects)
         }
     }
@@ -66,8 +90,12 @@ public struct CloudflareView: View {
 
             Spacer()
 
+            if hasUnsavedChanges {
+                Text("Unsaved changes").font(.caption).foregroundStyle(.orange)
+            }
+
             Button("Auto-Detect") {
-                cloudflareSettings = CloudflareSettings.detectDefaults()
+                documents.cloudflareDraft = cloudflareSettings.mergingDetected(CloudflareSettings.detectDefaults())
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -90,13 +118,13 @@ public struct CloudflareView: View {
                 .fontWeight(.semibold)
 
             HStack(spacing: 12) {
-                settingField("Tunnel Name", text: $cloudflareSettings.tunnelName)
+                settingField("Tunnel Name", text: draft.tunnelName)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("API Token")
                         .font(.callout)
                         .fontWeight(.medium)
                         .foregroundStyle(.secondary)
-                    SecureField("Stored in Keychain", text: $cloudflareSettings.apiToken)
+                    SecureField("Stored in Keychain", text: draft.apiToken)
                         .textFieldStyle(.roundedBorder)
                     Text("Stored in Keychain; excluded from exports.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -118,16 +146,16 @@ public struct CloudflareView: View {
             DisclosureGroup(isExpanded: $showAdvancedSettings) {
                 VStack(spacing: 12) {
                     HStack(spacing: 12) {
-                        settingField("Tunnel ID", text: $cloudflareSettings.tunnelId)
-                        settingField("Tunnel Domain", text: $cloudflareSettings.tunnelDomain)
+                        settingField("Tunnel ID", text: draft.tunnelId)
+                        settingField("Tunnel Domain", text: draft.tunnelDomain)
                     }
                     HStack(spacing: 12) {
-                        settingField("Zone ID", text: $cloudflareSettings.zoneId)
-                        settingField("Account ID", text: $cloudflareSettings.accountId)
+                        settingField("Zone ID", text: draft.zoneId)
+                        settingField("Account ID", text: draft.accountId)
                     }
                     HStack(spacing: 12) {
-                        settingField("Credentials File", text: $cloudflareSettings.credentialsFilePath)
-                        settingField("cloudflared Config", text: $cloudflareSettings.configPath)
+                        settingField("Credentials File", text: draft.credentialsFilePath)
+                        settingField("cloudflared Config", text: draft.configPath)
                     }
                 }
                 .padding(.top, 8)
@@ -160,19 +188,19 @@ public struct CloudflareView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
-                Button("Push to Cloudflare") {
-                    guard persistSettings() else { return }
-                    syncTunnelConfig()
+                Button("Push to Cloudflare…") {
+                    confirmPush = true
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .help("Writes the local tunnel config, then pushes the generated ingress rules to Cloudflare.")
 
                 Button(processController.cloudflaredRunning ? "Stop" : "Start") {
-                    guard persistSettings() else { return }
+                    // Stopping never depends on the settings form being savable.
                     if processController.cloudflaredRunning {
                         processController.stopCloudflared()
                     } else {
+                        guard persistSettings() else { return }
                         processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
                     }
                 }
@@ -272,9 +300,14 @@ public struct CloudflareView: View {
 
     @discardableResult
     private func persistSettings() -> Bool {
-        cloudflareSettings = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
-        let saved = store.replaceCloudflareSettings(cloudflareSettings)
-        if !saved { statusMessage = store.lastSaveError }
+        let normalized = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
+        let saved = store.replaceCloudflareSettings(normalized)
+        if saved {
+            documents.cloudflareDraft = nil
+        } else {
+            documents.cloudflareDraft = normalized
+            statusMessage = store.saveError(.settings)
+        }
         return saved
     }
 
@@ -284,13 +317,14 @@ public struct CloudflareView: View {
 
     private func handleSettingsImport(_ result: Result<URL, Error>) {
         guard case .success(let url) = result else { return }
-        guard url.startAccessingSecurityScopedResource() else { return }
-        defer { url.stopAccessingSecurityScopedResource() }
+        // Nest is not sandboxed, so the URL is usually readable without a security scope.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
         do {
             let data = try Data(contentsOf: url)
             try store.importCloudflareSettings(from: data)
-            cloudflareSettings = store.settings.cloudflareSettings
+            documents.cloudflareDraft = nil
             statusMessage = "Cloudflare settings imported."
         } catch {
             statusMessage = error.localizedDescription

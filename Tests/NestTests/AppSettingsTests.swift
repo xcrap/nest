@@ -40,6 +40,20 @@ enum AppSettingsTests {
             assert(AppSettings.nestRunDirectory.hasSuffix("/\(AppSettings.productionBundleIdentifier)/run"), "production run directory should be variant-specific")
         }
 
+        // Test: an executable without an Info.plist (nestctl) can name its app explicitly,
+        // and the environment override still wins.
+        do {
+            let key = "NEST_BUNDLE_ID"
+            let original = ProcessInfo.processInfo.environment[key]
+            unsetenv(key)
+            AppSettings.bundleIdentifierOverride = AppSettings.productionBundleIdentifier
+            assert(AppSettings.currentBundleIdentifier == AppSettings.productionBundleIdentifier, "override should select the packaged app's data")
+            setenv(key, AppSettings.developmentBundleIdentifier, 1)
+            assert(AppSettings.currentBundleIdentifier == AppSettings.developmentBundleIdentifier, "NEST_BUNDLE_ID should take precedence")
+            AppSettings.bundleIdentifierOverride = nil
+            if let original { setenv(key, original, 1) } else { unsetenv(key) }
+        }
+
         return (passed, failed)
     }
 }

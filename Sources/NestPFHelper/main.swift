@@ -69,21 +69,30 @@ func rollback(anchor: String?, pfConf: String?) {
     restore(pfConf, to: pfConfPath)
 }
 
-func removingManagedPFBlock(from content: String) -> String {
+struct UnbalancedMarkers: Error, CustomStringConvertible {
+    var description: String { "\(pfConfPath) has unbalanced Nest markers; refusing to edit it" }
+}
+
+/// Removes only Nest's own lines. A start marker without its end marker would otherwise
+/// swallow every rule after it, so that case is refused instead of guessed at.
+func removingManagedPFBlock(from content: String) throws -> String {
     var output: [String] = []
     var insideManagedBlock = false
 
     for line in content.components(separatedBy: "\n") {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed == markerStart {
+            guard !insideManagedBlock else { throw UnbalancedMarkers() }
             insideManagedBlock = true
             continue
         }
         if trimmed == markerEnd {
+            guard insideManagedBlock else { throw UnbalancedMarkers() }
             insideManagedBlock = false
             continue
         }
         if insideManagedBlock {
+            guard trimmed.isEmpty || trimmed == anchorDeclaration || trimmed == anchorLoad else { throw UnbalancedMarkers() }
             continue
         }
         if trimmed == anchorDeclaration || trimmed == anchorLoad {
@@ -92,11 +101,12 @@ func removingManagedPFBlock(from content: String) -> String {
         output.append(line)
     }
 
+    guard !insideManagedBlock else { throw UnbalancedMarkers() }
     return output.joined(separator: "\n")
 }
 
-func insertingManagedPFBlock(into content: String) -> String {
-    let cleaned = removingManagedPFBlock(from: content)
+func insertingManagedPFBlock(into content: String) throws -> String {
+    let cleaned = try removingManagedPFBlock(from: content)
     var lines = cleaned.components(separatedBy: "\n")
     let insertIndex = lines.firstIndex { line in
         let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -107,10 +117,25 @@ func insertingManagedPFBlock(into content: String) -> String {
     return lines.joined(separator: "\n")
 }
 
-func backupPFConfIfNeeded(_ content: String) {
-    if !content.isEmpty, !FileManager.default.fileExists(atPath: pfConfBackupPath) {
-        try? write(content, to: pfConfBackupPath)
-    }
+/// Keeps the first pristine copy (raw bytes) and refuses to continue if it cannot be written.
+func backupPFConfIfNeeded(_ original: Data?) throws {
+    guard let original, !original.isEmpty, !FileManager.default.fileExists(atPath: pfConfBackupPath) else { return }
+    try original.write(to: URL(fileURLWithPath: pfConfBackupPath), options: .atomic)
+    log("backed up \(pfConfPath) to \(pfConfBackupPath)")
+}
+
+struct UnreadableFile: Error, CustomStringConvertible {
+    let path: String
+    var description: String { "\(path) exists but is not valid UTF-8; refusing to edit it" }
+}
+
+/// nil only when the file does not exist. An existing file that cannot be decoded must never
+/// be treated as empty: rewriting it would drop every system rule it contains.
+func readExisting(_ path: String) throws -> (text: String, data: Data)? {
+    guard FileManager.default.fileExists(atPath: path) else { return nil }
+    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    guard let text = String(data: data, encoding: .utf8) else { throw UnreadableFile(path: path) }
+    return (text, data)
 }
 
 func validateAndApply(originalAnchor: String?, originalPFConf: String?, enablePF: Bool) -> Never {
@@ -131,8 +156,16 @@ func validateAndApply(originalAnchor: String?, originalPFConf: String?, enablePF
     exit(status)
 }
 
-let originalAnchor = try? String(contentsOfFile: anchorPath, encoding: .utf8)
-let originalPFConf = try? String(contentsOfFile: pfConfPath, encoding: .utf8)
+let originalAnchor: String?
+let originalPFConfFile: (text: String, data: Data)?
+do {
+    originalAnchor = try readExisting(anchorPath)?.text
+    originalPFConfFile = try readExisting(pfConfPath)
+} catch {
+    log("\(error); no changes made")
+    exit(5)
+}
+let originalPFConf = originalPFConfFile?.text
 let currentPFConf = originalPFConf ?? ""
 
 let command = CommandLine.arguments.dropFirst().first ?? "install"
@@ -145,9 +178,9 @@ case "install", "--install", "repair", "--repair":
             log("wrote \(anchorPath)")
         }
 
-        let updatedPFConf = insertingManagedPFBlock(into: currentPFConf)
+        let updatedPFConf = try insertingManagedPFBlock(into: currentPFConf)
         if updatedPFConf != currentPFConf {
-            backupPFConfIfNeeded(currentPFConf)
+            try backupPFConfIfNeeded(originalPFConfFile?.data)
             try write(updatedPFConf, to: pfConfPath)
             log("updated \(pfConfPath) with Nest anchor")
         }
@@ -161,9 +194,9 @@ case "install", "--install", "repair", "--repair":
 
 case "uninstall", "--uninstall":
     do {
-        let updatedPFConf = removingManagedPFBlock(from: currentPFConf)
+        let updatedPFConf = try removingManagedPFBlock(from: currentPFConf)
         if updatedPFConf != currentPFConf {
-            backupPFConfIfNeeded(currentPFConf)
+            try backupPFConfIfNeeded(originalPFConfFile?.data)
             try write(updatedPFConf, to: pfConfPath)
             log("removed Nest anchor wiring from \(pfConfPath)")
         }

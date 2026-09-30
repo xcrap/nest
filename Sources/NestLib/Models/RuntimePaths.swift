@@ -1,6 +1,6 @@
 import Foundation
 
-public struct RuntimePaths: Codable, Equatable {
+public struct RuntimePaths: Codable, Equatable, Sendable {
     public var frankenphpBinary: String
     public var mariadbServer: String
     public var mariadbClient: String
@@ -124,38 +124,45 @@ public struct RuntimePaths: Codable, Equatable {
             paths.frankenphpLog = brewFPLog
         }
 
-        // PHP ini: detect from FrankenPHP binary
+        // PHP ini: detect from FrankenPHP binary. A stalled PHP startup must not hang the caller.
         if !paths.frankenphpBinary.isEmpty {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: paths.frankenphpBinary)
-            process.arguments = ["php-cli", "-r", "echo php_ini_loaded_file();"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            try? process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let detectedPath = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !detectedPath.isEmpty {
-                paths.phpIniPath = detectedPath
-            }
+            paths.phpIniPath = detectPHPIniPath(frankenphpBinary: paths.frankenphpBinary)
         }
 
-        // MariaDB log: prefer Homebrew default
-        let brewDBLog = "\(brewPrefix)/var/mysql/\(Host.current().localizedName ?? "localhost").err"
-        if fm.fileExists(atPath: brewDBLog) {
-            paths.mariadbLog = brewDBLog
-        } else {
-            paths.mariadbLog = brewDBLog
-        }
-
-        paths.cloudflaredLog = (AppSettings.nestLogsDirectory as NSString)
-            .appendingPathComponent("cloudflared.log")
+        paths.mariadbLog = "\(brewPrefix)/var/mysql/\(Host.current().localizedName ?? "localhost").err"
+        paths.cloudflaredLog = defaultCloudflaredLog
 
         return paths
     }
 
-    public func fillingMissingValues(from defaults: RuntimePaths = RuntimePaths.detectDefaults()) -> RuntimePaths {
+    public static var defaultCloudflaredLog: String {
+        (AppSettings.nestLogsDirectory as NSString).appendingPathComponent("cloudflared.log")
+    }
+
+    private static func detectPHPIniPath(frankenphpBinary: String) -> String {
+        let result = SystemProcess.capture(
+            frankenphpBinary,
+            arguments: ["php-cli", "-r", "echo PHP_EOL, php_ini_loaded_file();"],
+            timeout: 5
+        )
+        guard result.status == 0 else { return "" }
+        // Startup warnings share the output file; the loaded ini path is always the last line.
+        let candidate = result.output
+            .split(whereSeparator: \.isNewline)
+            .last
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        guard candidate.hasPrefix("/"), FileManager.default.fileExists(atPath: candidate) else { return "" }
+        return candidate
+    }
+
+    public var hasMissingValues: Bool {
+        [frankenphpBinary, mariadbServer, mariadbClient, mysqldump, cloudflaredBinary,
+         frankenphpLog, mariadbLog, cloudflaredLog, phpIniPath].contains(where: \.isEmpty)
+    }
+
+    public func fillingMissingValues(from defaults: @autoclosure () -> RuntimePaths = RuntimePaths.detectDefaults()) -> RuntimePaths {
+        guard hasMissingValues else { return self }
+        let defaults = defaults()
         var merged = self
 
         if merged.frankenphpBinary.isEmpty {
@@ -189,40 +196,36 @@ public struct RuntimePaths: Codable, Equatable {
         return merged
     }
 
+    /// Blocking problems: FrankenPHP is required, and any path that is set must point at an executable.
     public func validate() -> [String] {
         var issues: [String] = []
         let fm = FileManager.default
 
         if frankenphpBinary.isEmpty {
             issues.append("FrankenPHP binary path is not set.")
-        } else if !fm.isExecutableFile(atPath: frankenphpBinary) {
-            issues.append("FrankenPHP binary not found or not executable at: \(frankenphpBinary)")
         }
 
-        if mariadbServer.isEmpty {
-            issues.append("MariaDB server path is not set.")
-        } else if !fm.isExecutableFile(atPath: mariadbServer) {
-            issues.append("MariaDB server not found or not executable at: \(mariadbServer)")
-        }
-
-        if mariadbClient.isEmpty {
-            issues.append("MariaDB client path is not set.")
-        } else if !fm.isExecutableFile(atPath: mariadbClient) {
-            issues.append("MariaDB client not found or not executable at: \(mariadbClient)")
-        }
-
-        if mysqldump.isEmpty {
-            issues.append("mysqldump path is not set.")
-        } else if !fm.isExecutableFile(atPath: mysqldump) {
-            issues.append("mysqldump not found or not executable at: \(mysqldump)")
-        }
-
-        if cloudflaredBinary.isEmpty {
-            issues.append("cloudflared binary path is not set.")
-        } else if !fm.isExecutableFile(atPath: cloudflaredBinary) {
-            issues.append("cloudflared binary not found or not executable at: \(cloudflaredBinary)")
+        for (label, path) in binaries where !path.isEmpty && !fm.isExecutableFile(atPath: path) {
+            issues.append("\(label) not found or not executable at: \(path)")
         }
 
         return issues
+    }
+
+    /// Optional binaries that are simply not configured; the related features stay unavailable.
+    public func optionalIssues() -> [String] {
+        binaries.dropFirst()
+            .filter { $0.path.isEmpty }
+            .map { "\($0.label) path is not set (optional)." }
+    }
+
+    private var binaries: [(label: String, path: String)] {
+        [
+            ("FrankenPHP binary", frankenphpBinary),
+            ("MariaDB server", mariadbServer),
+            ("MariaDB client", mariadbClient),
+            ("mysqldump", mysqldump),
+            ("cloudflared binary", cloudflaredBinary)
+        ]
     }
 }

@@ -61,13 +61,20 @@ public enum PFHelperManager {
     public static func kickstart() -> Bool {
         guard isSupported else { return false }
         guard status == .enabled else { return false }
-        let data = Data("kick\n".utf8)
-        do {
-            try data.write(to: URL(fileURLWithPath: kickPath))
-            return true
-        } catch {
-            return false
-        }
+        return touchKickFile(at: kickPath)
+    }
+
+    /// /tmp is shared by every account: never follow a planted symlink, and only write
+    /// to a file this user owns.
+    public static func touchKickFile(at path: String) -> Bool {
+        let descriptor = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_uid == getuid(), (info.st_mode & S_IFMT) == S_IFREG else { return false }
+        let payload = Array("kick \(Date().timeIntervalSince1970)\n".utf8)
+        guard ftruncate(descriptor, 0) == 0 else { return false }
+        return payload.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) } == payload.count
     }
 
     /// Open System Settings so the user can approve the daemon.

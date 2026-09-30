@@ -12,7 +12,7 @@ Nest is a native macOS SwiftUI app for managing local PHP development sites with
 - Edit Caddyfile, security.conf, php.ini, and MariaDB config from the app
 - View FrankenPHP and MariaDB logs
 - HTTPS with `.test` domains via Caddy's local CA
-- Optional `nestctl` CLI for automation (`start`, `stop`, `reload`, `render`, `doctor`, `push-cloudflare`)
+- Optional `nestctl` CLI for automation (`start`, `stop`, `reload`, `render`, `doctor`, `push-cloudflare`). It manages the installed `Nest.app`'s data; pass `--dev` to manage the development build instead
 
 ## Prerequisites
 
@@ -84,6 +84,8 @@ Nest stores its own config under a bundle-specific app support directory:
 - `sites.json` — site definitions
 - `settings.json` — runtime paths and app settings
 
+If a data file cannot be read, Nest skips only the unreadable records and keeps a backup next to the file. A file that cannot be parsed at all is backed up and never overwritten until you repair or remove it (see Settings → Environment → Storage).
+
 All service config files live in their Homebrew default locations:
 
 - `/opt/homebrew/etc/Caddyfile` — FrankenPHP/Caddy config
@@ -135,9 +137,9 @@ gh run list --limit 1     # verify release workflow status
 
 - **Sites** supports sorting by name, domain, or folder; pinned sites stay first. Use the All / Pinned / Recent filter, or search names, domains, and paths. Select a row with the keyboard and use **Cmd+O** (browser), **Cmd+Shift+F** (Finder), **Cmd+Shift+T** (Terminal), or **Cmd+E** (edit).
 - A site's **Enabled** switch controls its generated Caddy route. It does not claim that PHP, DNS, TLS, or the application itself is healthy. Changes to site records are validated and applied automatically; the status strip reports pending, applying, applied, or failed changes. **Apply** retries a failed operation.
-- **Projects** manages commands through per-project launch agents. Existing jobs from either the development or packaged Nest build are recognized when their project ID, directory and port match. Stop targets the matching launch agent, and the next Start uses the current build's namespace. A port used by an unrelated process remains a conflict; Nest does not kill arbitrary processes using that port.
+- **Projects** manages commands through per-project launch agents. Existing jobs from either the development or packaged Nest build are recognized when their project ID, directory and port match. Stop targets the matching launch agent, and the next Start uses the current build's namespace. A port used by an unrelated process remains a conflict; Nest does not kill arbitrary processes using that port. Editing the port, command or directory of a running project restarts it. Deleting a project stops it first and keeps the record if its launch agent cannot be removed.
 - **Tunnels** stores the desired public-to-local routes. Changes remain pending until **Apply Changes** validates the YAML and restarts the running local connector. **Check** performs a separate public HTTPS request and shows its HTTP result. A running connector does not imply a healthy public route.
-- **DNS** manages Cloudflare DNS records separately from tunnel ingress. **Settings → Cloudflare → Push to Cloudflare** applies local configuration and also pushes API ingress. Partial failures identify which step completed.
+- **DNS** manages Cloudflare DNS records separately from tunnel ingress. **Settings → Cloudflare → Push to Cloudflare** applies local configuration and also pushes API ingress, replacing the tunnel's remote ingress rules with Nest's active routes (WARP routing is kept). Partial failures identify which step completed.
 - **Settings → Environment** contains prerequisites and service diagnostics. **Settings → Paths** contains runtime paths. Service failures also appear directly in the sidebar.
 
 ## Configuration Safety

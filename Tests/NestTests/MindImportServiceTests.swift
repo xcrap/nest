@@ -48,6 +48,37 @@ enum MindImportServiceTests {
             assert(snapshot.warnings.count == 1, "should warn about unsupported custom routes")
         }
 
+        // Test: the same hostname in several ingress rules (cloudflared allows it) must not crash.
+        do {
+            let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nest-mind-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let configPath = directory.appendingPathComponent("config.yml").path
+            try """
+            tunnel: t
+            credentials-file: /tmp/t.json
+            ingress:
+              - hostname: app.example.com
+                path: /api
+                service: http://localhost:3000
+                originRequest:
+                  httpHostHeader: app.example.com
+              - hostname: app.example.com
+                service: http://localhost:3001
+                originRequest:
+                  httpHostHeader: app.example.com
+              - service: http_status:404
+            """.write(toFile: configPath, atomically: true, encoding: .utf8)
+            var settings = AppSettings()
+            settings.cloudflareSettings.configPath = configPath
+            let payload = try MindImportService.buildPayload(from: directory, existingSites: [], currentSettings: settings)
+            assert(payload.tunnelRoutes.filter { $0.publicHostname == "app.example.com" }.count == 1, "should import a repeated hostname once")
+            assert(payload.warnings.contains { $0.contains("several cloudflared ingress rules") }, "should warn about repeated hostnames")
+        } catch {
+            failed += 1
+            print("  FAIL: duplicate hostname import threw: \(error)")
+        }
+
         return (passed, failed)
     }
 }

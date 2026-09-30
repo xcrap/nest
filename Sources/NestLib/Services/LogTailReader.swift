@@ -43,6 +43,14 @@ public enum LogTailReader {
         }
     }
 
+    /// Empties a log in place. Services keep their file open in append mode, so replacing the
+    /// file would leave them writing to an unlinked inode that no viewer can see.
+    public static func truncate(path: String) throws {
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        defer { try? handle.close() }
+        try handle.truncate(atOffset: 0)
+    }
+
     private static func normalize(data: Data, truncatedAtStart: Bool, maxLines: Int) -> String {
         guard !data.isEmpty else {
             return ""

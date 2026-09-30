@@ -4,8 +4,10 @@ public struct RuntimePathsView: View {
     @EnvironmentObject var store: SiteStore
     @State private var paths: RuntimePaths = RuntimePaths()
     @State private var validationIssues: [String] = []
+    @State private var optionalIssues: [String] = []
     @State private var saved = false
     @State private var detected = false
+    @State private var detecting = false
     @State private var validated = false
 
     public init() {}
@@ -59,6 +61,18 @@ public struct RuntimePathsView: View {
                                 .strokeBorder(Color.orange.opacity(0.15), lineWidth: 1)
                         )
                     }
+
+                    if !optionalIssues.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(optionalIssues, id: \.self) { issue in
+                                Label(issue, systemImage: "info.circle")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                    }
                 }
                 .padding(16)
             }
@@ -86,18 +100,26 @@ public struct RuntimePathsView: View {
 
                 Button("Validate") {
                     let issues = paths.validate()
-                    withAnimation { validationIssues = issues }
+                    withAnimation {
+                        validationIssues = issues
+                        optionalIssues = paths.optionalIssues()
+                    }
                     validated = issues.isEmpty
                     saved = false
                 }
                 .controlSize(.small)
 
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        paths = RuntimePaths.detectDefaults()
-                        detected = true
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    detecting = true
+                    Task {
+                        // Detection launches FrankenPHP to find php.ini; keep the UI responsive.
+                        let detectedPaths = await BlockingWork.run(qos: .userInitiated) { RuntimePaths.detectDefaults() }
+                        detecting = false
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            paths = detectedPaths
+                            detected = true
+                        }
+                        try? await Task.sleep(for: .seconds(2))
                         withAnimation { detected = false }
                     }
                 } label: {
@@ -105,9 +127,11 @@ public struct RuntimePathsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .disabled(detecting)
 
                 Button("Save") {
                     let issues = paths.validate()
+                    optionalIssues = paths.optionalIssues()
                     guard issues.isEmpty else {
                         withAnimation {
                             validationIssues = issues
@@ -116,9 +140,12 @@ public struct RuntimePathsView: View {
                         return
                     }
 
+                    // Keep the in-memory settings identical to disk if the save fails.
+                    let previous = store.settings.runtimePaths
                     store.settings.runtimePaths = paths
                     guard store.saveSettings() else {
-                        validationIssues = [store.lastSaveError ?? "Could not save settings."]
+                        store.settings.runtimePaths = previous
+                        validationIssues = [store.saveError(.settings) ?? "Could not save settings."]
                         saved = false
                         return
                     }
@@ -139,6 +166,7 @@ public struct RuntimePathsView: View {
         }
         .onAppear {
             paths = store.settings.runtimePaths
+            optionalIssues = paths.optionalIssues()
         }
     }
 

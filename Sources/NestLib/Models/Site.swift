@@ -1,11 +1,11 @@
 import Foundation
 
-public enum SiteStatus: String, Codable, CaseIterable {
+public enum SiteStatus: String, Codable, CaseIterable, Sendable {
     case running
     case stopped
 }
 
-public struct Site: Codable, Identifiable, Equatable {
+public struct Site: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public var name: String
     public var domain: String

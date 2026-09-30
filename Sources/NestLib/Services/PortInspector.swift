@@ -34,4 +34,33 @@ public enum PortInspector {
             .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
+    /// Every listening TCP port and the processes listening on it, from a single `lsof` call.
+    public static func listeningSockets() -> [Int: Set<Int32>] {
+        let result = SystemProcess.capture("/usr/sbin/lsof", arguments: ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"])
+        // lsof exits 1 when nothing matches.
+        guard result.status == 0 || result.status == 1 else { return [:] }
+        return parseListeningSockets(result.output)
+    }
+
+    /// Parses `lsof -F pn` output: `p<pid>` starts a process, `n<address>:<port>` names a socket.
+    public static func parseListeningSockets(_ output: String) -> [Int: Set<Int32>] {
+        var sockets: [Int: Set<Int32>] = [:]
+        var currentPID: Int32?
+        for line in output.split(separator: "\n") {
+            guard let field = line.first else { continue }
+            let value = line.dropFirst()
+            switch field {
+            case "p":
+                currentPID = Int32(value)
+            case "n":
+                guard let pid = currentPID,
+                      let separator = value.lastIndex(of: ":"),
+                      let port = Int(value[value.index(after: separator)...]) else { continue }
+                sockets[port, default: []].insert(pid)
+            default:
+                continue
+            }
+        }
+        return sockets
+    }
 }

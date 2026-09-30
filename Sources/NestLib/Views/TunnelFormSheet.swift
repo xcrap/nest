@@ -20,7 +20,7 @@ public struct TunnelFormSheet: View {
 
     @State private var kind: TunnelRouteKind = .php
     @State private var subdomain = ""
-    @State private var publicDomain = "waka.pt"
+    @State private var publicDomain = ""
     @State private var localDomain = ""
     @State private var originPort = "443"
     @State private var linkedSiteDomain = ""
@@ -54,7 +54,7 @@ public struct TunnelFormSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(isEditing ? "Edit Tunnel Route" : "New Tunnel Route")
                     .font(.headline)
-                Text("Routes are saved in Nest. Use Write Config or Sync to apply them to cloudflared.")
+                Text("Routes are saved in Nest. Use Apply Changes on the Tunnels screen to apply them to cloudflared.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -66,7 +66,7 @@ public struct TunnelFormSheet: View {
     private var form: some View {
         VStack(spacing: 16) {
             field("Route Type") {
-                Picker("", selection: $kind) {
+                Picker("", selection: Binding(get: { kind }, set: { changeKind(to: $0) })) {
                     ForEach(TunnelRouteKind.allCases) { item in
                         Text(item.rawValue.uppercased()).tag(item)
                     }
@@ -77,12 +77,12 @@ public struct TunnelFormSheet: View {
 
             HStack(spacing: 12) {
                 field("Subdomain") {
-                    TextField("azo", text: $subdomain)
+                    TextField("app", text: $subdomain)
                         .textFieldStyle(.roundedBorder)
                 }
 
                 field("Public Domain") {
-                    TextField("waka.pt", text: $publicDomain)
+                    TextField("example.com", text: $publicDomain)
                         .textFieldStyle(.roundedBorder)
                 }
             }
@@ -120,7 +120,7 @@ public struct TunnelFormSheet: View {
 
             HStack(spacing: 12) {
                 field(kind == .php ? "Local Domain" : "Host Header") {
-                    TextField(kind == .php ? "alza.test" : "azo.waka.pt", text: $localDomain)
+                    TextField(kind == .php ? "mysite.test" : "app.example.com", text: $localDomain)
                         .textFieldStyle(.roundedBorder)
                 }
 
@@ -173,10 +173,23 @@ public struct TunnelFormSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Links, host and port from the other route type are never valid for the new one
+    /// (e.g. a PHP route's 443 would send an app route to Caddy's TLS port).
+    private func changeKind(to newKind: TunnelRouteKind) {
+        guard newKind != kind else { return }
+        kind = newKind
+        linkedSiteDomain = ""
+        linkedProjectID = ""
+        localDomain = ""
+        originPort = newKind == .php ? "443" : ""
+    }
+
     private func populate() {
         switch mode {
         case .add:
-            break
+            // Default to the domain the user already routes most, not a fixed one.
+            let counts = Dictionary(grouping: store.tunnelRoutes.map(\.publicDomain).filter { !$0.isEmpty }, by: { $0 })
+            publicDomain = counts.max { $0.value.count < $1.value.count }?.key ?? ""
         case .edit(let route):
             kind = route.kind
             subdomain = route.subdomain
@@ -230,7 +243,7 @@ public struct TunnelFormSheet: View {
         case .add:
             store.addTunnelRoute(
                 TunnelRoute(
-                    id: TunnelRoute.defaultID(from: hostname),
+                    id: UUID().uuidString,
                     kind: kind,
                     subdomain: normalizedSubdomain,
                     publicDomain: normalizedPublicDomain,

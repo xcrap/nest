@@ -62,6 +62,24 @@ enum LogTailReaderTests {
             assert(!content.contains("entry-1\n"), "byte cap should exclude old entries")
         }
 
+        // Test: clearing keeps the same file, so a service appending to it stays visible.
+        do {
+            let path = (tempDir as NSString).appendingPathComponent("live.log")
+            try? "old line\n".write(toFile: path, atomically: true, encoding: .utf8)
+            let writer = FileHandle(forWritingAtPath: path)
+            _ = try? writer?.seekToEnd()
+            let inodeBefore = (try? FileManager.default.attributesOfItem(atPath: path)[.systemFileNumber]) as? Int
+
+            try? LogTailReader.truncate(path: path)
+            try? writer?.write(contentsOf: Data("new line\n".utf8))
+            try? writer?.close()
+
+            let inodeAfter = (try? FileManager.default.attributesOfItem(atPath: path)[.systemFileNumber]) as? Int
+            assert(inodeBefore != nil && inodeBefore == inodeAfter, "truncate should keep the same file")
+            assert(LogTailReader.read(path: path).contains("new line"), "writes after clearing should be visible")
+            assert(!LogTailReader.read(path: path).contains("old line"), "clearing should remove old content")
+        }
+
         return (passed, failed)
     }
 }

@@ -5,15 +5,33 @@ import NestLib
 struct NestCTL {
     @MainActor
     static func main() async {
-        let arguments = Array(CommandLine.arguments.dropFirst())
+        var arguments = Array(CommandLine.arguments.dropFirst())
+        // nestctl has no Info.plist, so it must say which app's data it manages before touching
+        // storage. The packaged app is the default; NEST_BUNDLE_ID still overrides both.
+        let useDevelopmentApp = arguments.contains("--dev")
+        arguments.removeAll { $0 == "--dev" }
+        AppSettings.bundleIdentifierOverride = useDevelopmentApp
+            ? AppSettings.developmentBundleIdentifier
+            : AppSettings.productionBundleIdentifier
+
         guard let command = arguments.first else {
             usage()
             exit(64)
         }
 
         if ["help", "--help", "-h"].contains(command) { usage(); return }
-        let store = SiteStore()
-        if let error = store.lastSaveError { fputs("\(error)\n", stderr); exit(1) }
+        // The Keychain is read only by commands that push to Cloudflare, so stop/render/doctor
+        // never raise a Keychain prompt and keep working over SSH or from launchd.
+        let store = SiteStore(loadsCredential: false)
+        let target = arguments.dropFirst().first ?? "all"
+        let writesConfiguration = ["reload", "push-cloudflare"].contains(command)
+            || (command == "start" && target != "mariadb")
+            || command == "render"
+        if writesConfiguration, !store.unreadableFiles.isEmpty {
+            // Rendering from a partially loaded store would remove sites from the live config.
+            for error in store.persistenceErrors { fputs("\(error)\n", stderr) }
+            exit(1)
+        }
 
         do {
             switch command {
@@ -45,12 +63,14 @@ struct NestCTL {
     private static func usage() {
         print("""
         Usage:
-          nestctl start [frankenphp|mariadb|cloudflared|all]
-          nestctl stop [frankenphp|mariadb|cloudflared|all]
-          nestctl reload
-          nestctl render [caddy|cloudflared|all]
-          nestctl doctor
-          nestctl push-cloudflare
+          nestctl [--dev] start [frankenphp|mariadb|cloudflared|all]
+          nestctl [--dev] stop [frankenphp|mariadb|cloudflared|all]
+          nestctl [--dev] reload
+          nestctl [--dev] render [caddy|cloudflared|all]
+          nestctl [--dev] doctor
+          nestctl [--dev] push-cloudflare
+
+        Manages the installed Nest.app's data. Pass --dev to manage the development build instead.
         """)
     }
 
@@ -114,6 +134,7 @@ struct NestCTL {
 
     @MainActor
     private static func doctor(store: SiteStore) {
+        print("[info] Data: \(AppSettings.nestDataDirectory)")
         let runtimeIssues = store.settings.runtimePaths.validate()
         if runtimeIssues.isEmpty {
             print("[ok] Runtime paths")
@@ -121,6 +142,9 @@ struct NestCTL {
             for issue in runtimeIssues {
                 print("[error] \(issue)")
             }
+        }
+        for issue in store.settings.runtimePaths.optionalIssues() {
+            print("[warning] \(issue)")
         }
 
         for error in store.persistenceErrors {
@@ -138,6 +162,10 @@ struct NestCTL {
 
     @MainActor
     private static func pushCloudflare(store: SiteStore) async throws {
+        store.loadCredentialIfNeeded()
+        if let error = store.credentialError ?? store.saveError(.settings) {
+            throw CLIError.requestFailed(error)
+        }
         try await applyCloudflared(store: store, start: false, push: true)
     }
 

@@ -59,14 +59,30 @@ jobs:
 
       - name: Build and sign
         run: |
+          set -euo pipefail
           make package
-          codesign --force --deep --options runtime \
+          # Sign inside-out without --deep: --deep would stamp the app's entitlements onto the
+          # root PF helper and Sparkle's helpers. Nested code gets hardened runtime only.
+          SPARKLE=dist/Nest.app/Contents/Frameworks/Sparkle.framework/Versions/B
+          codesign --force --options runtime --sign "$CSC_NAME" "$SPARKLE/XPCServices/Installer.xpc"
+          codesign --force --options runtime --sign "$CSC_NAME" --preserve-metadata=entitlements "$SPARKLE/XPCServices/Downloader.xpc"
+          codesign --force --options runtime --sign "$CSC_NAME" "$SPARKLE/Autoupdate"
+          codesign --force --options runtime --sign "$CSC_NAME" "$SPARKLE/Updater.app"
+          codesign --force --options runtime --sign "$CSC_NAME" dist/Nest.app/Contents/Frameworks/Sparkle.framework
+          codesign --force --options runtime --sign "$CSC_NAME" dist/Nest.app/Contents/MacOS/NestPFHelper
+          codesign --force --options runtime \
             --sign "$CSC_NAME" \
             --entitlements scripts/entitlements.plist \
             dist/Nest.app
           codesign --force --options runtime \
             --sign "$CSC_NAME" \
             dist/nestctl
+          codesign --verify --deep --strict --verbose=2 dist/Nest.app
+          HELPER_ENTITLEMENTS=$(codesign -d --entitlements - dist/Nest.app/Contents/MacOS/NestPFHelper 2>&1)
+          if [[ "$HELPER_ENTITLEMENTS" == *"com.apple.security"* ]]; then
+            echo "::error::NestPFHelper must not carry app entitlements"
+            exit 1
+          fi
 
       - name: Create DMG and notarize
         run: |
@@ -91,11 +107,17 @@ jobs:
 
       - name: Generate Sparkle appcast
         run: |
+          set -euo pipefail
           VERSION=$(cat version.txt)
           DOWNLOAD_URL="https://github.com/xcrap/nest/releases/download/v${VERSION}/Nest-${VERSION}.zip"
-          SIGN_OUTPUT=$(.build/artifacts/sparkle/Sparkle/bin/sign_update "dist/Nest-${VERSION}.zip" -f <(echo "$SPARKLE_KEY") 2>&1)
-          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
-          ED_LENGTH=$(echo "$SIGN_OUTPUT" | grep -o 'length="[^"]*"' | cut -d'"' -f2)
+          # stdout only: warnings on stderr must never end up inside the XML.
+          SIGN_OUTPUT=$(.build/artifacts/sparkle/Sparkle/bin/sign_update "dist/Nest-${VERSION}.zip" -f <(echo "$SPARKLE_KEY"))
+          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2 || true)
+          ED_LENGTH=$(echo "$SIGN_OUTPUT" | grep -o 'length="[^"]*"' | cut -d'"' -f2 || true)
+          if [ -z "$ED_SIGNATURE" ] || [ -z "$ED_LENGTH" ]; then
+            echo "::error::sign_update did not return a signature and length: $SIGN_OUTPUT"
+            exit 1
+          fi
           cat > appcast.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.net/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -107,11 +129,13 @@ jobs:
                 <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
                 <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
                 <pubDate>$(date -R)</pubDate>
-                <enclosure url="${DOWNLOAD_URL}" ${SIGN_OUTPUT} type="application/octet-stream" />
+                <enclosure url="${DOWNLOAD_URL}" sparkle:edSignature="${ED_SIGNATURE}" length="${ED_LENGTH}" type="application/octet-stream" />
               </item>
             </channel>
           </rss>
           EOF
+          # appcast.xml on main is the live update feed; never publish a malformed one.
+          xmllint --noout appcast.xml
 
       - name: Clean existing release assets
         run: |

@@ -1,13 +1,13 @@
 import Foundation
 
-public enum TunnelRouteKind: String, Codable, CaseIterable, Identifiable {
+public enum TunnelRouteKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case php
     case app
 
     public var id: String { rawValue }
 }
 
-public struct TunnelRoute: Codable, Identifiable, Equatable {
+public struct TunnelRoute: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public var kind: TunnelRouteKind
     public var subdomain: String

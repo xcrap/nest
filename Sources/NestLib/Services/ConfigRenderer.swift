@@ -38,9 +38,11 @@ public struct ConfigRenderer {
     public func validationIssues(sites: [Site]) -> [String] {
         var issues: [String] = []
         issues.append(contentsOf: NestValidation.absolutePathIssues(configDirectory, field: "Caddy config directory"))
+        issues.append(contentsOf: NestValidation.caddyPathIssues(configDirectory, field: "Caddy config directory"))
 
         if !frankenphpLogPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             issues.append(contentsOf: NestValidation.absolutePathIssues(frankenphpLogPath, field: "FrankenPHP log path"))
+            issues.append(contentsOf: NestValidation.caddyPathIssues(frankenphpLogPath, field: "FrankenPHP log path"))
         }
 
         for site in sites where site.status == .running {

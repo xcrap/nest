@@ -117,7 +117,7 @@ public struct SiteFormSheet: View {
         .onAppear {
             if case .edit(let site) = mode {
                 name = site.name
-                domain = site.domain.replacingOccurrences(of: ".test", with: "")
+                domain = NestValidation.siteDomainLabel(site.domain)
                 rootPath = site.rootPath
                 documentRoot = site.documentRoot
             }
@@ -168,7 +168,7 @@ public struct SiteFormSheet: View {
             site.documentRoot = documentRoot
             store.updateSite(site)
         }
-        if let error = store.lastSaveError { errorMessage = error; return }
+        if let error = store.saveError(.sites) { errorMessage = error; return }
         dismiss()
     }
 

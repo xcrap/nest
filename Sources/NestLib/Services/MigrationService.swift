@@ -77,24 +77,4 @@ public struct MigrationService {
         }
         return files.filter { $0.pathExtension == "sql" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
-
-    /// Generate the mysqldump commands needed to export all databases.
-    public static func exportCommands(mysqldumpPath: String, socketPath: String?) -> [String] {
-        var base = mysqldumpPath
-        if let socket = socketPath {
-            base += " --socket=\(socket)"
-        }
-        base += " -u root"
-
-        return [
-            "# List databases:",
-            "\(socketPath.map { "\(mysqldumpPath.replacingOccurrences(of: "dump", with: "")) --socket=\($0)" } ?? "mariadb") -u root -e 'SHOW DATABASES;'",
-            "",
-            "# Export a single database:",
-            "\(base) --single-transaction DATABASE_NAME > DATABASE_NAME.sql",
-            "",
-            "# Export all databases:",
-            "\(base) --single-transaction --all-databases > all-databases.sql",
-        ]
-    }
 }

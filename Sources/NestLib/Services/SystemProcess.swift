@@ -10,6 +10,23 @@ public struct CommandResult: Equatable, Sendable {
     }
 }
 
+/// Runs synchronous, blocking work (process launches, polling loops) on a dispatch queue
+/// so it never occupies a thread of Swift's cooperative pool.
+public enum BlockingWork {
+    public static func run<T: Sendable>(qos: DispatchQoS.QoSClass = .utility, _ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: qos).async { continuation.resume(returning: work()) }
+        }
+    }
+}
+
+final class CancellationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+}
+
 public enum SystemProcess {
     /// Spool output to a private file: a verbose child cannot fill a pipe while we wait.
     /// Only the last MiB is returned, and every invocation has a deadline.
@@ -37,19 +54,21 @@ public enum SystemProcess {
             process.standardInput = FileHandle.nullDevice
             if let currentDirectory { process.currentDirectoryURL = URL(fileURLWithPath: currentDirectory) }
             if let environment { process.environment = environment }
+            let exited = DispatchSemaphore(value: 0)
+            process.terminationHandler = { _ in exited.signal() }
             try process.run()
             let deadline = Date().addingTimeInterval(timeout)
             var interrupted = false
-            while process.isRunning {
+            // Wake on exit immediately; the slice only bounds how quickly cancellation is noticed.
+            while exited.wait(timeout: .now() + 0.1) == .timedOut {
                 if isCancelled() || Date() >= deadline {
                     interrupted = true
                     process.terminate()
-                    let grace = Date().addingTimeInterval(0.3)
-                    while process.isRunning && Date() < grace { Thread.sleep(forTimeInterval: 0.01) }
-                    if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+                    if exited.wait(timeout: .now() + 0.3) == .timedOut {
+                        Darwin.kill(process.processIdentifier, SIGKILL)
+                    }
                     break
                 }
-                Thread.sleep(forTimeInterval: 0.02)
             }
             process.waitUntilExit()
             let length = try handle.seekToEnd()
@@ -63,10 +82,12 @@ public enum SystemProcess {
     }
 
     public static func captureAsync(_ executablePath: String, arguments: [String] = [], timeout: TimeInterval = 30) async -> CommandResult {
-        let task = Task.detached(priority: .utility) {
-            capture(executablePath, arguments: arguments, timeout: timeout, isCancelled: { Task.isCancelled })
-        }
-        return await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
+        let flag = CancellationFlag()
+        return await withTaskCancellationHandler(operation: {
+            await BlockingWork.run {
+                capture(executablePath, arguments: arguments, timeout: timeout, isCancelled: { flag.isCancelled })
+            }
+        }, onCancel: { flag.cancel() })
     }
 
     @discardableResult

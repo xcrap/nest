@@ -22,20 +22,53 @@ public final class ProcessController: ObservableObject {
     @Published public private(set) var routeHealth: [String: String] = [:]
     private var refreshTask: Task<Void, Never>?
     private var caddyTask: Task<Void, Never>?
+    /// Bumped whenever a start/stop begins or ends. A status snapshot taken before the
+    /// latest change is stale and must not overwrite the operation's own result.
+    private var stateGeneration = 0
+    private var isRestoringNetwork = false
+
+    /// Only what reaches cloudflared counts: unrelated site or settings edits leave tunnels applied.
     private struct TunnelInput: Equatable {
-        var settings: AppSettings
-        var routes: [TunnelRoute]
-        var sites: [Site]
-        var projects: [AppProject]
+        var rendered: String
+        var cloudflare: CloudflareSettings
+        var binary: String
+        var log: String
+
+        init(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject]) {
+            rendered = TunnelConfigRenderer(settings: settings.cloudflareSettings).render(routes: routes, sites: sites, projects: projects)
+            cloudflare = settings.cloudflareSettings
+            binary = settings.runtimePaths.cloudflaredBinary
+            log = settings.runtimePaths.cloudflaredLog
+        }
     }
     private var desiredTunnelInput: TunnelInput?
+
+    private struct CaddyInput: Equatable {
+        var rendered: String
+        var directory: String
+        var binary: String
+
+        init(settings: AppSettings, sites: [Site]) {
+            rendered = ConfigRenderer(configDirectory: settings.caddyConfigDirectory, frankenphpLogPath: settings.runtimePaths.frankenphpLog).render(sites: sites)
+            directory = settings.caddyConfigDirectory
+            binary = settings.runtimePaths.frankenphpBinary
+        }
+    }
+    private var appliedCaddyInput: CaddyInput?
+
     public func markTunnelsPending(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject]) {
         let input = TunnelInput(settings: settings, routes: routes, sites: sites, projects: projects)
         guard desiredTunnelInput != input else { return }
         desiredTunnelInput = input
-        routeHealth = [:]
+        assign(\.routeHealth, [:])
         if !isServiceBusy("Cloudflared") { tunnelApplyState = .pending }
     }
+
+    public func markCaddyPending(settings: AppSettings, sites: [Site]) {
+        guard CaddyInput(settings: settings, sites: sites) != appliedCaddyInput, !caddyApplyState.isBusy else { return }
+        caddyApplyState = .pending
+    }
+
     private var queuedCaddy: (AppSettings, [Site])?
 
     public nonisolated static var cloudflaredLaunchAgentLabel: String {
@@ -45,6 +78,21 @@ public final class ProcessController: ObservableObject {
     public init() {}
 
     public func isServiceBusy(_ service: String) -> Bool { serviceOperations.contains(service) }
+
+    /// @Published notifies on every assignment; skip no-op writes so views don't redraw each refresh.
+    private func assign<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<ProcessController, Value>, _ value: Value) {
+        if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
+    }
+
+    private func beginOperation(_ service: String) {
+        serviceOperations.insert(service)
+        stateGeneration += 1
+    }
+
+    private func endOperation(_ service: String) {
+        serviceOperations.remove(service)
+        stateGeneration += 1
+    }
 
     public func applyCaddy(settings: AppSettings, sites: [Site]) {
         queuedCaddy = (settings, sites)
@@ -56,6 +104,7 @@ public final class ProcessController: ObservableObject {
                 do {
                     let message = try await ConfigurationService.shared.applyCaddy(settings: settings, sites: sites, running: frankenphpRunning)
                     frankenphpError = nil
+                    appliedCaddyInput = CaddyInput(settings: settings, sites: sites)
                     caddyApplyState = .applied(message)
                 } catch {
                     frankenphpError = error.localizedDescription
@@ -67,11 +116,13 @@ public final class ProcessController: ObservableObject {
     }
 
     public func startFrankenPHP(settings: AppSettings, sites: [Site]) {
-        guard !isServiceBusy("FrankenPHP"), caddyTask == nil else { return }
-        serviceOperations.insert("FrankenPHP")
+        guard !isServiceBusy("FrankenPHP") else { return }
+        beginOperation("FrankenPHP")
         caddyApplyState = .applying
         Task {
-            defer { serviceOperations.remove("FrankenPHP") }
+            defer { endOperation("FrankenPHP") }
+            // A site toggle may be applying right now: start after it instead of dropping the request.
+            while let pending = caddyTask { await pending.value }
             do {
                 _ = try await ConfigurationService.shared.applyCaddy(settings: settings, sites: sites, running: frankenphpRunning)
                 if !frankenphpRunning {
@@ -80,6 +131,7 @@ public final class ProcessController: ObservableObject {
                 }
                 frankenphpRunning = true
                 frankenphpError = nil
+                appliedCaddyInput = CaddyInput(settings: settings, sites: sites)
                 caddyApplyState = .applied("Applied to Caddy")
                 restoreSystemRulesIfNeeded()
             } catch {
@@ -93,15 +145,15 @@ public final class ProcessController: ObservableObject {
     public func stopMariaDB() { stopBrew("mariadb", displayName: "MariaDB") }
     private func stopBrew(_ name: String, displayName: String) {
         guard !isServiceBusy(displayName) else { return }
-        serviceOperations.insert(displayName)
+        beginOperation(displayName)
         Task {
-            defer { serviceOperations.remove(displayName) }
+            defer { endOperation(displayName) }
             do {
                 try await Self.brew(.stop, service: name)
-                let stillRunning = await Task.detached { () -> Bool in
-                    if name == "frankenphp" { return Self.caddyReady() }
+                let stillRunning = await BlockingWork.run { () -> Bool in
+                    if name == "frankenphp" { return LocalRedirectProbe.isCaddyAdminReachable() }
                     return Self.processExists("mariadbd")
-                }.value
+                }
                 if name == "frankenphp" {
                     frankenphpRunning = stillRunning
                     frankenphpError = stillRunning ? "An externally managed FrankenPHP/Caddy instance is still running." : nil
@@ -119,19 +171,21 @@ public final class ProcessController: ObservableObject {
 
     public func startMariaDB(serverBinary: String) {
         guard !isServiceBusy("MariaDB") else { return }
-        serviceOperations.insert("MariaDB")
+        guard !serverBinary.isEmpty else {
+            mariadbError = "Set the MariaDB server path in Settings → Paths first."
+            return
+        }
+        beginOperation("MariaDB")
         Task {
-            defer { serviceOperations.remove("MariaDB") }
+            defer { endOperation("MariaDB") }
             do {
                 guard FileManager.default.isExecutableFile(atPath: serverBinary) else { throw ConfigurationFailure("MariaDB binary is not executable at \(serverBinary).") }
                 try await Self.brew(.start, service: "mariadb")
-                let ready = await Task.detached {
-                    for _ in 0..<20 {
-                        if Self.processExists("mariadbd") { return true }
-                        try? await Task.sleep(for: .milliseconds(250))
-                    }
-                    return false
-                }.value
+                var ready = false
+                for _ in 0..<20 {
+                    if await BlockingWork.run({ Self.processExists("mariadbd") }) { ready = true; break }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
                 guard ready else { throw ConfigurationFailure("MariaDB did not start. Check its log.") }
                 mariadbRunning = true
                 mariadbError = nil
@@ -144,17 +198,17 @@ public final class ProcessController: ObservableObject {
         let input = TunnelInput(settings: settings, routes: routes, sites: sites, projects: projects)
         desiredTunnelInput = input
         tunnelApplyState = .applying
-        serviceOperations.insert("Cloudflared")
+        beginOperation("Cloudflared")
         let shouldRun = start || cloudflaredRunning
         Task {
-            defer { serviceOperations.remove("Cloudflared") }
+            defer { endOperation("Cloudflared") }
             do {
                 let message = try await ConfigurationService.shared.applyTunnel(settings: settings, routes: routes, sites: sites, projects: projects,
                     running: shouldRun, push: push, restart: { try await Self.restartConnector(settings: settings) })
                 cloudflaredRunning = shouldRun
                 cloudflaredError = nil
                 tunnelApplyState = desiredTunnelInput == input ? .applied(message) : .pending
-                routeHealth = [:]
+                assign(\.routeHealth, [:])
             } catch {
                 cloudflaredError = error.localizedDescription
                 tunnelApplyState = .failed(error.localizedDescription)
@@ -164,11 +218,13 @@ public final class ProcessController: ObservableObject {
 
     public func stopCloudflared() {
         guard !isServiceBusy("Cloudflared") else { return }
-        serviceOperations.insert("Cloudflared")
+        beginOperation("Cloudflared")
         Task {
-            defer { serviceOperations.remove("Cloudflared") }
-            let result = await Task.detached { LaunchAgentService.stop(label: Self.cloudflaredLaunchAgentLabel) }.value
-            let running = await Task.detached { LaunchAgentService.isRunning(label: Self.cloudflaredLaunchAgentLabel) }.value
+            defer { endOperation("Cloudflared") }
+            let (result, running) = await BlockingWork.run {
+                let result = LaunchAgentService.stop(label: Self.cloudflaredLaunchAgentLabel)
+                return (result, LaunchAgentService.isRunning(label: Self.cloudflaredLaunchAgentLabel))
+            }
             cloudflaredRunning = running
             cloudflaredError = result.status == 0 || !running ? nil : "Could not stop connector: \(result.output)"
             if !running { tunnelApplyState = .unverified }
@@ -176,16 +232,16 @@ public final class ProcessController: ObservableObject {
     }
 
     public nonisolated static func restartConnector(settings: AppSettings) async throws {
-        let result = await Task.detached {
+        let result = await BlockingWork.run(qos: .userInitiated) {
             LaunchAgentService.start(connectorDefinition(settings: settings))
-        }.value
+        }
         guard result.status == 0 else { throw ConfigurationFailure("Connector restart failed: \(result.output)") }
         for _ in 0..<20 {
-            let running = await Task.detached { LaunchAgentService.isRunning(label: cloudflaredLaunchAgentLabel) }.value
+            let running = await BlockingWork.run { LaunchAgentService.isRunning(label: cloudflaredLaunchAgentLabel) }
             if running {
                 // A process that immediately exits is not a successful restart.
                 try await Task.sleep(for: .seconds(1))
-                if await Task.detached(operation: { LaunchAgentService.isRunning(label: cloudflaredLaunchAgentLabel) }).value { return }
+                if await BlockingWork.run({ LaunchAgentService.isRunning(label: cloudflaredLaunchAgentLabel) }) { return }
             }
             try await Task.sleep(for: .milliseconds(250))
         }
@@ -204,26 +260,44 @@ public final class ProcessController: ObservableObject {
         }
     }
 
+    private struct StatusSnapshot: Sendable {
+        var frankenphp: Bool
+        var mariadb: Bool
+        var cloudflared: Bool
+        var projects: [(id: String, state: ProjectRuntimeState)]
+    }
+
+    /// One snapshot answers every project: a handful of process launches per refresh,
+    /// however many projects exist.
     public func refreshStatusSnapshot(settings: AppSettings, projects: [AppProject]) {
         guard AppSettings.reviewDirectory == nil, refreshTask == nil else { return }
-        let plans = projects.map { ProjectLaunchPlanner.plan(for: $0) }
+        let generation = stateGeneration
         refreshTask = Task {
-            let snapshot = await Task.detached(priority: .utility) {
-                let php = Self.caddyReady()
-                let db = Self.processExists("mariadbd")
-                let tunnel = LaunchAgentService.isRunning(label: Self.cloudflaredLaunchAgentLabel)
-                let states = plans.map { ($0.projectID, ProjectLifecycleService().state($0)) }
-                return (php, db, tunnel, states)
-            }.value
-            if !isServiceBusy("FrankenPHP") { frankenphpRunning = snapshot.0 }
-            if !isServiceBusy("MariaDB") { mariadbRunning = snapshot.1 }
-            if !isServiceBusy("Cloudflared") { cloudflaredRunning = snapshot.2 }
-            for (id, state) in snapshot.3 where projectOperations[id] == nil {
-                projectStatuses[id] = state.running
-                if let error = state.error { projectErrors[id] = error }
-                else if projectErrors[id]?.hasPrefix("Port ") == true { projectErrors[id] = nil }
+            let snapshot = await BlockingWork.run {
+                let plans = projects.map { ProjectLaunchPlanner.plan(for: $0) }
+                let processes = ProcessSnapshot.capture(ports: plans.map(\.port))
+                let lifecycle = ProjectLifecycleService(snapshot: processes)
+                return StatusSnapshot(
+                    frankenphp: LocalRedirectProbe.isCaddyAdminReachable(),
+                    mariadb: Self.processExists("mariadbd"),
+                    cloudflared: processes.runningJobs[Self.cloudflaredLaunchAgentLabel] != nil,
+                    projects: plans.map { (id: $0.projectID, state: lifecycle.state($0)) }
+                )
             }
             refreshTask = nil
+            guard generation == stateGeneration else { return }
+            if !isServiceBusy("FrankenPHP") { assign(\.frankenphpRunning, snapshot.frankenphp) }
+            if !isServiceBusy("MariaDB") { assign(\.mariadbRunning, snapshot.mariadb) }
+            if !isServiceBusy("Cloudflared") { assign(\.cloudflaredRunning, snapshot.cloudflared) }
+            var statuses = projectStatuses
+            var errors = projectErrors
+            for (id, state) in snapshot.projects where projectOperations[id] == nil {
+                statuses[id] = state.running
+                if let error = state.error { errors[id] = error }
+                else if errors[id]?.hasPrefix("Port ") == true { errors[id] = nil }
+            }
+            assign(\.projectStatuses, statuses)
+            assign(\.projectErrors, errors)
         }
     }
     public func refreshProjectStatuses(_ projects: [AppProject]) {
@@ -232,17 +306,65 @@ public final class ProcessController: ObservableObject {
     public func startProject(_ project: AppProject) { operateProject(project, start: true) }
     public func stopProject(_ project: AppProject) { operateProject(project, start: false) }
     private func operateProject(_ project: AppProject, start: Bool) {
-        guard projectOperations[project.id] == nil else { return }
-        projectOperations[project.id] = start ? .starting : .stopping
-        projectErrors[project.id] = nil
-        let plan = ProjectLaunchPlanner.plan(for: project)
-        Task {
-            let outcome = await Task.detached { start ? ProjectLifecycleService().start(plan) : ProjectLifecycleService().stop(plan) }.value
-            projectOperations[project.id] = nil
-            projectStatuses[project.id] = outcome.running
-            projectErrors[project.id] = outcome.error
+        runProjectOperation(project.id, start ? .starting : .stopping) {
+            let plan = ProjectLaunchPlanner.plan(for: project)
+            return start ? ProjectLifecycleService().start(plan) : ProjectLifecycleService().stop(plan)
         }
     }
+
+    /// Applies an edit to a running project: the old definition (port, command, directory)
+    /// is stopped before the new one starts, so nothing keeps serving the old port.
+    public func restartProject(from previous: AppProject, to updated: AppProject) {
+        runProjectOperation(updated.id, .starting) {
+            let service = ProjectLifecycleService()
+            let stopped = service.stop(ProjectLaunchPlanner.plan(for: previous))
+            if stopped.running { return stopped }
+            return service.start(ProjectLaunchPlanner.plan(for: updated))
+        }
+    }
+
+    private func runProjectOperation(_ id: String, _ operation: ProjectOperation, _ work: @escaping @Sendable () -> ProjectRuntimeState) {
+        guard projectOperations[id] == nil else { return }
+        projectOperations[id] = operation
+        projectErrors[id] = nil
+        stateGeneration += 1
+        Task {
+            let outcome = await BlockingWork.run(qos: .userInitiated, work)
+            finishProjectOperation(id, outcome)
+        }
+    }
+
+    private func finishProjectOperation(_ id: String, _ outcome: ProjectRuntimeState) {
+        projectOperations[id] = nil
+        projectStatuses[id] = outcome.running
+        projectErrors[id] = outcome.error
+        stateGeneration += 1
+    }
+
+    /// Stops a project before its record is deleted. Returns an error, and leaves the project
+    /// in place, if it is still running or its launch agent (which starts at login) remains.
+    public func stopProjectForDeletion(_ project: AppProject) async -> String? {
+        guard projectOperations[project.id] == nil else { return "\(project.name) is busy. Try again when it finishes." }
+        projectOperations[project.id] = .stopping
+        projectErrors[project.id] = nil
+        stateGeneration += 1
+        let (outcome, agentRemains) = await BlockingWork.run(qos: .userInitiated) { () -> (ProjectRuntimeState, Bool) in
+            let plan = ProjectLaunchPlanner.plan(for: project)
+            let outcome = ProjectLifecycleService().stop(plan)
+            return (outcome, LaunchAgentService.isInstalled(label: plan.definition.label))
+        }
+        finishProjectOperation(project.id, outcome)
+        guard !outcome.running, !agentRemains else {
+            let message = outcome.error ?? "\(project.name) could not be stopped, so it was not deleted."
+            // Also shown on the row, in case the view that asked is gone by now.
+            projectErrors[project.id] = message
+            return message
+        }
+        projectStatuses[project.id] = nil
+        projectErrors[project.id] = nil
+        return nil
+    }
+
     public func isProjectRunning(_ project: AppProject) -> Bool { projectStatuses[project.id] ?? false }
     public func isProjectBusy(_ project: AppProject) -> Bool { projectOperations[project.id] != nil }
     public func projectOperation(for id: String) -> ProjectOperation? { projectOperations[id] }
@@ -272,63 +394,62 @@ public final class ProcessController: ObservableObject {
     private nonisolated static func processExists(_ name: String) -> Bool {
         SystemProcess.capture("/usr/bin/pgrep", arguments: ["-x", name], timeout: 3).status == 0
     }
-    private nonisolated static func caddyReady() -> Bool {
-        let result = SystemProcess.capture("/usr/bin/curl", arguments: ["--silent", "--fail", "--max-time", "2", "--output", "/dev/null", "http://localhost:2019/config/"], timeout: 3)
-        return result.status == 0
-    }
     private nonisolated static func waitForCaddy() async -> Bool {
         for _ in 0..<20 {
-            if await Task.detached(operation: { caddyReady() }).value { return true }
+            if await BlockingWork.run({ LocalRedirectProbe.isCaddyAdminReachable() }) { return true }
             try? await Task.sleep(for: .milliseconds(250))
         }
         return false
     }
+
+    /// Call once at launch and after wake, not on every window appearance: a broken redirect
+    /// may need an administrator prompt to repair.
     public func reconcileSystemNetworkState() {
         guard AppSettings.reviewDirectory == nil else { return }
         Task {
-            frankenphpRunning = await Task.detached { Self.caddyReady() }.value
+            let running = await BlockingWork.run { LocalRedirectProbe.isCaddyAdminReachable() }
+            if !isServiceBusy("FrankenPHP") { assign(\.frankenphpRunning, running) }
             restoreSystemRulesIfNeeded()
         }
     }
     public func handleSystemWake() { reconcileSystemNetworkState() }
+
     /// Flush DNS cache and restore PF port redirect rules if FrankenPHP is running.
-    /// Called on both app startup and system wake.
+    /// Only one check/repair runs at a time, so wake and launch cannot stack prompts.
     private func restoreSystemRulesIfNeeded() {
-        flushDNSCache()
+        Self.flushDNSCache()
 
-        let shouldCheckRedirects = frankenphpRunning
-        guard shouldCheckRedirects else { return }
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self, shouldCheckRedirects] in
-            guard let self else { return }
-            switch PFRestorePlanner.decision(
-                frankenphpRunning: shouldCheckRedirects,
-                redirectWorking: self.isPortRedirectWorking()
-            ) {
-            case .reloadPF:
-                guard self.reloadPFRules() else { return }
-                _ = self.isPortRedirectWorking()
-            case .skipFrankenPHPStopped, .skipRedirectAlreadyWorking:
-                return
+        guard frankenphpRunning, !isRestoringNetwork else { return }
+        isRestoringNetwork = true
+        Task {
+            defer { isRestoringNetwork = false }
+            await BlockingWork.run(qos: .userInitiated) {
+                switch PFRestorePlanner.decision(
+                    frankenphpRunning: true,
+                    redirectWorking: LocalRedirectProbe.isRedirectReachingCaddy()
+                ) {
+                case .reloadPF:
+                    _ = Self.reloadPFRules()
+                case .skipFrankenPHPStopped, .skipRedirectAlreadyWorking:
+                    break
+                }
             }
         }
     }
 
-    /// Test whether PF redirects port 80 to 8080 (reaches Caddy).
-    private nonisolated func isPortRedirectWorking() -> Bool {
-        isHTTPEndpointReachable("http://localhost:80") &&
-            isHTTPEndpointReachable("https://localhost:443", insecureTLS: true)
-    }
-
     /// Reload PF rules to restore port 80/443 → 8080/8443 redirects.
-    /// Prefers the privileged helper (no prompt); falls back to osascript if not available.
-    private nonisolated func reloadPFRules() -> Bool {
-        if PFHelperManager.kickstart() {
-            // launchd may take a moment to fire WatchPaths; give it time to run pfctl.
-            Thread.sleep(forTimeInterval: 1.5)
-            if isPortRedirectWorking() {
-                return true
-            }
+    /// With the privileged helper installed this never prompts; otherwise it asks for an
+    /// administrator password and gives the user time to type it.
+    private nonisolated static func reloadPFRules() -> Bool {
+        if PFHelperManager.status == .enabled {
+            guard PFHelperManager.kickstart() else { return false }
+            // launchd throttles the helper (ThrottleInterval 5) and TLS may still be warming up.
+            let deadline = Date().addingTimeInterval(8)
+            repeat {
+                Thread.sleep(forTimeInterval: 0.5)
+                if LocalRedirectProbe.isRedirectReachingCaddy() { return true }
+            } while Date() < deadline
+            return false
         }
 
         let result = SystemProcess.capture(
@@ -336,14 +457,15 @@ public final class ProcessController: ObservableObject {
             arguments: [
                 "-e",
                 "do shell script \"/sbin/pfctl -ef /etc/pf.conf 2>/dev/null\" with administrator privileges"
-            ]
+            ],
+            timeout: 600
         )
 
         return result.status == 0
     }
 
     /// Flush macOS DNS cache so .test domains resolve immediately.
-    private nonisolated func flushDNSCache() {
+    private nonisolated static func flushDNSCache() {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/dscacheutil")
         process.arguments = ["-flushcache"]
@@ -351,27 +473,4 @@ public final class ProcessController: ObservableObject {
         process.standardError = FileHandle.nullDevice
         try? process.run()
     }
-
-    private nonisolated func isHTTPEndpointReachable(_ url: String, insecureTLS: Bool = false) -> Bool {
-        var arguments = [
-            "-I",
-            "--silent",
-            "--output", "/dev/null",
-            "--write-out", "%{http_code}",
-            "--max-time", "2"
-        ]
-
-        if insecureTLS {
-            arguments.append("-k")
-        }
-
-        arguments.append(url)
-
-        let result = SystemProcess.capture("/usr/bin/curl", arguments: arguments)
-        guard result.status == 0 else { return false }
-
-        let statusCode = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !statusCode.isEmpty && statusCode != "000"
-    }
-
 }

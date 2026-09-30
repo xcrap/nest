@@ -1,6 +1,6 @@
 import Foundation
 
-public struct AppProject: Codable, Identifiable, Equatable {
+public struct AppProject: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public var name: String
     public var hostname: String
@@ -79,6 +79,11 @@ public struct AppProject: Codable, Identifiable, Equatable {
     }
 
     public var sanitizedID: String {
+        Self.sanitizedID(id)
+    }
+
+    /// Launchd labels and log files derive from this form, so it must be unique per project.
+    public static func sanitizedID(_ id: String) -> String {
         id.lowercased().replacingOccurrences(of: "[^a-z0-9-]", with: "-", options: .regularExpression)
     }
 

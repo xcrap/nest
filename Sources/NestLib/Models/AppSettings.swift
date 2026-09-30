@@ -1,6 +1,6 @@
 import Foundation
 
-public struct AppSettings: Codable, Equatable {
+public struct AppSettings: Codable, Equatable, Sendable {
     public var runtimePaths: RuntimePaths
     public var caddyConfigDirectory: String
     public var cloudflareSettings: CloudflareSettings
@@ -61,8 +61,15 @@ public struct AppSettings: Codable, Equatable {
     public static let developmentBundleIdentifier = "dev.nest.app"
     public static let productionBundleIdentifier = "app.nest"
 
+    /// Set by executables without an Info.plist (nestctl) before any storage is touched.
+    public static var bundleIdentifierOverride: String?
+
     public static var currentBundleIdentifier: String {
         if let override = ProcessInfo.processInfo.environment["NEST_BUNDLE_ID"], !override.isEmpty {
+            return override
+        }
+
+        if let override = bundleIdentifierOverride, !override.isEmpty {
             return override
         }
 

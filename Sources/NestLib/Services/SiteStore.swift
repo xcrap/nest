@@ -1,6 +1,30 @@
 import Foundation
 import Combine
 
+/// The JSON files Nest persists. Save failures are tracked per file so an error in one
+/// never blocks, or gets cleared by, work on another.
+public enum StoreFile: String, CaseIterable, Sendable {
+    case sites, projects, tunnelRoutes, settings
+
+    public var fileName: String {
+        switch self {
+        case .sites: return "sites.json"
+        case .projects: return "projects.json"
+        case .tunnelRoutes: return "tunnels.json"
+        case .settings: return "settings.json"
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .sites: return "sites"
+        case .projects: return "projects"
+        case .tunnelRoutes: return "tunnel routes"
+        case .settings: return "settings"
+        }
+    }
+}
+
 /// Persists sites and app settings as JSON in the app support directory.
 @MainActor
 public final class SiteStore: ObservableObject {
@@ -9,17 +33,30 @@ public final class SiteStore: ObservableObject {
     @Published public var tunnelRoutes: [TunnelRoute] = []
     @Published public var settings: AppSettings
     @Published public private(set) var persistenceErrors: [String] = []
+    @Published public private(set) var saveErrors: [StoreFile: String] = [:]
 
     private let credentialStore: CredentialStore
     private var loadedToken: String?
-    @Published public private(set) var lastSaveError: String?
+    private var credentialLoaded = false
+    /// Keychain read failures are reported here, not as a save error: nothing failed to save,
+    /// and local work (sites, tunnels) does not need the token.
+    @Published public private(set) var credentialError: String?
+    /// Files that exist but could not be read at all. Nest never overwrites them.
+    public private(set) var unreadableFiles: Set<StoreFile> = []
+    private var settingsNeedSave = false
 
-    private let sitesFileURL: URL
-    private let projectsFileURL: URL
-    private let tunnelRoutesFileURL: URL
-    private let settingsFileURL: URL
+    private let dataDirectory: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+
+    /// The first current save error, if any file failed to save.
+    public var lastSaveError: String? {
+        StoreFile.allCases.lazy.compactMap { self.saveErrors[$0] }.first
+    }
+
+    public func saveError(_ file: StoreFile) -> String? {
+        saveErrors[file]
+    }
 
     private enum StoreSource {
         case envelope
@@ -31,27 +68,58 @@ public final class SiteStore: ObservableObject {
         var source: StoreSource
     }
 
-    public convenience init() {
+    /// Decodes every readable element and counts the rest, so one bad record cannot empty a list.
+    private struct LossyArray<Element: Decodable>: Decodable {
+        var elements: [Element] = []
+        var skipped = 0
+
+        init(from decoder: Decoder) throws {
+            var container = try decoder.unkeyedContainer()
+            while !container.isAtEnd {
+                if let element = try? container.decode(Element.self) {
+                    elements.append(element)
+                } else {
+                    _ = try container.decode(SkippedValue.self)
+                    skipped += 1
+                }
+            }
+        }
+    }
+
+    private struct SkippedValue: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
+
+    private struct LossyEnvelope<Element: Decodable>: Decodable {
+        var schemaVersion: Int
+        var payload: LossyArray<Element>
+    }
+
+    /// `loadsCredential: false` defers the Keychain read until `loadCredentialIfNeeded()`;
+    /// nestctl uses it so commands that never need the token do not trigger Keychain prompts.
+    public convenience init(loadsCredential: Bool = true) {
         if let directory = AppSettings.reviewDirectory {
             self.init(dataDirectory: URL(fileURLWithPath: directory), defaults: AppSettings(caddyConfigDirectory: directory + "/caddy"), runOneTimeMigrations: false, credentialStore: MemoryCredentialStore())
             return
         }
-        let defaults = AppSettings.defaultSettings()
         AppSettings.prepareStorage()
         self.init(
             dataDirectory: URL(fileURLWithPath: AppSettings.nestDataDirectory),
-            defaults: defaults,
-            runOneTimeMigrations: true
+            defaults: AppSettings.defaultSettings(),
+            runOneTimeMigrations: loadsCredential,
+            loadsCredential: loadsCredential
         )
     }
 
+    /// `defaults` is only evaluated when no settings file exists, since detection launches FrankenPHP.
     public init(
         dataDirectory: URL,
-        defaults: AppSettings = AppSettings.defaultSettings(),
+        defaults: @autoclosure () -> AppSettings = AppSettings.defaultSettings(),
         runOneTimeMigrations: Bool = true,
-        credentialStore: CredentialStore? = nil
+        credentialStore: CredentialStore? = nil,
+        loadsCredential: Bool = true
     ) {
-        self.credentialStore = credentialStore ?? (runOneTimeMigrations ? KeychainCredentialStore() as CredentialStore : MemoryCredentialStore())
+        self.credentialStore = credentialStore ?? (runOneTimeMigrations || !loadsCredential ? KeychainCredentialStore() as CredentialStore : MemoryCredentialStore())
         var initialPersistenceErrors: [String] = []
         let fm = FileManager.default
         do {
@@ -60,10 +128,7 @@ public final class SiteStore: ObservableObject {
             initialPersistenceErrors.append("Cannot create Nest data directory: \(error.localizedDescription)")
         }
 
-        self.sitesFileURL = dataDirectory.appendingPathComponent("sites.json")
-        self.projectsFileURL = dataDirectory.appendingPathComponent("projects.json")
-        self.tunnelRoutesFileURL = dataDirectory.appendingPathComponent("tunnels.json")
-        self.settingsFileURL = dataDirectory.appendingPathComponent("settings.json")
+        self.dataDirectory = dataDirectory
 
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -87,11 +152,15 @@ public final class SiteStore: ObservableObject {
         }
         self.decoder = dec
 
-        self.settings = defaults
+        self.settings = AppSettings()
         self.persistenceErrors = initialPersistenceErrors
 
-        loadSettings()
-        loadCredential()
+        if !loadSettings() {
+            settings = defaults()
+        }
+        if loadsCredential {
+            loadCredentialIfNeeded()
+        }
         loadSites()
         loadProjects()
         loadTunnelRoutes()
@@ -101,68 +170,87 @@ public final class SiteStore: ObservableObject {
         }
     }
 
-    // MARK: - Persistence
-
-    private func loadSites() {
-        if let result: LoadedValue<[Site]> = loadStoredValue([Site].self, from: sitesFileURL, label: "sites") {
-            let loaded = result.value
-            sites = loaded
-            if result.source == .legacy {
-                saveSites()
-            }
+    /// Loads the Cloudflare token once, then saves any settings migration found at load.
+    /// Settings are never written before this: saving would strip a legacy plaintext token
+    /// before it reached the Keychain.
+    public func loadCredentialIfNeeded() {
+        guard !credentialLoaded else { return }
+        credentialLoaded = true
+        loadCredential()
+        if settingsNeedSave, saveErrors[.settings] == nil, credentialError == nil {
+            saveSettings()
         }
     }
 
-    private func saveSites() {
-        saveEncodable(sites, to: sitesFileURL, label: "sites")
+    // MARK: - Persistence
+
+    private func url(for file: StoreFile) -> URL {
+        dataDirectory.appendingPathComponent(file.fileName)
+    }
+
+    private func loadSites() {
+        guard let result = loadStoredArray(Site.self, file: .sites) else { return }
+        let (unique, changed) = Self.deduplicatingIDs(result.value, id: \.id)
+        sites = unique
+        if result.source == .legacy || changed {
+            saveSites()
+        }
+    }
+
+    @discardableResult
+    private func saveSites() -> Bool {
+        saveEncodable(sites, file: .sites)
     }
 
     private func loadProjects() {
-        if let result: LoadedValue<[AppProject]> = loadStoredValue([AppProject].self, from: projectsFileURL, label: "projects") {
-            let loaded = result.value
-            appProjects = loaded
-            if result.source == .legacy {
-                saveProjects()
-            }
+        guard let result = loadStoredArray(AppProject.self, file: .projects) else { return }
+        let (unique, changed) = Self.deduplicatingIDs(result.value, id: \.id, key: AppProject.sanitizedID)
+        appProjects = unique
+        if changed {
+            recordPersistenceError("Some projects shared an ID (and so a launch agent and log file); the duplicates were given new IDs.")
+        }
+        if result.source == .legacy || changed {
+            saveProjects()
         }
     }
 
-    private func saveProjects() {
-        saveEncodable(appProjects, to: projectsFileURL, label: "projects")
+    @discardableResult
+    private func saveProjects() -> Bool {
+        saveEncodable(appProjects, file: .projects)
     }
 
     private func loadTunnelRoutes() {
-        if let result: LoadedValue<[TunnelRoute]> = loadStoredValue([TunnelRoute].self, from: tunnelRoutesFileURL, label: "tunnel routes") {
-            let loaded = result.value
-            tunnelRoutes = loaded
-            if result.source == .legacy {
-                saveTunnelRoutes()
-            }
+        guard let result = loadStoredArray(TunnelRoute.self, file: .tunnelRoutes) else { return }
+        let (unique, changed) = Self.deduplicatingIDs(result.value, id: \.id)
+        tunnelRoutes = unique
+        if result.source == .legacy || changed {
+            saveTunnelRoutes()
         }
     }
 
-    private func saveTunnelRoutes() {
-        saveEncodable(tunnelRoutes, to: tunnelRoutesFileURL, label: "tunnel routes")
+    @discardableResult
+    private func saveTunnelRoutes() -> Bool {
+        saveEncodable(tunnelRoutes, file: .tunnelRoutes)
     }
 
-    private func loadSettings() {
-        if let result: LoadedValue<AppSettings> = loadStoredValue(AppSettings.self, from: settingsFileURL, label: "settings") {
-            let loaded = result.value
-            settings = loaded
-            let normalizedRuntimePaths = settings.runtimePaths.fillingMissingValues()
-            var migratedRuntimePaths = normalizedRuntimePaths
-            let legacyCloudflaredLog = "/opt/homebrew/var/log/cloudflared.log"
-            let preferredCloudflaredLog = RuntimePaths.detectDefaults().cloudflaredLog
+    private static let legacyCloudflaredLog = "/opt/homebrew/var/log/cloudflared.log"
 
-            if migratedRuntimePaths.cloudflaredLog == legacyCloudflaredLog,
-               !preferredCloudflaredLog.isEmpty {
-                migratedRuntimePaths.cloudflaredLog = preferredCloudflaredLog
-            }
-
-            if migratedRuntimePaths != settings.runtimePaths || result.source == .legacy {
-                settings.runtimePaths = migratedRuntimePaths
-            }
+    /// Returns whether settings were loaded from disk. Migrations are saved once the token is known.
+    private func loadSettings() -> Bool {
+        guard let result = loadStoredObject(AppSettings.self, file: .settings) else { return false }
+        settings = result.value
+        var migratedRuntimePaths = settings.runtimePaths.fillingMissingValues()
+        if migratedRuntimePaths.cloudflaredLog == Self.legacyCloudflaredLog {
+            migratedRuntimePaths.cloudflaredLog = RuntimePaths.defaultCloudflaredLog
         }
+        if migratedRuntimePaths != settings.runtimePaths {
+            settings.runtimePaths = migratedRuntimePaths
+            settingsNeedSave = true
+        }
+        if result.source == .legacy {
+            settingsNeedSave = true
+        }
+        return true
     }
 
     @discardableResult
@@ -175,86 +263,144 @@ public final class SiteStore: ObservableObject {
                 try credentialStore.save(settings.cloudflareSettings.apiToken)
                 loadedToken = settings.cloudflareSettings.apiToken
             }
-            return saveEncodable(settings, to: settingsFileURL, label: "settings")
+            let saved = saveEncodable(settings, file: .settings)
+            if saved { settingsNeedSave = false }
+            return saved
         } catch {
-            lastSaveError = error.localizedDescription
+            saveErrors[.settings] = error.localizedDescription
             recordPersistenceError(error.localizedDescription)
             return false
         }
     }
 
     private func loadCredential() {
-        do {
-            let legacy = settings.cloudflareSettings.apiToken
-            if !legacy.isEmpty {
+        let legacy = settings.cloudflareSettings.apiToken
+        if !legacy.isEmpty {
+            do {
                 try credentialStore.save(legacy)
                 loadedToken = legacy
                 saveSettings() // Remove plaintext only after Keychain succeeds.
-            } else {
+            } catch {
+                // The plaintext token stays on disk, so settings must not be saved until this works.
+                saveErrors[.settings] = error.localizedDescription
+                recordPersistenceError(error.localizedDescription)
+            }
+        } else {
+            do {
                 let token = try credentialStore.load()
                 settings.cloudflareSettings.apiToken = token
                 loadedToken = token
+            } catch {
+                credentialError = error.localizedDescription
+                recordPersistenceError(error.localizedDescription)
             }
-        } catch {
-            lastSaveError = error.localizedDescription
-            recordPersistenceError(error.localizedDescription)
         }
     }
 
-    private func loadStoredValue<T: Codable>(_ type: T.Type, from url: URL, label: String) -> LoadedValue<T>? {
-        let data: Data
+    private func readStoredData(_ file: StoreFile) -> Data? {
         do {
-            data = try Data(contentsOf: url)
+            return try Data(contentsOf: url(for: file))
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return nil
         } catch {
-            recordPersistenceError("Cannot read \(label): \(error.localizedDescription)")
+            markUnreadable(file, reason: "Cannot read \(file.label): \(error.localizedDescription).", backup: false)
             return nil
         }
+    }
 
+    /// A file written by Nest is always an envelope; never reinterpret one as a legacy payload.
+    private func isEnvelope(_ data: Data) -> Bool {
+        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
+        return object["schemaVersion"] != nil && object["payload"] != nil
+    }
+
+    private func isSupportedSchema(_ version: Int, file: StoreFile) -> Bool {
+        guard version <= StoreSchema.currentVersion else {
+            markUnreadable(file, reason: "Cannot decode \(file.label): schema version \(version) is newer than supported version \(StoreSchema.currentVersion).")
+            return false
+        }
+        return true
+    }
+
+    private func loadStoredObject<T: Codable>(_ type: T.Type, file: StoreFile) -> LoadedValue<T>? {
+        guard let data = readStoredData(file) else { return nil }
         do {
             let envelope = try decoder.decode(StoreEnvelope<T>.self, from: data)
-            guard envelope.schemaVersion <= StoreSchema.currentVersion else {
-                let backupMessage = backupInvalidFile(url)
-                recordPersistenceError("Cannot decode \(label): schema version \(envelope.schemaVersion) is newer than supported version \(StoreSchema.currentVersion). \(backupMessage)")
-                return nil
-            }
+            guard isSupportedSchema(envelope.schemaVersion, file: file) else { return nil }
             return LoadedValue(value: envelope.payload, source: .envelope)
         } catch let envelopeError {
-            do {
-                let legacy = try decoder.decode(type, from: data)
-                let backupMessage = backupLegacyFile(url)
-                recordPersistenceError("Migrated legacy \(label) storage to schema version \(StoreSchema.currentVersion). \(backupMessage)")
+            if !isEnvelope(data), let legacy = try? decoder.decode(type, from: data) {
+                let backupMessage = backupFile(url(for: file), suffix: "legacy")
+                recordPersistenceError("Migrated legacy \(file.label) storage to schema version \(StoreSchema.currentVersion). \(backupMessage)")
                 return LoadedValue(value: legacy, source: .legacy)
-            } catch {
-                let backupMessage = backupInvalidFile(url)
-                recordPersistenceError("Cannot decode \(label): \(envelopeError.localizedDescription). \(backupMessage)")
-                return nil
             }
+            markUnreadable(file, reason: "Cannot decode \(file.label): \(envelopeError.localizedDescription).")
+            return nil
         }
+    }
+
+    private func loadStoredArray<Element: Codable>(_ type: Element.Type, file: StoreFile) -> LoadedValue<[Element]>? {
+        guard let data = readStoredData(file) else { return nil }
+        let envelopeError: Error
+        do {
+            let envelope = try decoder.decode(StoreEnvelope<[Element]>.self, from: data)
+            guard isSupportedSchema(envelope.schemaVersion, file: file) else { return nil }
+            return LoadedValue(value: envelope.payload, source: .envelope)
+        } catch {
+            envelopeError = error
+        }
+
+        if isEnvelope(data) {
+            if let partial = try? decoder.decode(LossyEnvelope<Element>.self, from: data) {
+                guard isSupportedSchema(partial.schemaVersion, file: file) else { return nil }
+                reportSkippedRecords(partial.payload.skipped, file: file)
+                return LoadedValue(value: partial.payload.elements, source: .envelope)
+            }
+        } else if let legacy = try? decoder.decode([Element].self, from: data) {
+            let backupMessage = backupFile(url(for: file), suffix: "legacy")
+            recordPersistenceError("Migrated legacy \(file.label) storage to schema version \(StoreSchema.currentVersion). \(backupMessage)")
+            return LoadedValue(value: legacy, source: .legacy)
+        } else if let partial = try? decoder.decode(LossyArray<Element>.self, from: data) {
+            reportSkippedRecords(partial.skipped, file: file)
+            return LoadedValue(value: partial.elements, source: .legacy)
+        }
+
+        markUnreadable(file, reason: "Cannot decode \(file.label): \(envelopeError.localizedDescription).")
+        return nil
+    }
+
+    private func reportSkippedRecords(_ count: Int, file: StoreFile) {
+        guard count > 0 else { return }
+        let backupMessage = backupFile(url(for: file), suffix: "invalid")
+        recordPersistenceError("\(count) \(file.label) record(s) could not be read and were skipped. \(backupMessage)")
+    }
+
+    private func markUnreadable(_ file: StoreFile, reason: String, backup: Bool = true) {
+        unreadableFiles.insert(file)
+        let backupMessage = backup ? " " + backupFile(url(for: file), suffix: "invalid") : ""
+        recordPersistenceError("\(reason)\(backupMessage) Nest will not overwrite \(file.fileName) until it is repaired or removed.")
     }
 
     @discardableResult
-    private func saveEncodable<T: Codable>(_ value: T, to url: URL, label: String) -> Bool {
+    private func saveEncodable<T: Codable>(_ value: T, file: StoreFile) -> Bool {
+        guard !unreadableFiles.contains(file) else {
+            let message = "Cannot save \(file.label): \(file.fileName) could not be read when Nest started, so it was not overwritten. Repair or remove \(url(for: file).path) and reopen Nest."
+            saveErrors[file] = message
+            recordPersistenceError(message)
+            return false
+        }
         do {
             let envelope = StoreEnvelope(payload: value)
             let data = try encoder.encode(envelope)
-            try data.write(to: url, options: .atomic)
-            lastSaveError = nil
+            try data.write(to: url(for: file), options: .atomic)
+            saveErrors[file] = nil
             return true
         } catch {
-            lastSaveError = "Cannot save \(label): \(error.localizedDescription)"
-            recordPersistenceError(lastSaveError!)
+            let message = "Cannot save \(file.label): \(error.localizedDescription)"
+            saveErrors[file] = message
+            recordPersistenceError(message)
             return false
         }
-    }
-
-    private func backupLegacyFile(_ url: URL) -> String {
-        backupFile(url, suffix: "legacy")
-    }
-
-    private func backupInvalidFile(_ url: URL) -> String {
-        backupFile(url, suffix: "invalid")
     }
 
     private func backupFile(_ url: URL, suffix: String) -> String {
@@ -279,6 +425,34 @@ public final class SiteStore: ObservableObject {
     private func recordPersistenceError(_ message: String) {
         guard !persistenceErrors.contains(message) else { return }
         persistenceErrors.append(message)
+    }
+
+    // MARK: - Identity
+
+    /// Returns `base`, or `base-2`, `base-3`… whichever is not already taken (compared via `key`).
+    static func uniqueID(base: String, taken: Set<String>, key: (String) -> String = { $0 }) -> String {
+        if !taken.contains(key(base)) { return base }
+        var suffix = 2
+        while taken.contains(key("\(base)-\(suffix)")) { suffix += 1 }
+        return "\(base)-\(suffix)"
+    }
+
+    /// Later records that repeat an earlier ID get a fresh suffix; the first keeps its ID.
+    static func deduplicatingIDs<T>(_ items: [T], id: WritableKeyPath<T, String>, key: (String) -> String = { $0 }) -> ([T], Bool) {
+        var taken = Set(items.map { key($0[keyPath: id]) })
+        var seen: Set<String> = []
+        var result = items
+        var changed = false
+        for index in result.indices {
+            let current = result[index][keyPath: id]
+            if !current.isEmpty, seen.insert(key(current)).inserted { continue }
+            let replacement = uniqueID(base: current.isEmpty ? UUID().uuidString.lowercased() : current, taken: taken, key: key)
+            result[index][keyPath: id] = replacement
+            taken.insert(key(replacement))
+            seen.insert(key(replacement))
+            changed = true
+        }
+        return (result, changed)
     }
 
     private func normalizedSite(_ site: Site) -> Site {
@@ -325,11 +499,31 @@ public final class SiteStore: ObservableObject {
 
     public func updateSite(_ site: Site) {
         guard let index = sites.firstIndex(where: { $0.id == site.id }) else { return }
+        let previousDomain = sites[index].domain
         var updated = normalizedSite(site)
         updated.updatedAt = Date()
         sites[index] = updated
         saveSites()
+        if previousDomain != updated.domain {
+            retargetTunnelRoutes(fromSiteDomain: previousDomain, to: updated.domain)
+        }
         reconcileTunnelLinks()
+    }
+
+    /// Tunnel routes follow a renamed site instead of silently losing their link.
+    private func retargetTunnelRoutes(fromSiteDomain oldDomain: String, to newDomain: String) {
+        var changed = false
+        for index in tunnelRoutes.indices where tunnelRoutes[index].kind == .php {
+            if tunnelRoutes[index].linkedSiteDomain == oldDomain {
+                tunnelRoutes[index].linkedSiteDomain = newDomain
+                changed = true
+            }
+            if tunnelRoutes[index].localDomain == oldDomain {
+                tunnelRoutes[index].localDomain = newDomain
+                changed = true
+            }
+        }
+        if changed { saveTunnelRoutes() }
     }
 
     public func deleteSite(id: String) {
@@ -356,8 +550,11 @@ public final class SiteStore: ObservableObject {
     // MARK: - Project CRUD
 
     public func addProject(name: String, hostname: String, directory: String, port: Int, command: String) -> AppProject {
+        // The ID names the launch agent and log file, so it must never collide with another project's.
+        let base = AppProject.defaultID(from: name)
         let project = AppProject(
-            id: AppProject.defaultID(from: name).isEmpty ? UUID().uuidString : AppProject.defaultID(from: name),
+            id: Self.uniqueID(base: base.isEmpty ? UUID().uuidString.lowercased() : base,
+                              taken: Set(appProjects.map(\.sanitizedID)), key: AppProject.sanitizedID),
             name: NestValidation.normalizedName(name),
             hostname: NestValidation.normalizedDomain(hostname),
             directory: directory.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -397,7 +594,12 @@ public final class SiteStore: ObservableObject {
     // MARK: - Tunnel CRUD
 
     public func addTunnelRoute(_ route: TunnelRoute) {
-        tunnelRoutes.append(normalizedTunnelRoute(route))
+        var route = normalizedTunnelRoute(route)
+        let taken = Set(tunnelRoutes.map(\.id))
+        if route.id.isEmpty || taken.contains(route.id) {
+            route.id = Self.uniqueID(base: route.id.isEmpty ? UUID().uuidString : route.id, taken: taken)
+        }
+        tunnelRoutes.append(route)
         saveTunnelRoutes()
         reconcileTunnelLinks()
     }
@@ -421,7 +623,7 @@ public final class SiteStore: ObservableObject {
     }
 
     public func replaceTunnelRoutes(_ routes: [TunnelRoute]) {
-        tunnelRoutes = routes.map(normalizedTunnelRoute)
+        tunnelRoutes = Self.deduplicatingIDs(routes.map(normalizedTunnelRoute), id: \.id).0
         saveTunnelRoutes()
         reconcileTunnelLinks()
     }
@@ -441,7 +643,7 @@ public final class SiteStore: ObservableObject {
         var merged = imported
         if merged.apiToken.isEmpty { merged.apiToken = settings.cloudflareSettings.apiToken }
         settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(merged)
-        guard saveSettings() else { throw ConfigurationFailure(lastSaveError ?? "Could not save imported settings.") }
+        guard saveSettings() else { throw ConfigurationFailure(saveError(.settings) ?? "Could not save imported settings.") }
     }
 
     public func applyMindImport(_ payload: MindImportPayload) -> MindImportSummary {
@@ -474,11 +676,9 @@ public final class SiteStore: ObservableObject {
             }
         }
 
-        appProjects = updatedProjects
-            .map(normalizedProject)
+        appProjects = Self.deduplicatingIDs(updatedProjects.map(normalizedProject), id: \.id, key: AppProject.sanitizedID).0
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        tunnelRoutes = updatedRoutes
-            .map(normalizedTunnelRoute)
+        tunnelRoutes = Self.deduplicatingIDs(updatedRoutes.map(normalizedTunnelRoute), id: \.id).0
             .sorted { $0.publicHostname.localizedCaseInsensitiveCompare($1.publicHostname) == .orderedAscending }
 
         settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(payload.cloudflareSettings)
@@ -600,7 +800,11 @@ public final class SiteStore: ObservableObject {
 
     // MARK: - Linking
 
+    /// An explicit link wins while its target exists; otherwise routes link by hostname only.
+    /// A shared port is not evidence of identity (many dev servers default to 3000/5173).
     public func reconcileTunnelLinks() {
+        // Linking against a list that failed to load would drop every link.
+        guard !unreadableFiles.contains(.sites), !unreadableFiles.contains(.projects) else { return }
         var updated = tunnelRoutes
         var changed = false
 
@@ -608,11 +812,9 @@ public final class SiteStore: ObservableObject {
             var route = updated[index]
 
             if route.kind == .php {
-                let matchedSite = sites.first(where: {
-                    $0.domain == route.localDomain
-                    || $0.domain == route.linkedSiteDomain
-                    || $0.domain == "\(route.localDomain).test"
-                })
+                let matchedSite = route.linkedSiteDomain.flatMap { domain in sites.first { $0.domain == domain } }
+                    ?? sites.first { $0.domain == route.localDomain }
+                    ?? sites.first { $0.domain == "\(route.localDomain).test" }
 
                 let linkedDomain = matchedSite?.domain
                 if route.linkedSiteDomain != linkedDomain {
@@ -620,12 +822,8 @@ public final class SiteStore: ObservableObject {
                     changed = true
                 }
             } else {
-                let matchedProject = appProjects.first(where: {
-                    $0.id == route.linkedProjectID
-                    || $0.hostname == route.localDomain
-                    || $0.hostname == route.publicHostname
-                    || $0.port == route.originPort
-                })
+                let matchedProject = route.linkedProjectID.flatMap { id in appProjects.first { $0.id == id } }
+                    ?? appProjects.first { $0.hostname == route.localDomain || $0.hostname == route.publicHostname }
 
                 let linkedProjectID = matchedProject?.id
                 if route.linkedProjectID != linkedProjectID {
@@ -645,6 +843,9 @@ public final class SiteStore: ObservableObject {
 
     private func runOneTimeMindMigrationIfNeeded() {
         guard !settings.hasCompletedMindMigration else { return }
+        // Its results could not all be saved (and the completion flag might never persist,
+        // re-running the import over the user's edits on every launch).
+        guard unreadableFiles.isDisjoint(with: [.settings, .projects, .tunnelRoutes]) else { return }
 
         let directory = URL(fileURLWithPath: settings.mindProjectDirectory)
         guard FileManager.default.fileExists(atPath: directory.path) else { return }

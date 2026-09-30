@@ -86,8 +86,9 @@ public enum ParkedFolderScanner {
             options: [.skipsHiddenFiles]
         )) ?? []
 
+        // A symlinked project reports isDirectory == false; judge it by its target.
         return children.filter { child in
-            (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            (try? child.resolvingSymlinksInPath().resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                 && looksLikeProject(child)
         }
     }

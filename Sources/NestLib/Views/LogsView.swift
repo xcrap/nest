@@ -8,6 +8,8 @@ public struct LogsView: View {
     @State private var autoRefresh = false
     @State private var loadTask: Task<Void, Never>?
     @State private var refreshTask: Task<Void, Never>?
+    @State private var confirmClear = false
+    @State private var clearError: String?
 
     enum LogFile: String, CaseIterable, Identifiable {
         case frankenphp = "FrankenPHP"
@@ -32,6 +34,17 @@ public struct LogsView: View {
         .onDisappear {
             stopRefreshLoop()
             cancelLoad()
+        }
+        .alert("Clear \(selectedLog.rawValue) Log?", isPresented: $confirmClear) {
+            Button("Clear", role: .destructive) { clearLog() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently empties \(currentLogPath).")
+        }
+        .alert("Could Not Clear Log", isPresented: .init(get: { clearError != nil }, set: { if !$0 { clearError = nil } })) {
+            Button("OK") { clearError = nil }
+        } message: {
+            Text(clearError ?? "")
         }
     }
 
@@ -81,16 +94,14 @@ public struct LogsView: View {
             .help("Refresh")
 
             Button {
-                content = ""
-                if !currentLogPath.isEmpty {
-                    try? "".write(toFile: currentLogPath, atomically: true, encoding: .utf8)
-                }
+                confirmClear = true
             } label: {
                 Image(systemName: "trash")
                     .font(.callout)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .disabled(currentLogPath.isEmpty)
             .help("Clear Log")
         }
         .padding(.horizontal, 16)
@@ -145,6 +156,17 @@ public struct LogsView: View {
         case .frankenphp: return store.settings.runtimePaths.frankenphpLog
         case .cloudflared: return store.settings.runtimePaths.cloudflaredLog
         case .mariadb: return store.settings.runtimePaths.mariadbLog
+        }
+    }
+
+    private func clearLog() {
+        let path = currentLogPath
+        guard !path.isEmpty else { return }
+        do {
+            try LogTailReader.truncate(path: path)
+            content = ""
+        } catch {
+            clearError = error.localizedDescription
         }
     }
 

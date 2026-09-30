@@ -132,9 +132,15 @@ public enum MindImportService {
         }
 
         var warnings = liveSnapshot.warnings
-        var routeMap: [String: TunnelRoute] = Dictionary(
-            uniqueKeysWithValues: liveSnapshot.routes.map { ($0.publicHostname, $0) }
-        )
+        // cloudflared allows several ingress rules per hostname (e.g. different `path:` values).
+        var routeMap: [String: TunnelRoute] = [:]
+        for route in liveSnapshot.routes {
+            if routeMap[route.publicHostname] == nil {
+                routeMap[route.publicHostname] = route
+            } else {
+                warnings.append("\(route.publicHostname) appears in several cloudflared ingress rules; only the first was imported.")
+            }
+        }
 
         for route in mindRoutes {
             var merged = route

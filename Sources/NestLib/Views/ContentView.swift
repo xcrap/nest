@@ -110,18 +110,19 @@ public struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .onChange(of: store.sites) {
-            guard store.lastSaveError == nil else { return }
+            // Only apply what was actually persisted; an unsaved list would diverge from disk.
+            guard store.saveError(.sites) == nil else { return }
             processController.applyCaddy(settings: store.settings, sites: store.sites)
             processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
         }
         .onChange(of: store.tunnelRoutes) { processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects) }
         .onChange(of: store.appProjects) { processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects) }
         .onChange(of: store.settings) {
-            processController.caddyApplyState = .pending
+            processController.markCaddyPending(settings: store.settings, sites: store.sites)
             processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
         }
         .safeAreaInset(edge: .bottom) {
-            if let error = store.lastSaveError {
+            if let error = store.lastSaveError ?? store.credentialError {
                 Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled).padding(8)
             }
         }

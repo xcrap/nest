@@ -14,6 +14,7 @@ public enum ProjectFormMode: Identifiable {
 
 public struct ProjectFormSheet: View {
     @EnvironmentObject var store: SiteStore
+    @EnvironmentObject var processController: ProcessController
     @Environment(\.dismiss) private var dismiss
 
     public let mode: ProjectFormMode
@@ -198,12 +199,19 @@ public struct ProjectFormSheet: View {
                 command: command
             )
         case .edit(var project):
+            let previous = store.project(id: project.id) ?? project
             project.name = name
             project.hostname = normalizedHostname
             project.directory = directory
             project.port = parsedPort
             project.command = command
             store.updateProject(project)
+            // A running project keeps its old port/command until restarted; do it now so the
+            // status and tunnel routes match what is actually serving.
+            if let updated = store.project(id: project.id), processController.isProjectRunning(previous),
+               updated.port != previous.port || updated.command != previous.command || updated.directory != previous.directory {
+                processController.restartProject(from: previous, to: updated)
+            }
         }
 
         dismiss()

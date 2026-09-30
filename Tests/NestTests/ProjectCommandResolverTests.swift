@@ -34,6 +34,38 @@ enum ProjectCommandResolverTests {
             assert(spec.environmentOverrides.isEmpty, "shell fallback should not parse env overrides")
         }
 
+        // Test: expansions inside double quotes need a shell.
+        do {
+            for command in ["bun run dev --port \"$PORT\"", "node \"$(pwd)/server.js\"", "node `which app`"] {
+                let spec = ProjectCommandResolver.resolve(command: command, directory: "/tmp/missing", port: 3999)
+                assert(spec.programArguments == ["/bin/zsh", "-c", command], "should run \(command) through zsh")
+            }
+        }
+
+        // Test: a word starting with # is a comment, which only a shell understands.
+        do {
+            let command = "bun run dev # local only"
+            let spec = ProjectCommandResolver.resolve(command: command, directory: "/tmp/missing", port: 3999)
+            assert(spec.programArguments == ["/bin/zsh", "-c", command], "should treat # comments as shell syntax")
+            let hashInWord = ProjectCommandResolver.resolve(command: "node app.js --tag=a#b", directory: "/tmp/missing", port: 3999)
+            assert(hashInWord.programArguments == ["/usr/bin/env", "node", "app.js", "--tag=a#b"], "should keep # inside a word")
+        }
+
+        // Test: a backslash inside double quotes only escapes $, `, ", \\ and newline.
+        do {
+            let spec = ProjectCommandResolver.resolve(command: #"node "a\b" "say \"hi\"""#, directory: "/tmp/missing", port: 3999)
+            assert(spec.programArguments == ["/usr/bin/env", "node", #"a\b"#, #"say "hi""#], "should keep other backslashes like a shell")
+        }
+
+        // Test: Homebrew and user tools come before macOS's own binaries.
+        do {
+            let path = ProjectCommandResolver.launchPath(inheritedPath: "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
+            assert(path.firstIndex(of: "/opt/homebrew/bin")! < path.firstIndex(of: "/usr/bin")!, "Homebrew should precede /usr/bin for GUI launches")
+            let custom = ProjectCommandResolver.launchPath(inheritedPath: "/Users/me/.nvm/bin:/usr/bin").split(separator: ":").map(String.init)
+            assert(custom.first == "/Users/me/.nvm/bin", "custom inherited entries should stay first")
+            assert(Set(custom).count == custom.count, "should not repeat PATH entries")
+        }
+
         // Test: detects common JS frameworks from package.json.
         do {
             let directory = temporaryDirectory()

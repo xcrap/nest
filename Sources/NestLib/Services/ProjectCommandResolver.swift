@@ -57,31 +57,28 @@ public enum ProjectCommandResolver {
         return directCommand(arguments: ["bun", "run", "start"])
     }
 
-    public static func launchPath() -> String {
+    private static let systemPathDirectories = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+
+    /// User and Homebrew tools come before macOS's own binaries, whatever PATH Nest inherited.
+    /// A GUI launch inherits only the system directories, which would otherwise shadow Homebrew.
+    public static func launchPath(inheritedPath: String = ProcessInfo.processInfo.environment["PATH"] ?? "") -> String {
         let homeDirectory = NSHomeDirectory()
-        let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        let candidates = [
-            currentPath,
+        let inherited = inheritedPath.split(separator: ":").map(String.init)
+        let candidates = inherited.filter { !systemPathDirectories.contains($0) } + [
             "\(homeDirectory)/.bun/bin",
             "\(homeDirectory)/.local/bin",
             AppSettings.nestBinDirectory,
             "/opt/homebrew/bin",
             "/opt/homebrew/sbin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin"
-        ]
+            "/usr/local/bin"
+        ] + systemPathDirectories
 
         var seen: Set<String> = []
         var components: [String] = []
 
-        for candidate in candidates {
-            for part in candidate.split(separator: ":").map(String.init) where !part.isEmpty {
-                if seen.insert(part).inserted {
-                    components.append(part)
-                }
+        for part in candidates where !part.isEmpty {
+            if seen.insert(part).inserted {
+                components.append(part)
             }
         }
 
@@ -118,12 +115,24 @@ public enum ProjectCommandResolver {
         var inSingleQuotes = false
         var inDoubleQuotes = false
         var isEscaping = false
+        var isEscapingInDoubleQuotes = false
+        var tokenStarted = false
         let shellOnlyCharacters = CharacterSet(charactersIn: "|&;<>$`~*?[]\n")
+        // Inside double quotes a shell still expands $ and `, and a backslash only escapes these.
+        let doubleQuoteExpansions: Set<Character> = ["$", "`"]
+        let doubleQuoteEscapable: Set<Character> = ["$", "`", "\"", "\\", "\n"]
 
         for character in command {
             if isEscaping {
                 current.append(character)
                 isEscaping = false
+                continue
+            }
+
+            if isEscapingInDoubleQuotes {
+                if !doubleQuoteEscapable.contains(character) { current.append("\\") }
+                current.append(character)
+                isEscapingInDoubleQuotes = false
                 continue
             }
 
@@ -140,7 +149,9 @@ public enum ProjectCommandResolver {
                 if character == "\"" {
                     inDoubleQuotes = false
                 } else if character == "\\" {
-                    isEscaping = true
+                    isEscapingInDoubleQuotes = true
+                } else if doubleQuoteExpansions.contains(character) {
+                    return nil
                 } else {
                     current.append(character)
                 }
@@ -149,17 +160,25 @@ public enum ProjectCommandResolver {
 
             if character == "\\" {
                 isEscaping = true
+                tokenStarted = true
                 continue
             }
 
             if character == "'" {
                 inSingleQuotes = true
+                tokenStarted = true
                 continue
             }
 
             if character == "\"" {
                 inDoubleQuotes = true
+                tokenStarted = true
                 continue
+            }
+
+            // A `#` starting a word begins a shell comment.
+            if character == "#" && !tokenStarted {
+                return nil
             }
 
             if character.unicodeScalars.allSatisfy(shellOnlyCharacters.contains) {
@@ -171,13 +190,15 @@ public enum ProjectCommandResolver {
                     tokens.append(current)
                     current.removeAll(keepingCapacity: true)
                 }
+                tokenStarted = false
                 continue
             }
 
             current.append(character)
+            tokenStarted = true
         }
 
-        guard !isEscaping, !inSingleQuotes, !inDoubleQuotes else { return nil }
+        guard !isEscaping, !isEscapingInDoubleQuotes, !inSingleQuotes, !inDoubleQuotes else { return nil }
 
         if !current.isEmpty {
             tokens.append(current)

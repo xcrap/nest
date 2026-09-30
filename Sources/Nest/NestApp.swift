@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import NestLib
 import ServiceManagement
 import Sparkle
@@ -63,9 +64,7 @@ private struct MainWindowSceneView: View {
                 appDelegate.updaterController = updaterController
                 appDelegate.openMainWindowAction = openWindow
                 appDelegate.setupStatusBar()
-                DispatchQueue.main.async {
-                    processController.reconcileSystemNetworkState()
-                }
+                appDelegate.reconcileNetworkAtLaunchIfNeeded()
             }
     }
 }
@@ -73,13 +72,27 @@ private struct MainWindowSceneView: View {
 // MARK: - App Delegate (Menu Bar + Window Management)
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var configDocuments: ConfigDocumentStore?
     var statusItem: NSStatusItem?
     var store: SiteStore?
     var processController: ProcessController?
     var updaterController: SPUStandardUpdaterController?
     var openMainWindowAction: OpenWindowAction?
+    private let statusMenu = NSMenu()
+    private var statusTimer: Timer?
+    private var statusObservation: AnyCancellable?
+    private var didReconcileNetwork = false
+
+    /// Runs the PF/DNS check once per launch; reopening the window must not repeat it
+    /// (a broken redirect can trigger an administrator prompt).
+    func reconcileNetworkAtLaunchIfNeeded() {
+        guard !didReconcileNetwork else { return }
+        didReconcileNetwork = true
+        DispatchQueue.main.async { [weak self] in
+            self?.processController?.reconcileSystemNetworkState()
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Enforce single instance — dev and prod use different bundle IDs so they can coexist
@@ -105,10 +118,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard configDocuments?.drafts.values.contains(where: { $0.dirty }) == true else { return .terminateNow }
+        let dirtyEditors = configDocuments?.drafts.values.contains(where: { $0.dirty }) == true
+        let dirtyCloudflare = configDocuments?.cloudflareDraft.map {
+            NestValidation.normalizedCloudflareSettings($0) != store?.settings.cloudflareSettings
+        } ?? false
+        guard dirtyEditors || dirtyCloudflare else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Discard unsaved configuration changes?"
-        alert.informativeText = "Your editor drafts have not been saved. Return to Settings → Config to save them."
+        alert.informativeText = dirtyEditors
+            ? "Your editor drafts have not been saved. Return to Settings → Config to save them."
+            : "Your Cloudflare settings have not been saved. Return to Settings → Cloudflare to save them."
         alert.addButton(withTitle: "Keep Editing")
         alert.addButton(withTitle: "Discard and Quit")
         return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
@@ -136,19 +155,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 button.image = resized
             }
         }
+        statusMenu.delegate = self
+        statusItem?.menu = statusMenu
         buildMenu()
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+        refreshStatus()
+        // Rebuild when status changes (also while the menu is open); coalesced to one pass per change burst.
+        statusObservation = processController?.objectWillChange
+            .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.buildMenu() }
+        // Poll only while a Nest window is on screen; the menu refreshes itself when opened.
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.buildMenu()
+                guard let self, self.isMainWindowVisible else { return }
+                self.refreshStatus()
             }
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationBecameActive),
+                                               name: NSApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    private var isMainWindowVisible: Bool {
+        NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) && $0.title == "Nest" }
+    }
+
+    private func refreshStatus() {
+        guard let store, let processController else { return }
+        processController.refreshStatusSnapshot(settings: store.settings, projects: store.appProjects)
+    }
+
+    @objc private func applicationBecameActive() {
+        refreshStatus()
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        buildMenu()
+        refreshStatus()
     }
 
     func buildMenu() {
-        if let store, let processController {
-            processController.refreshStatusSnapshot(settings: store.settings, projects: store.appProjects)
-        }
-        let menu = NSMenu()
+        let menu = statusMenu
+        menu.removeAllItems()
         let phpRunning = processController?.frankenphpRunning ?? false
         let dbRunning = processController?.mariadbRunning ?? false
         let cloudflaredRunning = processController?.cloudflaredRunning ?? false
@@ -212,8 +258,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let quitItem = NSMenuItem(title: "Quit Nest", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
-
-        statusItem?.menu = menu
     }
 
     @objc func showMainWindow() {

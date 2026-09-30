@@ -28,15 +28,19 @@ public actor ConfigurationService {
     public typealias Reload = (String) async throws -> Void
     private let command: Command
     private let reload: Reload
-    private var locked = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-    private func acquire() async {
-        if !locked { locked = true; return }
-        await withCheckedContinuation { waiters.append($0) }
+
+    /// Caddy/editor files and the cloudflared config are independent, so a slow connector
+    /// restart never holds up a site toggle.
+    private enum Lane { case files, tunnel }
+    private var locked: Set<Lane> = []
+    private var waiters: [Lane: [CheckedContinuation<Void, Never>]] = [:]
+    private func acquire(_ lane: Lane) async {
+        if !locked.contains(lane) { locked.insert(lane); return }
+        await withCheckedContinuation { waiters[lane, default: []].append($0) }
     }
-    private func release() {
-        if waiters.isEmpty { locked = false }
-        else { waiters.removeFirst().resume() }
+    private func release(_ lane: Lane) {
+        if waiters[lane]?.isEmpty ?? true { locked.remove(lane) }
+        else { waiters[lane]!.removeFirst().resume() }
     }
 
     public init(command: @escaping Command = { await SystemProcess.captureAsync($0, arguments: $1) },
@@ -66,8 +70,8 @@ public actor ConfigurationService {
 
     /// Call only after validation. A rejected apply restores the previous file.
     public func save(content: String, path: String, apply: Reload? = nil) async throws {
-        await acquire()
-        defer { release() }
+        await acquire(.files)
+        defer { release(.files) }
         try await commit(content: content, path: path, apply: apply)
     }
 
@@ -95,8 +99,8 @@ public actor ConfigurationService {
     }
 
     public func applyCaddy(settings: AppSettings, sites: [Site], running: Bool) async throws -> String {
-        await acquire()
-        defer { release() }
+        await acquire(.files)
+        defer { release(.files) }
         let renderer = ConfigRenderer(configDirectory: settings.caddyConfigDirectory, frankenphpLogPath: settings.runtimePaths.frankenphpLog)
         let issues = renderer.validationIssues(sites: sites)
         guard issues.isEmpty else { throw ConfigurationFailure(issues.joined(separator: " ")) }
@@ -118,8 +122,8 @@ public actor ConfigurationService {
     }
 
     public func saveCaddySupport(content: String, path: String, settings: AppSettings, running: Bool) async throws -> String {
-        await acquire()
-        defer { release() }
+        await acquire(.files)
+        defer { release(.files) }
         let caddyPath = settings.caddyConfigDirectory + "/Caddyfile"
         let active = try String(contentsOfFile: caddyPath, encoding: .utf8)
         // Validate an isolated copy of all imports; never put a candidate in a live wildcard directory.
@@ -153,8 +157,24 @@ public actor ConfigurationService {
                             running: Bool, push: Bool,
                             restart: @escaping () async throws -> Void,
                             pushConfiguration: (() async throws -> Void)? = nil) async throws -> String {
-        await acquire()
-        defer { release() }
+        try await applyTunnelLocally(settings: settings, routes: routes, sites: sites, projects: projects,
+                                     running: running, restart: restart)
+        let pushAction = pushConfiguration ?? {
+            try await CloudflareService.pushTunnelConfiguration(settings: settings.cloudflareSettings, routes: routes, sites: sites, projects: projects)
+        }
+        // A remote push is not rolled back implicitly: report its partial outcome honestly.
+        // It runs outside the lock so a slow network never blocks the next local apply.
+        if push {
+            do { try await pushAction() }
+            catch { throw ConfigurationFailure("Local configuration saved\(running ? " and connector restarted" : ""); Cloudflare push failed: \(error.localizedDescription)") }
+        }
+        return running ? "Applied • connector restarted\(push ? " • pushed to Cloudflare" : "")" : "Saved\(push ? " and pushed" : "") • connector stopped"
+    }
+
+    private func applyTunnelLocally(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject],
+                                    running: Bool, restart: @escaping () async throws -> Void) async throws {
+        await acquire(.tunnel)
+        defer { release(.tunnel) }
         let renderer = TunnelConfigRenderer(settings: settings.cloudflareSettings)
         let issues = renderer.validationIssues(routes: routes, sites: sites, projects: projects)
         guard issues.isEmpty else { throw ConfigurationFailure(issues.joined(separator: " ")) }
@@ -164,10 +184,6 @@ public actor ConfigurationService {
         try content.write(to: candidate, atomically: true, encoding: .utf8)
         let check = await command(settings.runtimePaths.cloudflaredBinary, ["--config", candidate.path, "tunnel", "ingress", "validate"])
         guard check.status == 0 else { throw ConfigurationFailure("Invalid tunnel configuration: \(check.output)") }
-        let pushAction = pushConfiguration ?? {
-            try await CloudflareService.pushTunnelConfiguration(settings: settings.cloudflareSettings, routes: routes, sites: sites, projects: projects)
-        }
-        // A remote push is not rolled back implicitly: report its partial outcome honestly.
         var attemptedRestart = false
         do {
             try await commit(content: content, path: settings.cloudflareSettings.configPath, apply: { _ in
@@ -182,10 +198,5 @@ public actor ConfigurationService {
             }
             throw error
         }
-        if push {
-            do { try await pushAction() }
-            catch { throw ConfigurationFailure("Local configuration saved\(running ? " and connector restarted" : ""); Cloudflare push failed: \(error.localizedDescription)") }
-        }
-        return running ? "Applied • connector restarted\(push ? " • pushed to Cloudflare" : "")" : "Saved\(push ? " and pushed" : "") • connector stopped"
     }
 }

@@ -10,6 +10,8 @@ public final class ConfigDocumentStore: ObservableObject {
         public var dirty: Bool { content != baseline }
     }
     @Published public private(set) var drafts: [String: Draft] = [:]
+    /// Unsaved Cloudflare settings; kept here so switching tabs does not discard them.
+    @Published public var cloudflareDraft: CloudflareSettings?
     @Published public private(set) var busy = false
     @Published public private(set) var message: String?
     @Published public private(set) var error: String?

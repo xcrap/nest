@@ -45,6 +45,38 @@ private struct CloudflareAPIResponse<ResultType: Decodable>: Decodable {
     var success: Bool
     var result: ResultType?
     var errors: [CloudflareAPIError]
+    var resultInfo: ResultInfo?
+
+    struct ResultInfo: Decodable {
+        var page: Int?
+        var totalPages: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case page
+            case totalPages = "total_pages"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case success, result, errors
+        case resultInfo = "result_info"
+    }
+}
+
+private struct CloudflareRemoteTunnelConfiguration: Decodable {
+    var config: Configuration?
+
+    struct Configuration: Decodable {
+        var warpRouting: WarpRouting?
+
+        enum CodingKeys: String, CodingKey {
+            case warpRouting = "warp-routing"
+        }
+    }
+
+    struct WarpRouting: Decodable {
+        var enabled: Bool?
+    }
 }
 
 private struct CloudflareEmptyPayload: Decodable {}
@@ -91,11 +123,29 @@ public enum CloudflareService {
         defaultFailureMessage: String,
         requireResult: Bool = true
     ) throws -> ResultType? {
+        try decodeAPIEnvelope(resultType, data: data, response: response,
+                              defaultFailureMessage: defaultFailureMessage, requireResult: requireResult).result
+    }
+
+    private static func decodeAPIEnvelope<ResultType: Decodable>(
+        _ resultType: ResultType.Type,
+        data: Data,
+        response: URLResponse,
+        defaultFailureMessage: String,
+        requireResult: Bool = true
+    ) throws -> CloudflareAPIResponse<ResultType> {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CloudflareServiceError.invalidResponse
         }
 
-        let decoded = try JSONDecoder().decode(CloudflareAPIResponse<ResultType>.self, from: data)
+        let decoded: CloudflareAPIResponse<ResultType>
+        do {
+            decoded = try JSONDecoder().decode(CloudflareAPIResponse<ResultType>.self, from: data)
+        } catch {
+            // Proxies and outages answer with HTML; keep the status so the failure is readable.
+            let body = String(decoding: data.prefix(200), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw CloudflareServiceError.requestFailed("Cloudflare HTTP \(httpResponse.statusCode): \(body.isEmpty ? defaultFailureMessage : body)")
+        }
         let message = decoded.errors.map { error in
             if let code = error.code {
                 return "\(code): \(error.message)"
@@ -112,7 +162,7 @@ public enum CloudflareService {
             throw CloudflareServiceError.invalidResponse
         }
 
-        return decoded.result
+        return decoded
     }
 
     public static func listDNSRecords(settings: CloudflareSettings) async throws -> [CloudflareDNSRecord] {
@@ -120,18 +170,32 @@ public enum CloudflareService {
             throw CloudflareServiceError.missingAPIConfiguration
         }
 
-        let url = URL(string: "https://api.cloudflare.com/client/v4/zones/\(settings.zoneId)/dns_records?type=CNAME&per_page=100")!
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var records: [CloudflareDNSRecord] = []
+        var page = 1
+        var totalPages = 1
+        repeat {
+            var components = URLComponents(string: "https://api.cloudflare.com/client/v4/zones/\(settings.zoneId)/dns_records")!
+            components.queryItems = [
+                URLQueryItem(name: "type", value: "CNAME"),
+                URLQueryItem(name: "content", value: settings.tunnelDomain),
+                URLQueryItem(name: "per_page", value: "100"),
+                URLQueryItem(name: "page", value: String(page))
+            ]
+            var request = URLRequest(url: components.url!)
+            request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let records = try decodeAPIResponse(
-            [CloudflareDNSRecord].self,
-            data: data,
-            response: response,
-            defaultFailureMessage: "Cloudflare request failed."
-        ) ?? []
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let envelope = try decodeAPIEnvelope(
+                [CloudflareDNSRecord].self,
+                data: data,
+                response: response,
+                defaultFailureMessage: "Cloudflare request failed."
+            )
+            records += envelope.result ?? []
+            totalPages = envelope.resultInfo?.totalPages ?? 1
+            page += 1
+        } while page <= totalPages && page <= 100
 
         return records
             .filter { $0.content == settings.tunnelDomain }
@@ -207,6 +271,9 @@ public enum CloudflareService {
         }
 
         let resolvedRoutes = renderer.resolvedRoutes(routes: routes, sites: sites, projects: projects)
+        let url = URL(string: "https://api.cloudflare.com/client/v4/accounts/\(settings.accountId)/cfd_tunnel/\(settings.tunnelId)/configurations")!
+        // Nest owns the ingress list, but WARP private-network routing is configured elsewhere: keep it.
+        let warpRoutingEnabled = try await remoteWarpRoutingEnabled(url: url, settings: settings)
         let payload = CloudflareTunnelConfigurationPayload(
             config: .init(
                 ingress: resolvedRoutes.map {
@@ -225,11 +292,10 @@ public enum CloudflareService {
                         originRequest: .init(noTLSVerify: nil, httpHostHeader: "")
                     )
                 ],
-                warpRouting: .init(enabled: false)
+                warpRouting: .init(enabled: warpRoutingEnabled)
             )
         )
 
-        let url = URL(string: "https://api.cloudflare.com/client/v4/accounts/\(settings.accountId)/cfd_tunnel/\(settings.tunnelId)/configurations")!
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
@@ -244,5 +310,20 @@ public enum CloudflareService {
             defaultFailureMessage: "Failed to push tunnel configuration.",
             requireResult: false
         )
+    }
+
+    private static func remoteWarpRoutingEnabled(url: URL, settings: CloudflareSettings) async throws -> Bool {
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let remote = try decodeAPIResponse(
+            CloudflareRemoteTunnelConfiguration.self,
+            data: data,
+            response: response,
+            defaultFailureMessage: "Failed to read the current tunnel configuration.",
+            requireResult: false
+        )
+        return remote?.config?.warpRouting?.enabled ?? false
     }
 }

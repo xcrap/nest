@@ -8,7 +8,6 @@ public struct TunnelsView: View {
     @State private var showAddSheet = false
     @State private var routePendingDeletion: TunnelRoute?
     @State private var searchText = ""
-    @State private var hoveredRouteId: String?
 
     public init() {}
 
@@ -28,6 +27,8 @@ public struct TunnelsView: View {
     }
 
     public var body: some View {
+        let routes = filteredRoutes
+        let lastID = routes.last?.id
         VStack(spacing: 0) {
             toolbar
             Divider()
@@ -36,30 +37,24 @@ public struct TunnelsView: View {
                 Spacer()
                 Button("Apply Changes") {
                     processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
-                }.disabled(processController.isServiceBusy("Cloudflared") || store.lastSaveError != nil)
+                }.disabled(processController.isServiceBusy("Cloudflared") || store.saveError(.tunnelRoutes) != nil)
             }.padding(12)
             Divider()
 
             if store.tunnelRoutes.isEmpty {
                 emptyState
-            } else if filteredRoutes.isEmpty {
+            } else if routes.isEmpty {
                 ContentUnavailableView.search(text: searchText)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(filteredRoutes) { route in
+                        ForEach(routes) { route in
                             TunnelRouteRow(
                                 route: route,
-                                isHovered: hoveredRouteId == route.id,
                                 onEdit: { editingRoute = route },
                                 onDelete: { routePendingDeletion = route }
                             )
-                            .onHover { h in
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    hoveredRouteId = h ? route.id : nil
-                                }
-                            }
-                            if route.id != filteredRoutes.last?.id {
+                            if route.id != lastID {
                                 Divider().padding(.leading, 36)
                             }
                         }
@@ -170,10 +165,11 @@ private struct TunnelRouteRow: View {
     @EnvironmentObject private var processController: ProcessController
 
     let route: TunnelRoute
-    let isHovered: Bool
     let onEdit: () -> Void
     let onDelete: () -> Void
 
+    /// Row-local so hovering redraws one row, not the whole list.
+    @State private var isHovered = false
     @State private var hoveredAction: String?
 
     var body: some View {
@@ -235,6 +231,9 @@ private struct TunnelRouteRow: View {
         .padding(.vertical, 8)
         .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
         .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
+        }
         .contextMenu {
             Button("Edit Route") { onEdit() }
             Button(route.active ? "Disable" : "Enable") {
