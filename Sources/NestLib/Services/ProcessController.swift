@@ -19,9 +19,28 @@ public final class ProcessController: ObservableObject {
     @Published public private(set) var serviceOperations: Set<String> = []
     @Published public var caddyApplyState: ApplyState = .unverified
     @Published public var tunnelApplyState: ApplyState = .unverified
-    @Published public private(set) var routeHealth: [String: String] = [:]
+    @Published public private(set) var routeHealth: [String: RouteHealth] = [:]
+    @Published public private(set) var refreshingDNS = false
+    @Published public private(set) var dnsRefreshError: String?
     private var refreshTask: Task<Void, Never>?
     private var caddyTask: Task<Void, Never>?
+    private var tunnelTask: Task<Void, Never>?
+    private var queuedTunnel: TunnelRequest?
+    private var healthGeneration = UUID()
+    private var healthChecks: [String: UUID] = [:]
+    private let applyTunnel: TunnelApply
+    private let probeRoute: (String) async -> RouteHealth
+    private let refreshDNS: () async throws -> Void
+
+    public typealias TunnelApply = (AppSettings, [TunnelRoute], [Site], [AppProject], Bool, Bool) async throws -> String
+    private struct TunnelRequest {
+        var settings: AppSettings
+        var routes: [TunnelRoute]
+        var sites: [Site]
+        var projects: [AppProject]
+        var push: Bool
+        var start: Bool
+    }
     /// Bumped whenever a start/stop begins or ends. A status snapshot taken before the
     /// latest change is stale and must not overwrite the operation's own result.
     private var stateGeneration = 0
@@ -56,12 +75,19 @@ public final class ProcessController: ObservableObject {
     }
     private var appliedCaddyInput: CaddyInput?
 
-    public func markTunnelsPending(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject]) {
+    public func markTunnelsPending(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject], automaticallyApply: Bool = false) {
         let input = TunnelInput(settings: settings, routes: routes, sites: sites, projects: projects)
         guard desiredTunnelInput != input else { return }
+        let firstObservation = desiredTunnelInput == nil && !automaticallyApply
         desiredTunnelInput = input
+        healthGeneration = UUID()
+        dnsRefreshError = nil
         assign(\.routeHealth, [:])
-        if !isServiceBusy("Cloudflared") { tunnelApplyState = .pending }
+        if !isServiceBusy("Cloudflared") { tunnelApplyState = firstObservation ? .unverified : .pending }
+        if automaticallyApply, AppSettings.reviewDirectory == nil {
+            applyTunnels(settings: settings, routes: routes, sites: sites, projects: projects,
+                         push: settings.cloudflareSettings.hasAPIConfiguration, start: routes.contains(where: \.active))
+        }
     }
 
     public func markCaddyPending(settings: AppSettings, sites: [Site]) {
@@ -75,7 +101,16 @@ public final class ProcessController: ObservableObject {
         "app.nest.\(AppSettings.storageRootName.replacingOccurrences(of: ".", with: "-")).cloudflared"
     }
     public nonisolated static let legacyCloudflaredLaunchAgentLabels = ["app.nest.cloudflared"]
-    public init() {}
+    public init(applyTunnel: @escaping TunnelApply = { settings, routes, sites, projects, running, push in
+        try await ConfigurationService.shared.applyTunnel(settings: settings, routes: routes, sites: sites, projects: projects,
+            running: running, push: push, restart: { try await ProcessController.restartConnector(settings: settings) },
+            pushConfiguration: { try await CloudflareService.publishTunnel(settings: settings.cloudflareSettings, routes: routes, sites: sites, projects: projects) })
+    }, probeRoute: @escaping (String) async -> RouteHealth = { await RouteHealthService().check(hostname: $0) },
+       refreshDNS: @escaping () async throws -> Void = { try await RouteHealthService.refreshMacDNS() }) {
+        self.applyTunnel = applyTunnel
+        self.probeRoute = probeRoute
+        self.refreshDNS = refreshDNS
+    }
 
     public func isServiceBusy(_ service: String) -> Bool { serviceOperations.contains(service) }
 
@@ -193,25 +228,41 @@ public final class ProcessController: ObservableObject {
         }
     }
 
-    public func applyTunnels(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject], push: Bool = false, start: Bool = false) {
-        guard !tunnelApplyState.isBusy, !isServiceBusy("Cloudflared") else { return }
+    public func applyTunnels(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject], push: Bool? = nil, start: Bool = false) {
+        guard !isServiceBusy("Cloudflared") || tunnelTask != nil else { return }
         let input = TunnelInput(settings: settings, routes: routes, sites: sites, projects: projects)
         desiredTunnelInput = input
+        healthGeneration = UUID()
+        dnsRefreshError = nil
+        assign(\.routeHealth, [:])
+        queuedTunnel = TunnelRequest(settings: settings, routes: routes, sites: sites, projects: projects,
+                                     push: push ?? settings.cloudflareSettings.hasAPIConfiguration, start: start)
+        guard tunnelTask == nil else { return }
         tunnelApplyState = .applying
         beginOperation("Cloudflared")
-        let shouldRun = start || cloudflaredRunning
-        Task {
-            defer { endOperation("Cloudflared") }
-            do {
-                let message = try await ConfigurationService.shared.applyTunnel(settings: settings, routes: routes, sites: sites, projects: projects,
-                    running: shouldRun, push: push, restart: { try await Self.restartConnector(settings: settings) })
-                cloudflaredRunning = shouldRun
-                cloudflaredError = nil
-                tunnelApplyState = desiredTunnelInput == input ? .applied(message) : .pending
-                assign(\.routeHealth, [:])
-            } catch {
-                cloudflaredError = error.localizedDescription
-                tunnelApplyState = .failed(error.localizedDescription)
+        tunnelTask = Task {
+            defer { tunnelTask = nil; endOperation("Cloudflared") }
+            // Coalesce rapid saves, but finish each remote write before starting the next.
+            // A slow older push must never overwrite the user's latest edit.
+            while let job = queuedTunnel {
+                queuedTunnel = nil
+                tunnelApplyState = .applying
+                let input = TunnelInput(settings: job.settings, routes: job.routes, sites: job.sites, projects: job.projects)
+                let shouldRun = job.start || cloudflaredRunning
+                do {
+                    let message = try await applyTunnel(job.settings, job.routes, job.sites, job.projects, shouldRun, job.push)
+                    cloudflaredRunning = shouldRun
+                    cloudflaredError = nil
+                    let status = job.push ? "Published • DNS and routes synced"
+                        : (job.settings.cloudflareSettings.hasAPIConfiguration ? message : "\(message) • Cloudflare API not configured")
+                    tunnelApplyState = desiredTunnelInput == input ? .applied(status) : .pending
+                    if queuedTunnel == nil, desiredTunnelInput == input {
+                        for route in job.routes where route.active { checkRoute(route, retry: true) }
+                    }
+                } catch {
+                    cloudflaredError = error.localizedDescription
+                    tunnelApplyState = .failed(error.localizedDescription)
+                }
             }
         }
     }
@@ -371,19 +422,39 @@ public final class ProcessController: ObservableObject {
     public func projectError(for id: String) -> String? { projectErrors[id] }
     public func stopAll() { stopFrankenPHP(); stopMariaDB(); stopCloudflared() }
 
-    /// HTTP checks are explicit and per-route; process presence never claims public reachability.
-    public func checkRoute(_ route: TunnelRoute) {
-        routeHealth[route.id] = "Checking…"
+    /// Publication and manual retries share the same per-route check. Ignore results for
+    /// routes edited/deleted while a request was in flight.
+    public func checkRoute(_ route: TunnelRoute, retry: Bool = false) {
+        let generation = healthGeneration
+        let checkID = UUID()
+        healthChecks[route.id] = checkID
+        routeHealth[route.id] = .checking
         Task {
+            var result = await probeRoute(route.publicHostname)
+            if retry, result == .dnsPending || result == .httpError(404) || result == .httpError(502) {
+                try? await Task.sleep(for: .seconds(2))
+                guard generation == healthGeneration, healthChecks[route.id] == checkID else { return }
+                result = await probeRoute(route.publicHostname)
+            }
+            guard generation == healthGeneration, healthChecks[route.id] == checkID else { return }
+            routeHealth[route.id] = result
+        }
+    }
+
+    public var needsDNSRefresh: Bool { routeHealth.values.contains(.macDNS) }
+
+    public func refreshMacDNS(routes: [TunnelRoute]) {
+        guard !refreshingDNS else { return }
+        refreshingDNS = true
+        dnsRefreshError = nil
+        let generation = healthGeneration
+        Task {
+            defer { refreshingDNS = false }
             do {
-                guard let url = URL(string: "https://\(route.publicHostname)") else { return }
-                var request = URLRequest(url: url)
-                request.httpMethod = "HEAD"
-                request.timeoutInterval = 10
-                let (_, response) = try await URLSession.shared.data(for: request)
-                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                routeHealth[route.id] = (200..<400).contains(status) ? "Reachable • HTTP \(status)" : "HTTP \(status) • inspect origin / tunnel"
-            } catch { routeHealth[route.id] = "Unreachable: \(error.localizedDescription)" }
+                try await refreshDNS()
+                guard generation == healthGeneration else { return }
+                for route in routes where route.active { checkRoute(route) }
+            } catch { dnsRefreshError = error.localizedDescription }
         }
     }
 

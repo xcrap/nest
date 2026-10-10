@@ -10,7 +10,6 @@ public struct CloudflareView: View {
     @State private var exportSettings = false
     @State private var importSettings = false
     @State private var showAdvancedSettings = false
-    @State private var confirmPush = false
 
     public init() {}
 
@@ -58,15 +57,6 @@ public struct CloudflareView: View {
             Button("OK") { statusMessage = nil }
         } message: {
             Text(statusMessage ?? "")
-        }
-        .alert("Push to Cloudflare?", isPresented: $confirmPush) {
-            Button("Push") {
-                guard persistSettings() else { return }
-                syncTunnelConfig()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This replaces the tunnel's ingress rules on Cloudflare with Nest's active routes. Hostnames added only in the Cloudflare dashboard will be removed. WARP routing settings are kept.")
         }
         .onAppear {
             processController.refreshStatusSnapshot(settings: store.settings, projects: store.appProjects)
@@ -181,19 +171,12 @@ public struct CloudflareView: View {
             }
 
             HStack(spacing: 8) {
-                Button("Apply Locally") {
+                Button("Sync Now") {
                     guard persistSettings() else { return }
-                    processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+                    syncTunnelConfig()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-
-                Button("Push to Cloudflare…") {
-                    confirmPush = true
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Writes the local tunnel config, then pushes the generated ingress rules to Cloudflare.")
 
                 Button(processController.cloudflaredRunning ? "Stop" : "Start") {
                     // Stopping never depends on the settings form being savable.
@@ -211,7 +194,7 @@ public struct CloudflareView: View {
 
             .disabled(processController.isServiceBusy("Cloudflared"))
 
-            Text("Apply Locally validates and saves routes, then restarts the running connector. Push to Cloudflare also updates API ingress. Public reachability can be checked from Tunnels.")
+            Text("Saved changes sync automatically: Nest applies routes, creates missing DNS records and publishes to Cloudflare when the API is configured. Nest manages this tunnel’s full route list; WARP settings and existing DNS records are preserved. Reachability and DNS recovery appear in Tunnels.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -312,7 +295,8 @@ public struct CloudflareView: View {
     }
 
     private func syncTunnelConfig() {
-        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, push: true)
+        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects,
+            push: store.settings.cloudflareSettings.hasAPIConfiguration, start: store.tunnelRoutes.contains(where: \.active))
     }
 
     private func handleSettingsImport(_ result: Result<URL, Error>) {

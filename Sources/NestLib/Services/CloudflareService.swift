@@ -202,7 +202,7 @@ public enum CloudflareService {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    public static func createDNSRecord(subdomain: String, settings: CloudflareSettings) async throws {
+    public static func createDNSRecord(subdomain: String, settings: CloudflareSettings, session: URLSession = .shared) async throws {
         guard settings.hasAPIConfiguration else {
             throw CloudflareServiceError.missingAPIConfiguration
         }
@@ -220,7 +220,8 @@ public enum CloudflareService {
             "ttl": 1
         ])
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        request.timeoutInterval = 20
+        let (data, response) = try await session.data(for: request)
         _ = try decodeAPIResponse(
             CloudflareEmptyPayload.self,
             data: data,
@@ -228,6 +229,39 @@ public enum CloudflareService {
             defaultFailureMessage: "Failed to create DNS record.",
             requireResult: false
         )
+    }
+
+    /// Idempotent publication: reuse only a proxied CNAME to this tunnel. Never take over
+    /// an existing address or a hostname belonging to a different service.
+    public static func ensureTunnelDNS(hostname: String, settings: CloudflareSettings, session: URLSession = .shared) async throws {
+        guard settings.hasAPIConfiguration else { throw CloudflareServiceError.missingAPIConfiguration }
+        let issues = NestValidation.domainIssues(hostname, field: "Public hostname")
+        guard issues.isEmpty else { throw CloudflareServiceError.invalidTunnelConfiguration(issues) }
+        var components = URLComponents(string: "https://api.cloudflare.com/client/v4/zones/\(settings.zoneId)/dns_records")!
+        components.queryItems = [URLQueryItem(name: "name", value: hostname), URLQueryItem(name: "per_page", value: "100")]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        let records = try decodeAPIResponse([CloudflareDNSRecord].self, data: data, response: response,
+            defaultFailureMessage: "Could not check DNS for \(hostname).") ?? []
+        if records.isEmpty {
+            try await createDNSRecord(subdomain: hostname, settings: settings, session: session)
+        } else if !records.contains(where: {
+            $0.name.lowercased() == hostname.lowercased() && $0.type == "CNAME" && $0.proxied
+                && $0.content.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == settings.tunnelDomain.lowercased()
+        }) {
+            throw ConfigurationFailure("\(hostname) already has a DNS record that does not point to this tunnel with proxying enabled. Review it in Cloudflare; Nest left it unchanged.")
+        }
+    }
+
+    public static func publishTunnel(settings: CloudflareSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject]) async throws {
+        for route in routes where route.active {
+            do { try await ensureTunnelDNS(hostname: route.publicHostname, settings: settings) }
+            catch { throw ConfigurationFailure("DNS setup for \(route.publicHostname) failed: \(error.localizedDescription). Earlier DNS records may already have been created; retry is safe.") }
+        }
+        do { try await pushTunnelConfiguration(settings: settings, routes: routes, sites: sites, projects: projects) }
+        catch { throw ConfigurationFailure("DNS is ready, but publishing routes failed: \(error.localizedDescription)") }
     }
 
     public static func deleteDNSRecord(id: String, settings: CloudflareSettings) async throws {

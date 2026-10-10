@@ -33,12 +33,33 @@ public struct TunnelsView: View {
             toolbar
             Divider()
             HStack {
-                Text(processController.tunnelApplyState.label).font(.callout).textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(processController.tunnelApplyState.label).font(.callout).textSelection(.enabled)
+                    Text("Changes sync automatically when saved.").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
-                Button("Apply Changes") {
-                    processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
-                }.disabled(processController.isServiceBusy("Cloudflared") || store.saveError(.tunnelRoutes) != nil)
+                if case .applied = processController.tunnelApplyState {
+                    Button("Check All") { for route in store.tunnelRoutes where route.active { processController.checkRoute(route) } }
+                } else {
+                    Button("Sync Now") {
+                        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects,
+                            push: store.settings.cloudflareSettings.hasAPIConfiguration, start: store.tunnelRoutes.contains(where: \.active))
+                    }.disabled(processController.isServiceBusy("Cloudflared") || store.lastSaveError != nil)
+                }
             }.padding(12)
+            if processController.needsDNSRefresh || processController.refreshingDNS || processController.dnsRefreshError != nil {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Public DNS is ready, but this Mac cannot find the address.").font(.callout)
+                        Text(processController.dnsRefreshError ?? "Refresh the Mac’s DNS cache, then Nest will check again. macOS will ask for an administrator password.")
+                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    Spacer()
+                    Button(processController.refreshingDNS ? "Refreshing…" : "Refresh Mac DNS") {
+                        processController.refreshMacDNS(routes: store.tunnelRoutes)
+                    }.disabled(processController.refreshingDNS)
+                }.padding(12).background(Color.orange.opacity(0.08))
+            }
             Divider()
 
             if store.tunnelRoutes.isEmpty {
@@ -64,6 +85,11 @@ public struct TunnelsView: View {
         }
         .sheet(isPresented: $showAddSheet) {
             TunnelFormSheet(mode: .add)
+        }
+        .task {
+            for route in store.tunnelRoutes where route.active && processController.routeHealth[route.id] == nil {
+                processController.checkRoute(route)
+            }
         }
         .sheet(item: $editingRoute) { route in
             TunnelFormSheet(mode: .edit(route))
@@ -202,11 +228,8 @@ private struct TunnelRouteRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let health = processController.routeHealth[route.id] {
-                Text(health).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(health)
+                Text(health.label).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(health.label)
             }
-            Button("Check") { processController.checkRoute(route) }
-                .controlSize(.small).disabled(processController.routeHealth[route.id] == "Checking…")
-                .accessibilityLabel("Check public reachability of \(route.publicHostname)")
 
             HStack(spacing: 0) {
                 rowAction(icon: "pencil", help: "Edit") { onEdit() }
@@ -235,6 +258,8 @@ private struct TunnelRouteRow: View {
             withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
         }
         .contextMenu {
+            Button("Check Reachability") { processController.checkRoute(route) }
+                .disabled(!route.active || processController.routeHealth[route.id] == .checking)
             Button("Edit Route") { onEdit() }
             Button(route.active ? "Disable" : "Enable") {
                 var updated = route

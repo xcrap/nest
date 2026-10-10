@@ -42,6 +42,12 @@ struct TestRunner {
         totalFailed += reliability.failed
         print("  \(reliability.passed) passed, \(reliability.failed) failed\n")
 
+        print("Suite: Tunnel Publication")
+        let tunnels = await TunnelPublicationTests.runAll()
+        totalPassed += tunnels.passed
+        totalFailed += tunnels.failed
+        print("  \(tunnels.passed) passed, \(tunnels.failed) failed\n")
+
         print("Total: \(totalPassed) passed, \(totalFailed) failed")
 
         if totalFailed > 0 {

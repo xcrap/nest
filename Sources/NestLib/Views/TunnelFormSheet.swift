@@ -54,7 +54,7 @@ public struct TunnelFormSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(isEditing ? "Edit Tunnel Route" : "New Tunnel Route")
                     .font(.headline)
-                Text("Routes are saved in Nest. Use Apply Changes on the Tunnels screen to apply them to cloudflared.")
+                Text("Saving applies routes automatically. With Cloudflare connected, Nest also sets up DNS, publishes and checks the public address.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -266,6 +266,10 @@ public struct TunnelFormSheet: View {
             store.updateTunnelRoute(route)
         }
 
-        dismiss()
+        if let error = store.saveError(.tunnelRoutes) {
+            errorMessage = error
+        } else {
+            dismiss()
+        }
     }
 }
