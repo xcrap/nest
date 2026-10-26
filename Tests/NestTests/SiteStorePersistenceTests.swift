@@ -89,6 +89,41 @@ enum SiteStorePersistenceTests {
             print("  FAIL: legacy migration persistence test threw: \(error)")
         }
 
+        // A failed rename must not change memory or the independently writable tunnel file.
+        do {
+            let directory = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = SiteStore(dataDirectory: directory, defaults: AppSettings(), runOneTimeMigrations: false)
+            let original = store.addSite(name: "Original", domain: "old.test", rootPath: directory.path, documentRoot: ".")
+            store.addTunnelRoute(TunnelRoute(kind: .php, subdomain: "public", publicDomain: "example.com",
+                localDomain: original.domain, originPort: 443, linkedSiteDomain: original.domain))
+            let tunnelsFile = directory.appendingPathComponent("tunnels.json")
+            let originalTunnels = try Data(contentsOf: tunnelsFile)
+            let sitesFile = directory.appendingPathComponent("sites.json")
+            let savedFile = directory.appendingPathComponent("sites.saved")
+            try FileManager.default.moveItem(at: sitesFile, to: savedFile)
+            try FileManager.default.createDirectory(at: sitesFile, withIntermediateDirectories: true)
+            var renamed = original
+            renamed.domain = "new.test"
+            assert(!store.updateSite(renamed), "rename reports the failed site write")
+            assert(store.sites == [original], "failed rename preserves the original in-memory site")
+            assert(try Data(contentsOf: tunnelsFile) == originalTunnels, "failed rename does not write linked tunnels")
+            assert(store.caddyConfigurationError != nil && store.tunnelConfigurationError != nil, "save failure blocks applying either configuration")
+            try FileManager.default.removeItem(at: sitesFile)
+            try FileManager.default.moveItem(at: savedFile, to: sitesFile)
+            let reopened = SiteStore(dataDirectory: directory, defaults: AppSettings(), runOneTimeMigrations: false)
+            assert(reopened.sites.first?.domain == "old.test" && reopened.tunnelRoutes.first?.linkedSiteDomain == "old.test",
+                   "reopening after failure keeps the site and tunnel linked to the same domain")
+            assert(store.updateSite(renamed), "rename can be retried after the write problem is repaired")
+            assert(store.saveError(.sites) == nil && store.tunnelRoutes.first?.localDomain == "new.test", "successful retry clears the error and retargets tunnels")
+            let retried = SiteStore(dataDirectory: directory, defaults: AppSettings(), runOneTimeMigrations: false)
+            assert(retried.sites.first?.domain == "new.test" && retried.tunnelRoutes.first?.linkedSiteDomain == "new.test",
+                   "successful rename persists both sides of the link")
+        } catch {
+            failed += 1
+            print("  FAIL: failed rename persistence test threw: \(error)")
+        }
+
         return (passed, failed)
     }
 

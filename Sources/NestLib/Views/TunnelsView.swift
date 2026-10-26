@@ -42,7 +42,7 @@ public struct TunnelsView: View {
                     Button("Check All") { for route in store.tunnelRoutes where route.active { processController.checkRoute(route) } }
                 } else {
                     Button("Sync Now") {
-                        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects,
+                        processController.applyTunnels(store: store,
                             push: store.settings.cloudflareSettings.hasAPIConfiguration, start: store.tunnelRoutes.contains(where: \.active))
                     }.disabled(processController.isServiceBusy("Cloudflared") || store.lastSaveError != nil)
                 }

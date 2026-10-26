@@ -85,6 +85,38 @@ enum ProjectLifecycleTests {
             stoppedLabels = []
             _ = service.stop(plan, timeout: 0)
             check(stoppedLabels.isEmpty, "Stop does not control a same-ID job belonging to another folder")
+
+            // Both builds' inactive jobs still run at login and must be removed before deletion.
+            try writeJob(path: directory.path)
+            let primaryFile = directory.appendingPathComponent(primary + ".plist")
+            try Data().write(to: primaryFile)
+            let unrelatedFile = directory.appendingPathComponent("unrelated.service.plist")
+            try Data().write(to: unrelatedFile)
+            var removeFiles = false
+            stoppedLabels = []
+            let inactive = ProjectLifecycleService(
+                listeners: { _ in [789] }, ownedPIDs: { _ in [] }, compatibleLabels: compatible,
+                isAgentInstalled: { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0 + ".plist").path) },
+                stopAgent: { label in
+                    stoppedLabels.append(label)
+                    if failStop { return .init(status: 1, output: "denied") }
+                    if removeFiles { try? FileManager.default.removeItem(at: directory.appendingPathComponent(label + ".plist")) }
+                    return .init(status: 0, output: "")
+                })
+            check(inactive.hasInstalledAgent(plan), "deletion recognizes installed jobs even without any PIDs")
+            failStop = true
+            check(inactive.stop(plan, timeout: 0).error?.contains("denied") == true, "inactive job removal failures are reported")
+            check(inactive.hasInstalledAgent(plan), "failed removal continues to block deletion")
+            failStop = false
+            _ = inactive.stop(plan, timeout: 0)
+            check(inactive.hasInstalledAgent(plan), "a successful stop command alone does not prove login jobs were removed")
+            removeFiles = true
+            stoppedLabels = []
+            _ = inactive.stop(plan, timeout: 0)
+            check(Set(stoppedLabels) == Set([primary, legacy]), "Stop removes inactive jobs from both build namespaces")
+            check(!inactive.hasInstalledAgent(plan), "deletion is allowed only after both login jobs are removed")
+            check(FileManager.default.fileExists(atPath: unrelatedFile.path), "removing a project leaves unrelated launch agents alone")
+            check(inactive.state(plan).error?.contains("789") == true, "an unrelated listener survives login job removal")
         } catch { check(false, "project lifecycle fixture: \(error)") }
         return (passed, failed)
     }

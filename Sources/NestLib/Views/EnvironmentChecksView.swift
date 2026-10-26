@@ -392,7 +392,7 @@ public struct EnvironmentChecksView: View {
     }
 
     private func startFrankenPHP() {
-        processController.startFrankenPHP(settings: store.settings, sites: store.sites)
+        processController.startFrankenPHP(store: store)
     }
 
     private func startMariaDB() {
@@ -400,7 +400,7 @@ public struct EnvironmentChecksView: View {
     }
 
     private func startCloudflared() {
-        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
+        processController.applyTunnels(store: store, start: true)
     }
 
 }

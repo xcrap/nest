@@ -38,16 +38,19 @@ public struct ProjectLifecycleService {
     public var listeners: (Int) -> [Int32]
     public var ownedPIDs: (String) -> Set<Int32>
     public var compatibleLabels: (ProjectLaunchPlan) -> [String]
+    public var isAgentInstalled: (String) -> Bool
     public var startAgent: (LaunchAgentDefinition) -> CommandResult
     public var stopAgent: (String) -> CommandResult
 
     public init(listeners: @escaping (Int) -> [Int32] = PortInspector.pids,
                 ownedPIDs: @escaping (String) -> Set<Int32> = LaunchAgentService.processTree,
                 compatibleLabels: @escaping (ProjectLaunchPlan) -> [String] = { LaunchAgentService.compatibleProjectLabels(for: $0) },
+                isAgentInstalled: @escaping (String) -> Bool = { LaunchAgentService.isInstalled(label: $0) },
                 startAgent: @escaping (LaunchAgentDefinition) -> CommandResult = LaunchAgentService.start,
                 stopAgent: @escaping (String) -> CommandResult = { LaunchAgentService.stop(label: $0) }) {
         self.listeners = listeners; self.ownedPIDs = ownedPIDs
         self.compatibleLabels = compatibleLabels
+        self.isAgentInstalled = isAgentInstalled
         self.startAgent = startAgent; self.stopAgent = stopAgent
     }
 
@@ -84,7 +87,7 @@ public struct ProjectLifecycleService {
 
     public func stop(_ plan: ProjectLaunchPlan, timeout: TimeInterval = 5) -> ProjectRuntimeState {
         let labels = managedLabels(plan).filter {
-            !ownedPIDs($0).isEmpty || ($0 == plan.definition.label && LaunchAgentService.isInstalled(label: $0))
+            !ownedPIDs($0).isEmpty || isAgentInstalled($0)
         }
         guard !labels.isEmpty else { return state(plan) }
         for label in labels {
@@ -97,6 +100,11 @@ public struct ProjectLifecycleService {
             Thread.sleep(forTimeInterval: 0.15)
         } while Date() < deadline
         return .init(running: state(plan).running, error: "\(plan.projectName) is still running after the stop request.")
+    }
+
+    /// Inactive jobs still launch at login, including those installed by the other build.
+    public func hasInstalledAgent(_ plan: ProjectLaunchPlan) -> Bool {
+        managedLabels(plan).contains(where: isAgentInstalled)
     }
 
     private func managedLabels(_ plan: ProjectLaunchPlan) -> Set<String> {

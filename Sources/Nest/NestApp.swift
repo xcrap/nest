@@ -286,10 +286,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let store, let pc = processController else { return }
         let paths = store.settings.runtimePaths
         if !pc.frankenphpRunning && !paths.frankenphpBinary.isEmpty {
-            pc.startFrankenPHP(settings: store.settings, sites: store.sites)
+            pc.startFrankenPHP(store: store)
         }
         if !pc.cloudflaredRunning && !paths.cloudflaredBinary.isEmpty && store.settings.cloudflareSettings.hasLocalConfiguration {
-            pc.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
+            pc.applyTunnels(store: store, start: true)
         }
         if !pc.mariadbRunning && !paths.mariadbServer.isEmpty {
             pc.startMariaDB(serverBinary: paths.mariadbServer)
@@ -301,7 +301,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if pc.frankenphpRunning {
             pc.stopFrankenPHP()
         } else {
-            pc.startFrankenPHP(settings: store.settings, sites: store.sites)
+            pc.startFrankenPHP(store: store)
         }
     }
 
@@ -319,7 +319,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if pc.cloudflaredRunning {
             pc.stopCloudflared()
         } else {
-            pc.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
+            pc.applyTunnels(store: store, start: true)
         }
     }
 

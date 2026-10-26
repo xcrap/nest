@@ -63,7 +63,7 @@ public struct SitesView: View {
             HStack {
                 Text(processController.caddyApplyState.label).font(.callout).textSelection(.enabled)
                 Spacer()
-                Button("Apply") { processController.applyCaddy(settings: store.settings, sites: store.sites) }
+                Button("Apply") { processController.applyCaddy(store: store) }
                     .disabled(processController.caddyApplyState.isBusy || store.saveError(.sites) != nil)
             }.padding(.horizontal, 12).padding(.vertical, 6)
             Divider()

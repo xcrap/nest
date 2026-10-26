@@ -58,6 +58,23 @@ public final class SiteStore: ObservableObject {
         saveErrors[file]
     }
 
+    /// A failed read is not a failed save, but neither may become live configuration.
+    public var caddyConfigurationError: String? {
+        configurationError(for: [.sites, .settings])
+    }
+
+    public var tunnelConfigurationError: String? {
+        configurationError(for: Set(StoreFile.allCases))
+    }
+
+    private func configurationError(for files: Set<StoreFile>) -> String? {
+        let unreadable = StoreFile.allCases.filter { files.contains($0) && unreadableFiles.contains($0) }
+        if !unreadable.isEmpty {
+            return "Cannot apply configuration: \(unreadable.map(\.fileName).joined(separator: ", ")) could not be read. Repair or remove the unreadable files and reopen Nest."
+        }
+        return StoreFile.allCases.filter { files.contains($0) }.compactMap { saveErrors[$0] }.first
+    }
+
     private enum StoreSource {
         case envelope
         case legacy
@@ -497,17 +514,22 @@ public final class SiteStore: ObservableObject {
         return site
     }
 
-    public func updateSite(_ site: Site) {
-        guard let index = sites.firstIndex(where: { $0.id == site.id }) else { return }
+    @discardableResult
+    public func updateSite(_ site: Site) -> Bool {
+        guard let index = sites.firstIndex(where: { $0.id == site.id }) else { return false }
         let previousDomain = sites[index].domain
         var updated = normalizedSite(site)
         updated.updatedAt = Date()
-        sites[index] = updated
-        saveSites()
+        var candidate = sites
+        candidate[index] = updated
+        // Publish the new record and retarget its tunnels only after the site is durable.
+        guard saveEncodable(candidate, file: .sites) else { return false }
+        sites = candidate
         if previousDomain != updated.domain {
             retargetTunnelRoutes(fromSiteDomain: previousDomain, to: updated.domain)
         }
         reconcileTunnelLinks()
+        return true
     }
 
     /// Tunnel routes follow a renamed site instead of silently losing their link.

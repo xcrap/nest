@@ -57,6 +57,19 @@ enum ProjectCommandResolverTests {
             assert(spec.programArguments == ["/usr/bin/env", "node", #"a\b"#, #"say "hi""#], "should keep other backslashes like a shell")
         }
 
+        // Explicit empty arguments must retain their position, including at the end.
+        do {
+            for command in [#"/usr/bin/printf '<%s>|<%s>\n' '' second"#,
+                            #"/usr/bin/printf '<%s>|<%s>\n' first """#,
+                            #"/usr/bin/printf '<%s>|<%s>\n' "" '' "#] {
+                let spec = ProjectCommandResolver.resolve(command: command, directory: "/tmp", port: 3999)
+                let actual = SystemProcess.capture(spec.programArguments[0], arguments: Array(spec.programArguments.dropFirst()))
+                let expected = SystemProcess.capture("/bin/zsh", arguments: ["-c", command])
+                assert(actual == expected && actual.status == 0, "empty argument command behaves like the shell: \(command)")
+                assert(spec.programArguments.count == 4, "empty arguments stay in argv, including trailing ones")
+            }
+        }
+
         // Test: Homebrew and user tools come before macOS's own binaries.
         do {
             let path = ProjectCommandResolver.launchPath(inheritedPath: "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)

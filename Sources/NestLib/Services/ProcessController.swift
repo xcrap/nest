@@ -75,6 +75,49 @@ public final class ProcessController: ObservableObject {
     }
     private var appliedCaddyInput: CaddyInput?
 
+    // App actions use these store-aware entry points. Raw snapshots below also support
+    // isolated controller tests, but cannot distinguish an empty list from a failed read.
+    public func markCaddyPending(store: SiteStore) {
+        guard canConfigureCaddy(store) else { return }
+        markCaddyPending(settings: store.settings, sites: store.sites)
+    }
+
+    public func applyCaddy(store: SiteStore) {
+        guard canConfigureCaddy(store) else { return }
+        applyCaddy(settings: store.settings, sites: store.sites)
+    }
+
+    public func startFrankenPHP(store: SiteStore) {
+        guard canConfigureCaddy(store) else { return }
+        startFrankenPHP(settings: store.settings, sites: store.sites)
+    }
+
+    public func markTunnelsPending(store: SiteStore, automaticallyApply: Bool = false) {
+        guard canConfigureTunnels(store) else { return }
+        markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites,
+                           projects: store.appProjects, automaticallyApply: automaticallyApply)
+    }
+
+    public func applyTunnels(store: SiteStore, push: Bool? = nil, start: Bool = false) {
+        guard canConfigureTunnels(store) else { return }
+        applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites,
+                     projects: store.appProjects, push: push, start: start)
+    }
+
+    private func canConfigureCaddy(_ store: SiteStore) -> Bool {
+        guard let error = store.caddyConfigurationError else { return true }
+        frankenphpError = error
+        caddyApplyState = .failed(error)
+        return false
+    }
+
+    private func canConfigureTunnels(_ store: SiteStore) -> Bool {
+        guard let error = store.tunnelConfigurationError else { return true }
+        cloudflaredError = error
+        tunnelApplyState = .failed(error)
+        return false
+    }
+
     public func markTunnelsPending(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject], automaticallyApply: Bool = false) {
         let input = TunnelInput(settings: settings, routes: routes, sites: sites, projects: projects)
         guard desiredTunnelInput != input else { return }
@@ -401,8 +444,9 @@ public final class ProcessController: ObservableObject {
         stateGeneration += 1
         let (outcome, agentRemains) = await BlockingWork.run(qos: .userInitiated) { () -> (ProjectRuntimeState, Bool) in
             let plan = ProjectLaunchPlanner.plan(for: project)
-            let outcome = ProjectLifecycleService().stop(plan)
-            return (outcome, LaunchAgentService.isInstalled(label: plan.definition.label))
+            let service = ProjectLifecycleService()
+            let outcome = service.stop(plan)
+            return (outcome, service.hasInstalledAgent(plan))
         }
         finishProjectOperation(project.id, outcome)
         guard !outcome.running, !agentRemains else {

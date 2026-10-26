@@ -184,7 +184,7 @@ public struct CloudflareView: View {
                         processController.stopCloudflared()
                     } else {
                         guard persistSettings() else { return }
-                        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
+                        processController.applyTunnels(store: store, start: true)
                     }
                 }
                 .buttonStyle(.bordered)
@@ -295,7 +295,7 @@ public struct CloudflareView: View {
     }
 
     private func syncTunnelConfig() {
-        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects,
+        processController.applyTunnels(store: store,
             push: store.settings.cloudflareSettings.hasAPIConfiguration, start: store.tunnelRoutes.contains(where: \.active))
     }
 

@@ -186,7 +186,7 @@ public enum ProjectCommandResolver {
             }
 
             if character.isWhitespace {
-                if !current.isEmpty {
+                if tokenStarted {
                     tokens.append(current)
                     current.removeAll(keepingCapacity: true)
                 }
@@ -200,7 +200,7 @@ public enum ProjectCommandResolver {
 
         guard !isEscaping, !isEscapingInDoubleQuotes, !inSingleQuotes, !inDoubleQuotes else { return nil }
 
-        if !current.isEmpty {
+        if tokenStarted {
             tokens.append(current)
         }
 

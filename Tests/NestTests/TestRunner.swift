@@ -48,6 +48,12 @@ struct TestRunner {
         totalFailed += tunnels.failed
         print("  \(tunnels.passed) passed, \(tunnels.failed) failed\n")
 
+        print("Suite: Storage Apply")
+        let storage = await StorageApplyTests.runAll()
+        totalPassed += storage.passed
+        totalFailed += storage.failed
+        print("  \(storage.passed) passed, \(storage.failed) failed\n")
+
         print("Total: \(totalPassed) passed, \(totalFailed) failed")
 
         if totalFailed > 0 {

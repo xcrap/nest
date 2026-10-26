@@ -110,32 +110,27 @@ public struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .onAppear {
-            processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+            processController.markTunnelsPending(store: store)
         }
         .onChange(of: store.sites) {
-            // Only apply what was actually persisted; an unsaved list would diverge from disk.
-            guard store.saveError(.sites) == nil else { return }
-            processController.applyCaddy(settings: store.settings, sites: store.sites)
+            processController.applyCaddy(store: store)
             syncSavedTunnels()
         }
         .onChange(of: store.tunnelRoutes) { syncSavedTunnels() }
         .onChange(of: store.appProjects) { syncSavedTunnels() }
         .onChange(of: store.settings) {
-            processController.markCaddyPending(settings: store.settings, sites: store.sites)
+            processController.markCaddyPending(store: store)
             syncSavedTunnels()
         }
         .safeAreaInset(edge: .bottom) {
-            if let error = store.lastSaveError ?? store.credentialError {
+            if let error = store.lastSaveError ?? store.credentialError ?? store.caddyConfigurationError ?? store.tunnelConfigurationError {
                 Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled).padding(8)
             }
         }
     }
 
     private func syncSavedTunnels() {
-        guard store.saveError(.sites) == nil, store.saveError(.tunnelRoutes) == nil,
-              store.saveError(.projects) == nil, store.saveError(.settings) == nil else { return }
-        processController.markTunnelsPending(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites,
-                                             projects: store.appProjects, automaticallyApply: true)
+        processController.markTunnelsPending(store: store, automaticallyApply: true)
     }
 
     private func serviceRow(_ name: String, running: Bool, onToggle: @escaping () -> Void) -> some View {
@@ -176,11 +171,11 @@ public struct ContentView: View {
     }
 
     private func startFrankenPHP() {
-        processController.startFrankenPHP(settings: store.settings, sites: store.sites)
+        processController.startFrankenPHP(store: store)
     }
 
     private func startCloudflared() {
-        processController.applyTunnels(settings: store.settings, routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects, start: true)
+        processController.applyTunnels(store: store, start: true)
     }
 
 }
