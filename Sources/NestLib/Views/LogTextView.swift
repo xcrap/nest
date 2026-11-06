@@ -138,7 +138,7 @@ final class LogContainerView: NSView {
         storage.setAttributedString(NSAttributedString(string: text, attributes: textAttributes))
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         if followTail {
-            textView.scrollToEndOfDocument(nil)
+            scrollToBottom(x: 0)
         } else {
             layoutAll()
             scroll(to: savedOrigin)
@@ -164,7 +164,7 @@ final class LogContainerView: NSView {
         }
 
         if followTail {
-            textView.scrollToEndOfDocument(nil)
+            scrollToBottom(x: scrollView.contentView.bounds.minX)
         } else if let anchor {
             layoutAll()
             restore(anchor, removed: removed)
@@ -211,6 +211,13 @@ final class LogContainerView: NSView {
         let glyph = layoutManager.glyphIndexForCharacter(at: min(character, length - 1))
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
         scroll(to: NSPoint(x: anchor.x, y: line.minY + textView.textContainerOrigin.y + anchor.offset))
+    }
+
+    /// Follows the tail vertically only: `scrollToEndOfDocument` also scrolls sideways to the
+    /// end of the last line, hiding the start of every line when that line is long.
+    private func scrollToBottom(x: CGFloat) {
+        layoutAll()
+        scroll(to: NSPoint(x: x, y: .greatestFiniteMagnitude))
     }
 
     private func scroll(to origin: NSPoint) {

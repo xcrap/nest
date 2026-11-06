@@ -482,7 +482,20 @@ public struct PrerequisiteChecker {
         let anchorPath = "/etc/pf.anchors/dev.nest.app"
         let pfConfPath = "/etc/pf.conf"
 
-        guard FileManager.default.fileExists(atPath: anchorPath) else {
+        // A live redirect is what matters: the installed app's helper may own pf.conf with its
+        // own `app.nest` anchor, which serves this build just as well.
+        if isPortRedirectWorking() {
+            return CheckResult(
+                id: .pfAnchor,
+                category: .networking,
+                name: "Port Redirect (PF)",
+                passed: true,
+                detail: "PF redirect is active. Local requests on ports 80/443 reach FrankenPHP.",
+                fixHint: ""
+            )
+        }
+
+        guard PFRestorePlanner.nestAnchors.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
             return CheckResult(
                 id: .pfAnchor,
                 category: .networking,
@@ -508,9 +521,7 @@ public struct PrerequisiteChecker {
 
         let pfConfLoaded: Bool
         if let content = try? String(contentsOfFile: pfConfPath, encoding: .utf8) {
-            pfConfLoaded =
-                content.contains("rdr-anchor \"\(anchorName)\"") &&
-                content.contains("load anchor \"\(anchorName)\" from \"\(anchorPath)\"")
+            pfConfLoaded = PFRestorePlanner.pfConfLoadsNestAnchor(content) { FileManager.default.fileExists(atPath: $0) }
         } else {
             pfConfLoaded = false
         }
@@ -531,17 +542,6 @@ public struct PrerequisiteChecker {
                 Then reload: sudo pfctl -ef /etc/pf.conf
                 """,
                 fixCommands: ["sudo pfctl -ef /etc/pf.conf"]
-            )
-        }
-
-        if isPortRedirectWorking() {
-            return CheckResult(
-                id: .pfAnchor,
-                category: .networking,
-                name: "Port Redirect (PF)",
-                passed: true,
-                detail: "PF redirect is active. Local requests on ports 80/443 reach FrankenPHP.",
-                fixHint: ""
             )
         }
 
