@@ -3,13 +3,13 @@
   <channel>
     <title>Nest</title>
     <item>
-      <title>Version 0.14.0</title>
-      <sparkle:version>0.14.0</sparkle:version>
-      <sparkle:shortVersionString>0.14.0</sparkle:shortVersionString>
+      <title>Version 0.15.0</title>
+      <sparkle:version>0.15.0</sparkle:version>
+      <sparkle:shortVersionString>0.15.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <sparkle:releaseNotesLink>https://github.com/xcrap/nest/releases/tag/v0.14.0</sparkle:releaseNotesLink>
-      <pubDate>Fri, 06 Nov 2026 23:03:15 +0000</pubDate>
-      <enclosure url="https://github.com/xcrap/nest/releases/download/v0.14.0/Nest-0.14.0.zip" sparkle:edSignature="t5OLtfvY5fZWGpntr2YKs7ysoBrNkYHJrjP/lFJ/zWsxuTqYEC0XrGF2DsmTfy2YV8bUKaQtwjjWjf9Nq7mvBA==" length="3459210" type="application/octet-stream" />
+      <sparkle:releaseNotesLink>https://github.com/xcrap/nest/releases/tag/v0.15.0</sparkle:releaseNotesLink>
+      <pubDate>Fri, 06 Nov 2026 23:08:54 +0000</pubDate>
+      <enclosure url="https://github.com/xcrap/nest/releases/download/v0.15.0/Nest-0.15.0.zip" sparkle:edSignature="EpTzWRKudgwi2vJgC+bYfkIJmvMGdz7bBgBNOem7R2FPUIaUn0GKPI8BZc6/20Z+P7daO4NRiDuWh1oH3YomAQ==" length="3483522" type="application/octet-stream" />
     </item>
   </channel>
 </rss>
