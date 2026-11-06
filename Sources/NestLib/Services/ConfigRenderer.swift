@@ -45,10 +45,17 @@ public struct ConfigRenderer {
             issues.append(contentsOf: NestValidation.caddyPathIssues(frankenphpLogPath, field: "FrankenPHP log path"))
         }
 
+        var runningDomainCounts: [String: Int] = [:]
         for site in sites where site.status == .running {
             for issue in NestValidation.siteIssues(site) {
                 issues.append("\(site.domain): \(issue)")
             }
+            runningDomainCounts[site.domain, default: 0] += 1
+        }
+
+        // Caddy refuses a config that defines the same site address twice.
+        for (domain, count) in runningDomainCounts.sorted(by: { $0.key < $1.key }) where count > 1 {
+            issues.append("\(domain): \(count) running sites use this domain; stop all but one.")
         }
 
         return issues

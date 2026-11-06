@@ -106,21 +106,22 @@ public enum MindImportService {
             : currentSettings.cloudflareSettings.configPath
         let liveSnapshot = loadLiveSnapshot(configPath: liveConfigPath)
 
+        // Mind and the live config only fill gaps: values already set in Nest are kept, and an
+        // empty token in Mind's file never clears the one in the Keychain.
         var settings = currentSettings.cloudflareSettings
         if let cloudflareFile {
-            settings.apiToken = cloudflareFile.apiToken
-            settings.zoneId = cloudflareFile.zoneId
-            settings.accountId = cloudflareFile.accountId
-            settings.tunnelId = cloudflareFile.tunnelId
-            settings.tunnelDomain = cloudflareFile.tunnelDomain
+            settings = settings.fillingEmptyFields(from: CloudflareSettings(
+                apiToken: cloudflareFile.apiToken,
+                zoneId: cloudflareFile.zoneId,
+                accountId: cloudflareFile.accountId,
+                tunnelId: cloudflareFile.tunnelId,
+                tunnelDomain: cloudflareFile.tunnelDomain
+            ))
         }
-
-        if !liveSnapshot.tunnelName.isEmpty {
-            settings.tunnelName = liveSnapshot.tunnelName
-        }
-        if !liveSnapshot.credentialsFilePath.isEmpty {
-            settings.credentialsFilePath = liveSnapshot.credentialsFilePath
-        }
+        settings = settings.fillingEmptyFields(from: CloudflareSettings(
+            tunnelName: liveSnapshot.tunnelName,
+            credentialsFilePath: liveSnapshot.credentialsFilePath
+        ))
         if settings.configPath.isEmpty {
             settings.configPath = liveConfigPath
         }

@@ -74,6 +74,8 @@ public enum ImportValidationError: LocalizedError, Equatable {
     case missingRootPath(siteName: String)
     case invalidDocumentRoot(siteName: String, path: String)
     case duplicateDomain(domain: String)
+    /// The site fails `NestValidation.siteIssues`, so Caddy could not serve it.
+    case invalidSite(siteName: String, issues: [String])
 
     public var errorDescription: String? {
         switch self {
@@ -85,6 +87,8 @@ public enum ImportValidationError: LocalizedError, Equatable {
             return "Site '\(name)' has an invalid document root: \(path)"
         case .duplicateDomain(let domain):
             return "Duplicate domain: \(domain)"
+        case .invalidSite(let name, let issues):
+            return "Site '\(name)' is invalid: \(issues.joined(separator: " "))"
         }
     }
 }

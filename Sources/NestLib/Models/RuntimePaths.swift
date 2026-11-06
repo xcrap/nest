@@ -60,77 +60,65 @@ public struct RuntimePaths: Codable, Equatable, Sendable {
 
     /// Try to detect default Homebrew paths.
     public static func detectDefaults() -> RuntimePaths {
+        detectDefaults(missingFrom: RuntimePaths(), includingOptional: true)
+    }
+
+    /// Detects only the fields that are empty in `current`; every other field is left empty.
+    /// The required FrankenPHP binary is always detected (a file check). Optional binaries, logs
+    /// and php.ini are detected only when `includingOptional` is true, except that php.ini
+    /// detection (which launches FrankenPHP) also runs when FrankenPHP was just found.
+    public static func detectDefaults(missingFrom current: RuntimePaths, includingOptional: Bool) -> RuntimePaths {
         let brewPrefix = "/opt/homebrew"
         let fm = FileManager.default
+        func firstExecutable(_ candidates: [String]) -> String {
+            candidates.first { fm.isExecutableFile(atPath: $0) } ?? ""
+        }
 
         var paths = RuntimePaths()
 
         // FrankenPHP: Homebrew first, then legacy Nest-managed binary
-        let frankenphpCandidates = [
-            "\(brewPrefix)/bin/frankenphp",
-            (AppSettings.nestBinDirectory as NSString).appendingPathComponent("frankenphp"),
-        ]
-        for candidate in frankenphpCandidates {
-            if !candidate.isEmpty && fm.isExecutableFile(atPath: candidate) {
-                paths.frankenphpBinary = candidate
-                break
+        if current.frankenphpBinary.isEmpty {
+            paths.frankenphpBinary = firstExecutable([
+                "\(brewPrefix)/bin/frankenphp",
+                (AppSettings.nestBinDirectory as NSString).appendingPathComponent("frankenphp"),
+            ])
+        }
+
+        if includingOptional {
+            if current.mariadbServer.isEmpty {
+                paths.mariadbServer = firstExecutable(["\(brewPrefix)/bin/mariadbd", "\(brewPrefix)/bin/mysqld"])
             }
-        }
-
-        let mariadbd = "\(brewPrefix)/bin/mariadbd"
-        if fm.isExecutableFile(atPath: mariadbd) {
-            paths.mariadbServer = mariadbd
-        } else {
-            let mysqld = "\(brewPrefix)/bin/mysqld"
-            if fm.isExecutableFile(atPath: mysqld) {
-                paths.mariadbServer = mysqld
+            if current.mariadbClient.isEmpty {
+                paths.mariadbClient = firstExecutable(["\(brewPrefix)/bin/mariadb", "\(brewPrefix)/bin/mysql"])
             }
-        }
-
-        let mariadb = "\(brewPrefix)/bin/mariadb"
-        if fm.isExecutableFile(atPath: mariadb) {
-            paths.mariadbClient = mariadb
-        } else {
-            let mysql = "\(brewPrefix)/bin/mysql"
-            if fm.isExecutableFile(atPath: mysql) {
-                paths.mariadbClient = mysql
+            if current.mysqldump.isEmpty {
+                paths.mysqldump = firstExecutable(["\(brewPrefix)/bin/mariadb-dump", "\(brewPrefix)/bin/mysqldump"])
             }
-        }
-
-        let dump = "\(brewPrefix)/bin/mariadb-dump"
-        if fm.isExecutableFile(atPath: dump) {
-            paths.mysqldump = dump
-        } else {
-            let mysqldumpBin = "\(brewPrefix)/bin/mysqldump"
-            if fm.isExecutableFile(atPath: mysqldumpBin) {
-                paths.mysqldump = mysqldumpBin
+            if current.cloudflaredBinary.isEmpty {
+                paths.cloudflaredBinary = firstExecutable(["\(brewPrefix)/bin/cloudflared"])
             }
-        }
 
-        let cloudflared = "\(brewPrefix)/bin/cloudflared"
-        if fm.isExecutableFile(atPath: cloudflared) {
-            paths.cloudflaredBinary = cloudflared
-        }
-
-        // FrankenPHP log: prefer Homebrew default, then Caddy default
-        let brewFPLog = "\(brewPrefix)/var/log/frankenphp.log"
-        let homeDir = NSHomeDirectory()
-        let caddyLog = "\(homeDir)/.local/share/caddy/logs/default.log"
-        if fm.fileExists(atPath: brewFPLog) {
-            paths.frankenphpLog = brewFPLog
-        } else if fm.fileExists(atPath: caddyLog) {
-            paths.frankenphpLog = caddyLog
-        } else {
-            paths.frankenphpLog = brewFPLog
+            // FrankenPHP log: prefer Homebrew default, then Caddy default
+            if current.frankenphpLog.isEmpty {
+                let brewFPLog = "\(brewPrefix)/var/log/frankenphp.log"
+                let caddyLog = "\(NSHomeDirectory())/.local/share/caddy/logs/default.log"
+                paths.frankenphpLog = !fm.fileExists(atPath: brewFPLog) && fm.fileExists(atPath: caddyLog) ? caddyLog : brewFPLog
+            }
+            if current.mariadbLog.isEmpty {
+                paths.mariadbLog = "\(brewPrefix)/var/mysql/\(Host.current().localizedName ?? "localhost").err"
+            }
+            if current.cloudflaredLog.isEmpty {
+                paths.cloudflaredLog = defaultCloudflaredLog
+            }
         }
 
         // PHP ini: detect from FrankenPHP binary. A stalled PHP startup must not hang the caller.
-        if !paths.frankenphpBinary.isEmpty {
-            paths.phpIniPath = detectPHPIniPath(frankenphpBinary: paths.frankenphpBinary)
+        let frankenphp = current.frankenphpBinary.isEmpty ? paths.frankenphpBinary : current.frankenphpBinary
+        let foundFrankenPHP = current.frankenphpBinary.isEmpty && !paths.frankenphpBinary.isEmpty
+        if current.phpIniPath.isEmpty, includingOptional || foundFrankenPHP,
+           !frankenphp.isEmpty, fm.isExecutableFile(atPath: frankenphp) {
+            paths.phpIniPath = detectPHPIniPath(frankenphpBinary: frankenphp)
         }
-
-        paths.mariadbLog = "\(brewPrefix)/var/mysql/\(Host.current().localizedName ?? "localhost").err"
-        paths.cloudflaredLog = defaultCloudflaredLog
 
         return paths
     }

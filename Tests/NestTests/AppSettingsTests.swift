@@ -54,6 +54,20 @@ enum AppSettingsTests {
             if let original { setenv(key, original, 1) } else { unsetenv(key) }
         }
 
+        // Test: the runtime path detection flag defaults to false for older files and round-trips.
+        do {
+            let older = Data(#"{"runtimePaths": {}, "caddyConfigDirectory": "/tmp/etc", "cloudflareSettings": {}, "mindProjectDirectory": "", "hasCompletedMindMigration": true}"#.utf8)
+            let decoded = try JSONDecoder().decode(AppSettings.self, from: older)
+            assert(!decoded.hasDetectedRuntimePaths, "settings saved before detection was tracked still detect once")
+            var settings = AppSettings()
+            settings.hasDetectedRuntimePaths = true
+            let roundTripped = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+            assert(roundTripped.hasDetectedRuntimePaths, "the detection flag is persisted")
+        } catch {
+            failed += 1
+            print("  FAIL: detection flag decoding threw: \(error)")
+        }
+
         return (passed, failed)
     }
 }

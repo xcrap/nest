@@ -71,6 +71,15 @@ enum ValidationTests {
             assert(NestValidation.yamlScalar("yes") == "\"yes\"", "should quote YAML booleans")
         }
 
+        // Test: only a file that sets some exported Cloudflare value counts as a settings export.
+        do {
+            assert(!CloudflareSettings().hasNonSecretValues, "empty settings have no importable values")
+            assert(!CloudflareSettings(apiToken: "token", tunnelName: "  ").hasNonSecretValues, "a token or blank values alone are not an export")
+            assert(CloudflareSettings(configPath: "/tmp/config.yml").hasNonSecretValues, "any exported field counts")
+            assert(CloudflareSettings.nonSecretKeyNames.contains("tunnelName") && !CloudflareSettings.nonSecretKeyNames.contains("apiToken"),
+                   "exported key names exclude the token")
+        }
+
         return (passed, failed)
     }
 }

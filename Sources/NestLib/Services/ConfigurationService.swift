@@ -79,15 +79,22 @@ public actor ConfigurationService {
         let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let old = FileManager.default.fileExists(atPath: path) ? try Data(contentsOf: url) : nil
-        if let old {
-            let backup = URL(fileURLWithPath: Self.backupPath(for: path))
-            try FileManager.default.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try old.write(to: backup, options: .atomic)
+        let new = Data(content.utf8)
+        // Saving unchanged content rewrites nothing, so the backup keeps the real previous
+        // version for "Restore Previous Version". The apply still runs (e.g. a re-apply).
+        let changed = old != new
+        if changed {
+            if let old {
+                let backup = URL(fileURLWithPath: Self.backupPath(for: path))
+                try FileManager.default.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try old.write(to: backup, options: .atomic)
+            }
+            try new.write(to: url, options: .atomic)
         }
-        try Data(content.utf8).write(to: url, options: .atomic)
         do {
             try await apply?(content)
         } catch {
+            guard changed else { throw error }
             do {
                 if let old { try old.write(to: url, options: .atomic) }
                 else { try FileManager.default.removeItem(at: url) }
@@ -124,33 +131,61 @@ public actor ConfigurationService {
     public func saveCaddySupport(content: String, path: String, settings: AppSettings, running: Bool) async throws -> String {
         await acquire(.files)
         defer { release(.files) }
-        let caddyPath = settings.caddyConfigDirectory + "/Caddyfile"
+        var config = settings.caddyConfigDirectory
+        while config.count > 1 && config.hasSuffix("/") { config.removeLast() }
+        let caddyPath = config + "/Caddyfile"
         let active = try String(contentsOfFile: caddyPath, encoding: .utf8)
         // Validate an isolated copy of all imports; never put a candidate in a live wildcard directory.
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("nest-editor-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(atPath: settings.caddyConfigDirectory + "/snippets", toPath: directory.path + "/snippets")
-        let stagedPath = path.replacingOccurrences(of: settings.caddyConfigDirectory, with: directory.path)
-        if FileManager.default.fileExists(atPath: settings.caddyConfigDirectory + "/security.conf") {
-            try FileManager.default.copyItem(atPath: settings.caddyConfigDirectory + "/security.conf", toPath: directory.path + "/security.conf")
+        let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appendingPathComponent("nest-editor-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: directory) }
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Only these exact live paths are redirected to staged copies. Every other path, such as
+        // another file an override imports from the config directory, keeps pointing at the live file.
+        var mappings: [(live: String, staged: String)] = []
+        for name in ["snippets", "security.conf", "overrides"] {
+            let live = config + "/" + name
+            // The snippets directory is required (it holds php-app); the others are optional.
+            guard name == "snippets" || fm.fileExists(atPath: live) else { continue }
+            try fm.copyItem(atPath: live, toPath: directory.path + "/" + name)
+            mappings.append((live, directory.path + "/" + name))
         }
-        if FileManager.default.fileExists(atPath: settings.caddyConfigDirectory + "/overrides") {
-            try FileManager.default.copyItem(atPath: settings.caddyConfigDirectory + "/overrides", toPath: directory.path + "/overrides")
+        let stagedPath = path.hasPrefix(config + "/")
+            ? directory.path + "/" + String(path.dropFirst(config.count + 1))
+            : directory.path + "/external/" + (path as NSString).lastPathComponent
+        if !mappings.contains(where: { path == $0.live || path.hasPrefix($0.live + "/") }) {
+            mappings.append((path, stagedPath))
         }
-        try FileManager.default.createDirectory(atPath: (stagedPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: (stagedPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         try content.write(toFile: stagedPath, atomically: true, encoding: .utf8)
-        let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
+        let files = fm.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey])
         while let file = files?.nextObject() as? URL {
             if (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
                let text = try? String(contentsOf: file, encoding: .utf8) {
-                try text.replacingOccurrences(of: settings.caddyConfigDirectory, with: directory.path).write(to: file, atomically: true, encoding: .utf8)
+                let redirected = Self.redirectingPaths(in: text, mappings)
+                if redirected != text { try redirected.write(to: file, atomically: true, encoding: .utf8) }
             }
         }
-        try await validateCaddy(active.replacingOccurrences(of: settings.caddyConfigDirectory, with: directory.path), binary: settings.runtimePaths.frankenphpBinary)
+        try await validateCaddy(Self.redirectingPaths(in: active, mappings), binary: settings.runtimePaths.frankenphpBinary)
         let reload = self.reload
         try await commit(content: content, path: path, apply: running ? { _ in try await reload(active) } : nil)
         return running ? "Saved and applied" : "Saved • FrankenPHP stopped"
+    }
+
+    /// Replaces each live path with its staged copy only where it appears as a whole path, or as
+    /// a prefix followed by `/`: `/opt/homebrew/etc2` or `security.conf.bak` are left intact.
+    nonisolated static func redirectingPaths(in text: String, _ mappings: [(live: String, staged: String)]) -> String {
+        var result = text
+        for mapping in mappings.sorted(by: { $0.live.count > $1.live.count }) {
+            let pattern = "(?<![A-Za-z0-9._~/-])" + NSRegularExpression.escapedPattern(for: mapping.live) + "(?![A-Za-z0-9._~-])"
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            result = regex.stringByReplacingMatches(
+                in: result,
+                range: NSRange(result.startIndex..., in: result),
+                withTemplate: NSRegularExpression.escapedTemplate(for: mapping.staged)
+            )
+        }
+        return result
     }
 
     public func applyTunnel(settings: AppSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject],

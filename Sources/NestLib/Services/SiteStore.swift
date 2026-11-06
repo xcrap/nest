@@ -25,6 +25,27 @@ public enum StoreFile: String, CaseIterable, Sendable {
     }
 }
 
+/// Shared ISO 8601 parsers for stored dates. `ISO8601DateFormatter` is thread-safe for parsing,
+/// so the formatters are created once instead of twice per decoded date.
+private enum StoreDateParser {
+    nonisolated(unsafe) static let plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    nonisolated(unsafe) static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    /// Nest writes whole seconds (`.iso8601`), so the plain format is tried first.
+    static func date(from string: String) -> Date? {
+        plain.date(from: string) ?? fractional.date(from: string)
+    }
+}
+
 /// Persists sites and app settings as JSON in the app support directory.
 @MainActor
 public final class SiteStore: ObservableObject {
@@ -158,15 +179,7 @@ public final class SiteStore: ObservableObject {
         dec.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
             let dateString = try container.decode(String.self)
-
-            let fractionalFormatter = ISO8601DateFormatter()
-            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = fractionalFormatter.date(from: dateString) { return date }
-
-            let plainFormatter = ISO8601DateFormatter()
-            plainFormatter.formatOptions = [.withInternetDateTime]
-            if let date = plainFormatter.date(from: dateString) { return date }
-
+            if let date = StoreDateParser.date(from: dateString) { return date }
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Cannot decode date: \(dateString)")
         }
         self.decoder = dec
@@ -176,6 +189,11 @@ public final class SiteStore: ObservableObject {
 
         if !loadSettings() {
             settings = defaults()
+            // Persist first-launch detection (which launches FrankenPHP) instead of repeating it on
+            // every start. An unreadable file is never overwritten.
+            if !unreadableFiles.contains(.settings) {
+                settingsNeedSave = true
+            }
         }
         if loadsCredential {
             loadCredentialIfNeeded()
@@ -258,12 +276,22 @@ public final class SiteStore: ObservableObject {
     private func loadSettings() -> Bool {
         guard let result = loadStoredObject(AppSettings.self, file: .settings) else { return false }
         settings = result.value
-        var migratedRuntimePaths = settings.runtimePaths.fillingMissingValues()
+        // Only empty fields are detected: the required FrankenPHP binary on every launch (a cheap
+        // file check), optional paths and php.ini (which launches FrankenPHP) only once.
+        let current = settings.runtimePaths
+        let detectOptional = !settings.hasDetectedRuntimePaths
+        var migratedRuntimePaths = current.fillingMissingValues(
+            from: RuntimePaths.detectDefaults(missingFrom: current, includingOptional: detectOptional)
+        )
         if migratedRuntimePaths.cloudflaredLog == Self.legacyCloudflaredLog {
             migratedRuntimePaths.cloudflaredLog = RuntimePaths.defaultCloudflaredLog
         }
         if migratedRuntimePaths != settings.runtimePaths {
             settings.runtimePaths = migratedRuntimePaths
+            settingsNeedSave = true
+        }
+        if detectOptional {
+            settings.hasDetectedRuntimePaths = true
             settingsNeedSave = true
         }
         if result.source == .legacy {
@@ -274,22 +302,44 @@ public final class SiteStore: ObservableObject {
 
     @discardableResult
     public func saveSettings() -> Bool {
+        persistSettings(settings)
+    }
+
+    /// Saves `candidate` and only then publishes it, so a failed save leaves memory matching disk.
+    @discardableResult
+    private func persistSettings(_ candidate: AppSettings) -> Bool {
+        let token = candidate.cloudflareSettings.apiToken
+        let previousToken = loadedToken
         do {
-            if loadedToken == nil && settings.cloudflareSettings.apiToken.isEmpty {
+            if loadedToken == nil && token.isEmpty {
                 throw ConfigurationFailure("The Cloudflare token could not be loaded. Reopen Nest to retry Keychain access before saving settings.")
             }
-            if loadedToken != settings.cloudflareSettings.apiToken {
-                try credentialStore.save(settings.cloudflareSettings.apiToken)
-                loadedToken = settings.cloudflareSettings.apiToken
+            if loadedToken != token {
+                try credentialStore.save(token)
+                loadedToken = token
             }
-            let saved = saveEncodable(settings, file: .settings)
-            if saved { settingsNeedSave = false }
-            return saved
         } catch {
             saveErrors[.settings] = error.localizedDescription
             recordPersistenceError(error.localizedDescription)
             return false
         }
+        guard saveEncodable(candidate, file: .settings) else {
+            // Put the previous token back so the Keychain matches the settings still in use.
+            if let previousToken, previousToken != loadedToken {
+                do {
+                    try credentialStore.save(previousToken)
+                    loadedToken = previousToken
+                } catch {
+                    recordPersistenceError(error.localizedDescription)
+                }
+            }
+            return false
+        }
+        if settings != candidate {
+            settings = candidate
+        }
+        settingsNeedSave = false
+        return true
     }
 
     private func loadCredential() {
@@ -438,13 +488,18 @@ public final class SiteStore: ObservableObject {
         }
     }
 
+    /// Backs up `url` once per distinct content: a file that stays broken across launches
+    /// (until it is next saved) reuses its existing backup instead of adding one per launch.
     private func backupFile(_ url: URL, suffix: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        let timestamp = formatter.string(from: Date())
+        let directory = url.deletingLastPathComponent()
+        let prefix = "\(url.lastPathComponent).\(suffix)-"
+        if let existing = existingBackup(of: url, in: directory, prefix: prefix) {
+            return "A backup of this version already exists at \(existing.path)."
+        }
+
+        let timestamp = StoreDateParser.plain.string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        let backupURL = url.deletingLastPathComponent()
-            .appendingPathComponent("\(url.lastPathComponent).\(suffix)-\(timestamp)")
+        let backupURL = directory.appendingPathComponent("\(prefix)\(timestamp)")
 
         do {
             if FileManager.default.fileExists(atPath: backupURL.path) {
@@ -455,6 +510,18 @@ public final class SiteStore: ObservableObject {
         } catch {
             return "Could not back up the \(suffix) file: \(error.localizedDescription)."
         }
+    }
+
+    private func existingBackup(of url: URL, in directory: URL, prefix: String) -> URL? {
+        func fileSize(_ url: URL) -> Int? { try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize }
+        guard let size = fileSize(url),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return nil }
+        // Compare sizes first so only plausible matches are read.
+        let sameSize = names.filter { $0.hasPrefix(prefix) }.sorted()
+            .map { directory.appendingPathComponent($0) }
+            .filter { fileSize($0) == size }
+        guard !sameSize.isEmpty, let current = try? Data(contentsOf: url) else { return nil }
+        return sameSize.first { (try? Data(contentsOf: $0)) == current }
     }
 
     private func recordPersistenceError(_ message: String) {
@@ -520,6 +587,30 @@ public final class SiteStore: ObservableObject {
 
     // MARK: - Site CRUD
 
+    // Every mutation saves the candidate list first and publishes it only once it is durable,
+    // so a failed save leaves memory matching disk; `saveError(_:)` says why it failed.
+
+    @discardableResult
+    private func commitSites(_ candidate: [Site]) -> Bool {
+        guard saveEncodable(candidate, file: .sites) else { return false }
+        sites = candidate
+        return true
+    }
+
+    @discardableResult
+    private func commitProjects(_ candidate: [AppProject]) -> Bool {
+        guard saveEncodable(candidate, file: .projects) else { return false }
+        appProjects = candidate
+        return true
+    }
+
+    @discardableResult
+    private func commitTunnelRoutes(_ candidate: [TunnelRoute]) -> Bool {
+        guard saveEncodable(candidate, file: .tunnelRoutes) else { return false }
+        tunnelRoutes = candidate
+        return true
+    }
+
     public func addSite(name: String, domain: String, rootPath: String, documentRoot: String) -> Site {
         let site = Site(
             name: NestValidation.normalizedName(name),
@@ -527,8 +618,8 @@ public final class SiteStore: ObservableObject {
             rootPath: rootPath.trimmingCharacters(in: .whitespacesAndNewlines),
             documentRoot: NestValidation.normalizedRelativePath(documentRoot)
         )
-        sites.append(site)
-        saveSites()
+        guard commitSites(sites + [site]) else { return site }
+        reconcileTunnelLinks()
         return site
     }
 
@@ -541,8 +632,7 @@ public final class SiteStore: ObservableObject {
         var candidate = sites
         candidate[index] = updated
         // Publish the new record and retarget its tunnels only after the site is durable.
-        guard saveEncodable(candidate, file: .sites) else { return false }
-        sites = candidate
+        guard commitSites(candidate) else { return false }
         if previousDomain != updated.domain {
             retargetTunnelRoutes(fromSiteDomain: previousDomain, to: updated.domain)
         }
@@ -552,31 +642,49 @@ public final class SiteStore: ObservableObject {
 
     /// Tunnel routes follow a renamed site instead of silently losing their link.
     private func retargetTunnelRoutes(fromSiteDomain oldDomain: String, to newDomain: String) {
+        var candidate = tunnelRoutes
         var changed = false
-        for index in tunnelRoutes.indices where tunnelRoutes[index].kind == .php {
-            if tunnelRoutes[index].linkedSiteDomain == oldDomain {
-                tunnelRoutes[index].linkedSiteDomain = newDomain
+        for index in candidate.indices where candidate[index].kind == .php {
+            if candidate[index].linkedSiteDomain == oldDomain {
+                candidate[index].linkedSiteDomain = newDomain
                 changed = true
             }
-            if tunnelRoutes[index].localDomain == oldDomain {
-                tunnelRoutes[index].localDomain = newDomain
+            if candidate[index].localDomain == oldDomain {
+                candidate[index].localDomain = newDomain
                 changed = true
             }
         }
-        if changed { saveTunnelRoutes() }
+        if changed { commitTunnelRoutes(candidate) }
     }
 
-    public func deleteSite(id: String) {
-        sites.removeAll { $0.id == id }
-        saveSites()
+    /// Returns false, leaving the site listed, when the change could not be saved.
+    @discardableResult
+    public func deleteSite(id: String) -> Bool {
+        guard commitSites(sites.filter { $0.id != id }) else { return false }
         reconcileTunnelLinks()
+        return true
     }
 
-    public func setSiteStatus(id: String, status: SiteStatus) {
-        guard let index = sites.firstIndex(where: { $0.id == id }) else { return }
-        sites[index].status = status
-        sites[index].updatedAt = Date()
-        saveSites()
+    /// Returns false when the change could not be saved, or when the site cannot run: an
+    /// invalid site, or a second running site on the same domain, would block every Caddy
+    /// apply. Such a site can still be stopped.
+    @discardableResult
+    public func setSiteStatus(id: String, status: SiteStatus) -> Bool {
+        guard let index = sites.firstIndex(where: { $0.id == id }) else { return false }
+        if status == .running, !runIssues(for: sites[index]).isEmpty { return false }
+        var candidate = sites
+        candidate[index].status = status
+        candidate[index].updatedAt = Date()
+        return commitSites(candidate)
+    }
+
+    /// Why `site` cannot be switched on; empty when it can.
+    public func runIssues(for site: Site) -> [String] {
+        var issues = NestValidation.siteIssues(site)
+        if sites.contains(where: { $0.id != site.id && $0.status == .running && $0.domain == site.domain }) {
+            issues.append("Another running site already uses \(site.domain).")
+        }
+        return issues
     }
 
     public func site(forDomain domain: String) -> Site? {
@@ -602,8 +710,7 @@ public final class SiteStore: ObservableObject {
             command: command.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         // Publish the project only once it is durable; on failure `saveError(.projects)` says why.
-        guard saveEncodable(appProjects + [project], file: .projects) else { return project }
-        appProjects.append(project)
+        guard commitProjects(appProjects + [project]) else { return project }
         reconcileTunnelLinks()
         return project
     }
@@ -616,16 +723,17 @@ public final class SiteStore: ObservableObject {
         updated.updatedAt = Date()
         var candidate = appProjects
         candidate[index] = updated
-        guard saveEncodable(candidate, file: .projects) else { return false }
-        appProjects = candidate
+        guard commitProjects(candidate) else { return false }
         reconcileTunnelLinks()
         return true
     }
 
-    public func deleteProject(id: String) {
-        appProjects.removeAll { $0.id == id }
-        saveProjects()
+    /// Returns false, leaving the project listed, when the change could not be saved.
+    @discardableResult
+    public func deleteProject(id: String) -> Bool {
+        guard commitProjects(appProjects.filter { $0.id != id }) else { return false }
         reconcileTunnelLinks()
+        return true
     }
 
     public func project(forHostname hostname: String) -> AppProject? {
@@ -639,59 +747,84 @@ public final class SiteStore: ObservableObject {
 
     // MARK: - Tunnel CRUD
 
-    public func addTunnelRoute(_ route: TunnelRoute) {
+    /// Returns false, leaving the routes unchanged, when the change could not be saved.
+    @discardableResult
+    public func addTunnelRoute(_ route: TunnelRoute) -> Bool {
         var route = normalizedTunnelRoute(route)
         let taken = Set(tunnelRoutes.map(\.id))
         if route.id.isEmpty || taken.contains(route.id) {
             route.id = Self.uniqueID(base: route.id.isEmpty ? UUID().uuidString : route.id, taken: taken)
         }
-        tunnelRoutes.append(route)
-        saveTunnelRoutes()
+        guard commitTunnelRoutes(tunnelRoutes + [route]) else { return false }
         reconcileTunnelLinks()
+        return true
     }
 
-    public func updateTunnelRoute(_ route: TunnelRoute) {
-        guard let index = tunnelRoutes.firstIndex(where: { $0.id == route.id }) else { return }
+    /// Returns false, leaving the stored route unchanged, when it could not be saved.
+    @discardableResult
+    public func updateTunnelRoute(_ route: TunnelRoute) -> Bool {
+        guard let index = tunnelRoutes.firstIndex(where: { $0.id == route.id }) else { return false }
         var updated = normalizedTunnelRoute(route)
         updated.updatedAt = Date()
-        tunnelRoutes[index] = updated
-        saveTunnelRoutes()
+        var candidate = tunnelRoutes
+        candidate[index] = updated
+        guard commitTunnelRoutes(candidate) else { return false }
         reconcileTunnelLinks()
+        return true
     }
 
-    public func deleteTunnelRoute(id: String) {
-        tunnelRoutes.removeAll { $0.id == id }
-        saveTunnelRoutes()
+    /// Returns false, leaving the route listed, when the change could not be saved.
+    @discardableResult
+    public func deleteTunnelRoute(id: String) -> Bool {
+        commitTunnelRoutes(tunnelRoutes.filter { $0.id != id })
     }
 
     public func tunnelRoute(forHostname hostname: String) -> TunnelRoute? {
         tunnelRoutes.first { $0.publicHostname == hostname }
     }
 
-    public func replaceTunnelRoutes(_ routes: [TunnelRoute]) {
-        tunnelRoutes = Self.deduplicatingIDs(routes.map(normalizedTunnelRoute), id: \.id).0
-        saveTunnelRoutes()
+    /// Returns false, leaving the routes unchanged, when the change could not be saved.
+    @discardableResult
+    public func replaceTunnelRoutes(_ routes: [TunnelRoute]) -> Bool {
+        guard commitTunnelRoutes(Self.deduplicatingIDs(routes.map(normalizedTunnelRoute), id: \.id).0) else { return false }
         reconcileTunnelLinks()
+        return true
     }
 
     @discardableResult
     public func replaceCloudflareSettings(_ cloudflareSettings: CloudflareSettings) -> Bool {
-        settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
-        return saveSettings()
+        var candidate = settings
+        candidate.cloudflareSettings = NestValidation.normalizedCloudflareSettings(cloudflareSettings)
+        return persistSettings(candidate)
     }
 
     public func exportCloudflareSettings() throws -> Data {
         try encoder.encode(settings.cloudflareSettings)
     }
 
+    /// Replaces the Cloudflare settings with an exported file. A file that sets none of the
+    /// known non-secret fields (for example a Sites export) is rejected rather than blanking
+    /// the tunnel configuration.
     public func importCloudflareSettings(from data: Data) throws {
-        let imported = try decoder.decode(CloudflareSettings.self, from: data)
+        let imported: CloudflareSettings
+        do {
+            imported = NestValidation.normalizedCloudflareSettings(try decoder.decode(CloudflareSettings.self, from: data))
+        } catch {
+            throw ConfigurationFailure("This file is not a Cloudflare settings export: \(error.localizedDescription)")
+        }
+        guard imported.hasNonSecretValues else {
+            throw ConfigurationFailure("This file is not a Cloudflare settings export: it sets none of \(CloudflareSettings.nonSecretKeyNames.joined(separator: ", ")). Nothing was imported.")
+        }
         var merged = imported
         if merged.apiToken.isEmpty { merged.apiToken = settings.cloudflareSettings.apiToken }
-        settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(merged)
-        guard saveSettings() else { throw ConfigurationFailure(saveError(.settings) ?? "Could not save imported settings.") }
+        var candidate = settings
+        candidate.cloudflareSettings = merged
+        guard persistSettings(candidate) else { throw ConfigurationFailure(saveError(.settings) ?? "Could not save imported settings.") }
     }
 
+    /// Applies a Mind import all-or-nothing: projects, routes and settings are saved in that
+    /// order and nothing is published unless every save succeeds (earlier files are rolled back).
+    /// Cloudflare values only fill fields that are empty in Nest; a stored token is never cleared.
     public func applyMindImport(_ payload: MindImportPayload) -> MindImportSummary {
         var importedProjects = 0
         var importedRoutes = 0
@@ -722,18 +855,37 @@ public final class SiteStore: ObservableObject {
             }
         }
 
-        appProjects = Self.deduplicatingIDs(updatedProjects.map(normalizedProject), id: \.id, key: AppProject.sanitizedID).0
+        let candidateProjects = Self.deduplicatingIDs(updatedProjects.map(normalizedProject), id: \.id, key: AppProject.sanitizedID).0
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        tunnelRoutes = Self.deduplicatingIDs(updatedRoutes.map(normalizedTunnelRoute), id: \.id).0
+        let candidateRoutes = Self.deduplicatingIDs(updatedRoutes.map(normalizedTunnelRoute), id: \.id).0
             .sorted { $0.publicHostname.localizedCaseInsensitiveCompare($1.publicHostname) == .orderedAscending }
 
-        settings.cloudflareSettings = NestValidation.normalizedCloudflareSettings(payload.cloudflareSettings)
-        settings.mindProjectDirectory = payload.sourceDirectory.path
-        settings.hasCompletedMindMigration = true
+        var candidateSettings = settings
+        candidateSettings.cloudflareSettings = settings.cloudflareSettings
+            .fillingEmptyFields(from: NestValidation.normalizedCloudflareSettings(payload.cloudflareSettings))
+        candidateSettings.mindProjectDirectory = payload.sourceDirectory.path
+        candidateSettings.hasCompletedMindMigration = true
 
-        saveProjects()
-        saveTunnelRoutes()
-        saveSettings()
+        let previousProjects = appProjects
+        let previousRoutes = tunnelRoutes
+        let projectsChanged = candidateProjects != previousProjects
+        let routesChanged = candidateRoutes != previousRoutes
+
+        func failed(_ file: StoreFile) -> MindImportSummary {
+            // Restore what was already written so disk keeps matching the unchanged lists.
+            if file != .projects, projectsChanged { saveEncodable(previousProjects, file: .projects) }
+            if file == .settings, routesChanged { saveEncodable(previousRoutes, file: .tunnelRoutes) }
+            let reason = saveError(file) ?? "\(file.label) could not be saved."
+            return MindImportSummary(importedProjects: 0, importedRoutes: 0,
+                                     warnings: payload.warnings + ["Nothing was imported: \(reason)"])
+        }
+
+        if projectsChanged, !saveEncodable(candidateProjects, file: .projects) { return failed(.projects) }
+        if routesChanged, !saveEncodable(candidateRoutes, file: .tunnelRoutes) { return failed(.tunnelRoutes) }
+        guard persistSettings(candidateSettings) else { return failed(.settings) }
+
+        appProjects = candidateProjects
+        tunnelRoutes = candidateRoutes
         reconcileTunnelLinks()
 
         return MindImportSummary(
@@ -788,12 +940,22 @@ public final class SiteStore: ObservableObject {
                 rootPath: entry.rootPath.trimmingCharacters(in: .whitespacesAndNewlines),
                 documentRoot: NestValidation.normalizedRelativePath(docRoot)
             )
+            // A site Caddy cannot serve (relative root, `../` document root…) is skipped, like
+            // invalid parked folders, so it can never be switched on and block every apply.
+            let issues = NestValidation.siteIssues(site)
+            guard issues.isEmpty else {
+                errors.append(.invalidSite(siteName: name, issues: issues))
+                continue
+            }
             imported.append(site)
         }
 
-        sites.append(contentsOf: imported)
-        saveSites()
-        reconcileTunnelLinks()
+        if !imported.isEmpty {
+            guard commitSites(sites + imported) else {
+                throw ConfigurationFailure(saveError(.sites) ?? "Could not save the imported sites.")
+            }
+            reconcileTunnelLinks()
+        }
 
         return (imported, errors)
     }
@@ -819,22 +981,22 @@ public final class SiteStore: ObservableObject {
             directory: directory,
             existingDomains: Set(sites.map(\.domain))
         )
-        var imported: [Site] = []
-
-        for candidate in scan.candidates {
-            let site = Site(
+        var imported = scan.candidates.map { candidate in
+            Site(
                 name: candidate.name,
                 domain: candidate.domain,
                 rootPath: candidate.rootPath,
                 documentRoot: candidate.documentRoot
             )
-            sites.append(site)
-            imported.append(site)
         }
 
         if !imported.isEmpty {
-            saveSites()
-            reconcileTunnelLinks()
+            // Nothing is imported when the list cannot be saved; `saveError(.sites)` says why.
+            if commitSites(sites + imported) {
+                reconcileTunnelLinks()
+            } else {
+                imported = []
+            }
         }
 
         return ParkedFolderImportSummary(
@@ -891,7 +1053,11 @@ public final class SiteStore: ObservableObject {
         guard !settings.hasCompletedMindMigration else { return }
         // Its results could not all be saved (and the completion flag might never persist,
         // re-running the import over the user's edits on every launch).
-        guard unreadableFiles.isDisjoint(with: [.settings, .projects, .tunnelRoutes]) else { return }
+        let targets: Set<StoreFile> = [.settings, .projects, .tunnelRoutes]
+        guard unreadableFiles.isDisjoint(with: targets) else { return }
+        // The same applies while the Keychain token is unknown (settings cannot be saved, and a
+        // token from Mind would replace the unread one) or a target file is already failing to save.
+        guard credentialLoaded, credentialError == nil, targets.allSatisfy({ saveErrors[$0] == nil }) else { return }
 
         let directory = URL(fileURLWithPath: settings.mindProjectDirectory)
         guard FileManager.default.fileExists(atPath: directory.path) else { return }

@@ -22,7 +22,7 @@ Single Swift Package with four executable targets plus a library:
 - `NestLib`: library target containing models, services, and views
   - `Models/`: `Site`, `RuntimePaths`, `AppSettings`, `MigrationManifest`
   - `Services/`: `SiteStore`, `ProcessController`, `ConfigRenderer`, `MigrationService`, `PrerequisiteChecker`, `PFHelperManager`
-  - `Views/`: `ContentView`, `SitesView`, `SiteFormSheet`, `RuntimePathsView`, `ConfigPreviewView`, `MigrationView`, `EnvironmentChecksView`
+  - `Views/`: `ContentView`, `SitesView`, `SiteFormSheet`, `ProjectsView`, `ProjectFormSheet`, `TunnelsView`, `TunnelFormSheet`, `CloudflareView`, `DNSView`, `RuntimePathsView`, `WorkspaceSettingsView`, `ConfigPreviewView`, `LogsView`, `LogTextView`, `EnvironmentChecksView`
 - `Nest`: executable target with the SwiftUI `@main` app entry point
 - `NestPFHelper`: privileged root daemon embedded in the prod app bundle. Writes `/etc/pf.anchors/app.nest`, repairs `/etc/pf.conf` if macOS resets it, runs `pfctl -Ef` on boot. Registered via `SMAppService.daemon`; dev builds (ad-hoc signed) can't bless it, so they keep the legacy osascript fallback in `ProcessController.reloadPFRules`.
 - `nestctl`: small CLI for automation (`start`, `stop`, `reload`, `render`, `doctor`, `push-cloudflare`). Packaged releases include it next to `Nest.app` in the DMG.

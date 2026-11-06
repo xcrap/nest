@@ -6,19 +6,24 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var cloudflareSettings: CloudflareSettings
     public var mindProjectDirectory: String
     public var hasCompletedMindMigration: Bool
+    /// Set once optional runtime paths (and php.ini, which launches FrankenPHP) were detected,
+    /// so launches only re-detect the required FrankenPHP binary when it is missing.
+    public var hasDetectedRuntimePaths: Bool
 
     public init(
         runtimePaths: RuntimePaths = RuntimePaths(),
         caddyConfigDirectory: String = "/opt/homebrew/etc",
         cloudflareSettings: CloudflareSettings = CloudflareSettings(),
         mindProjectDirectory: String = "",
-        hasCompletedMindMigration: Bool = false
+        hasCompletedMindMigration: Bool = false,
+        hasDetectedRuntimePaths: Bool = false
     ) {
         self.runtimePaths = runtimePaths
         self.caddyConfigDirectory = caddyConfigDirectory
         self.cloudflareSettings = cloudflareSettings
         self.mindProjectDirectory = mindProjectDirectory
         self.hasCompletedMindMigration = hasCompletedMindMigration
+        self.hasDetectedRuntimePaths = hasDetectedRuntimePaths
     }
 
     enum CodingKeys: String, CodingKey {
@@ -27,6 +32,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case cloudflareSettings
         case mindProjectDirectory
         case hasCompletedMindMigration
+        case hasDetectedRuntimePaths
     }
 
     public init(from decoder: Decoder) throws {
@@ -37,6 +43,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         mindProjectDirectory = try container.decodeIfPresent(String.self, forKey: .mindProjectDirectory)
             ?? (NSHomeDirectory() as NSString).appendingPathComponent("projects/mind")
         hasCompletedMindMigration = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedMindMigration) ?? false
+        hasDetectedRuntimePaths = try container.decodeIfPresent(Bool.self, forKey: .hasDetectedRuntimePaths) ?? false
     }
 
     public static func defaultSettings() -> AppSettings {
@@ -45,7 +52,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
             caddyConfigDirectory: "/opt/homebrew/etc",
             cloudflareSettings: CloudflareSettings.detectDefaults(),
             mindProjectDirectory: (NSHomeDirectory() as NSString).appendingPathComponent("projects/mind"),
-            hasCompletedMindMigration: false
+            hasCompletedMindMigration: false,
+            hasDetectedRuntimePaths: true
         )
     }
 

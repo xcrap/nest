@@ -79,6 +79,33 @@ enum MindImportServiceTests {
             print("  FAIL: duplicate hostname import threw: \(error)")
         }
 
+        // Test: Mind's Cloudflare values only fill gaps, and its empty token never replaces Nest's.
+        do {
+            let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nest-mind-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let data = directory.appendingPathComponent("data")
+            try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+            try Data(#"{"apiToken": "", "zoneId": "mind-zone", "accountId": "mind-account", "tunnelId": "mind-id", "tunnelDomain": "mind-id.cfargotunnel.com"}"#.utf8)
+                .write(to: data.appendingPathComponent("cloudflare.json"))
+            let configPath = directory.appendingPathComponent("config.yml").path
+            try "tunnel: live-name\ncredentials-file: /tmp/live.json\ningress:\n  - service: http_status:404\n"
+                .write(toFile: configPath, atomically: true, encoding: .utf8)
+            var settings = AppSettings()
+            settings.cloudflareSettings = CloudflareSettings(apiToken: "nest-token", accountId: "nest-account", tunnelName: "nest-name", configPath: configPath)
+            let payload = try MindImportService.buildPayload(from: directory, existingSites: [], currentSettings: settings)
+            let imported = payload.cloudflareSettings
+            assert(imported.apiToken == "nest-token", "an empty Mind token keeps Nest's token")
+            assert(imported.accountId == "nest-account" && imported.tunnelName == "nest-name", "values set in Nest are kept")
+            assert(imported.zoneId == "mind-zone" && imported.tunnelId == "mind-id", "empty Nest fields are filled from Mind")
+            assert(imported.credentialsFilePath == "/tmp/live.json", "empty Nest fields are filled from the live config")
+
+            let filled = CloudflareSettings(zoneId: "zone").fillingEmptyFields(from: CloudflareSettings(apiToken: "token", zoneId: "other", accountId: "account"))
+            assert(filled.apiToken == "token" && filled.zoneId == "zone" && filled.accountId == "account", "fillingEmptyFields only fills empty fields")
+        } catch {
+            failed += 1
+            print("  FAIL: Mind Cloudflare merge threw: \(error)")
+        }
+
         return (passed, failed)
     }
 }

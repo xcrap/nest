@@ -107,6 +107,35 @@ public struct CloudflareSettings: Codable, Equatable, Sendable {
         return merged
     }
 
+    /// Takes each value from `other` only where this one is empty, so configured values win
+    /// and an empty token never replaces a stored one.
+    public func fillingEmptyFields(from other: CloudflareSettings) -> CloudflareSettings {
+        var merged = self
+        func fill(_ field: WritableKeyPath<CloudflareSettings, String>) {
+            if merged[keyPath: field].isEmpty { merged[keyPath: field] = other[keyPath: field] }
+        }
+        fill(\.apiToken)
+        fill(\.zoneId)
+        fill(\.accountId)
+        fill(\.tunnelId)
+        fill(\.tunnelName)
+        fill(\.tunnelDomain)
+        fill(\.configPath)
+        fill(\.credentialsFilePath)
+        return merged
+    }
+
+    /// The keys an export always contains (the token is never exported).
+    public static let nonSecretKeyNames = [
+        CodingKeys.tunnelName, .tunnelId, .tunnelDomain, .configPath, .credentialsFilePath, .zoneId, .accountId
+    ].map(\.rawValue)
+
+    /// Whether any exported (non-secret) field is set; an unrelated JSON file decodes with none.
+    public var hasNonSecretValues: Bool {
+        [tunnelName, tunnelId, tunnelDomain, configPath, credentialsFilePath, zoneId, accountId]
+            .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     public var hasLocalConfiguration: Bool {
         !tunnelName.isEmpty && !configPath.isEmpty && !credentialsFilePath.isEmpty
     }

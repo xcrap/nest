@@ -107,6 +107,19 @@ enum ConfigRendererTests {
             try? FileManager.default.removeItem(atPath: tmpDir)
         }
 
+        // Test: two running sites on one domain are reported before Caddy rejects the config.
+        do {
+            let running = [
+                Site(name: "One", domain: "app.test", rootPath: "/var/www/one", documentRoot: ".", status: .running),
+                Site(name: "Two", domain: "app.test", rootPath: "/var/www/two", documentRoot: ".", status: .running),
+            ]
+            let issues = renderer.validationIssues(sites: running)
+            assert(issues.count == 1 && issues.first?.contains("2 running sites use this domain") == true, "should report a duplicate running domain once")
+            var stopped = running
+            stopped[1].status = .stopped
+            assert(renderer.validationIssues(sites: stopped).isEmpty, "a stopped site may share a running site's domain")
+        }
+
         return (passed, failed)
     }
 }
