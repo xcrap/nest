@@ -4,40 +4,95 @@ on:
   push:
     tags:
       - "v*"
+  # Manual runs exist only to re-run a release: pick its tag under "Use workflow from".
+  # The first step refuses any other ref.
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Never run two releases at once, and never cancel one halfway through publishing.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Pinned so a runner image update cannot silently change the toolchain that builds releases.
+  XCODE_APP: /Applications/Xcode_26.6.app
+
+# Secrets are passed only to the step that uses them. Build, test and packaging code runs
+# before the signing identity is imported and never sees a secret or a write token.
 jobs:
   release:
     runs-on: macos-26
-    env:
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-      CSC_NAME: ${{ secrets.CSC_NAME }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      SPARKLE_KEY: ${{ secrets.SPARKLE_KEY }}
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Import code signing certificate
+      - name: Refuse non-tag refs
         run: |
-          echo "$CSC_LINK" | base64 --decode > /tmp/cert.p12
-          security create-keychain -p "" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          security import /tmp/cert.p12 -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
-          rm /tmp/cert.p12
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error title=Not a release tag::Releases run only from a v* tag, got '$GITHUB_REF'. For a manual run, pick the tag under 'Use workflow from'."
+            exit 1
+          fi
 
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Keep the write token out of .git/config; only the appcast push step uses it.
+          persist-credentials: false
+
+      - name: Verify version.txt matches the tag
+        run: |
+          VERSION=$(cat version.txt)
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version.txt must contain X.Y.Z, got '$VERSION'"
+            exit 1
+          fi
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error title=Tag does not match version.txt::Tag $GITHUB_REF_NAME, version.txt v$VERSION. Run make bump, commit, and tag that commit."
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Refuse versions older than the live appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fail before publishing anything rather than after the release is public.
+          LIVE=$(gh api "repos/$GITHUB_REPOSITORY/contents/appcast.xml?ref=main" -H "Accept: application/vnd.github.raw" \
+            | sed -n 's|.*<sparkle:version>\(.*\)</sparkle:version>.*|\1|p' | sort -V | tail -1)
+          NEWEST=$(printf '%s\n%s\n' "$LIVE" "$VERSION" | sort -V | tail -1)
+          if [ "$NEWEST" != "$VERSION" ]; then
+            echo "::error title=Older than the live release::appcast.xml on main already lists $LIVE; refusing to release $VERSION."
+            exit 1
+          fi
+          echo "Live appcast version: ${LIVE:-none}; releasing $VERSION"
+
+      - name: Select Xcode
+        run: |
+          if [ ! -d "$XCODE_APP" ]; then
+            echo "::error::$XCODE_APP is not on this runner image. Installed:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+          swift --version
+
+      # No .build cache here on purpose: the restored tree would supply the Sparkle.framework
+      # that gets Developer ID-signed and shipped, and the sign_update binary that reads
+      # SPARKLE_KEY. Releases build from a clean checkout; CI uses the cache.
       - name: Resolve dependencies
         run: swift package resolve
 
       - name: Check Apple notarization account
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set +e
           OUTPUT=$(xcrun notarytool history \
@@ -57,10 +112,30 @@ jobs:
       - name: Run tests
         run: make test
 
-      - name: Build and sign
+      - name: Build app bundle
+        run: make package
+
+      - name: Import code signing certificate
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
-          set -euo pipefail
-          make package
+          CERT="$RUNNER_TEMP/cert.p12"
+          trap 'rm -f "$CERT"' EXIT
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          echo "$CSC_LINK" | base64 --decode > "$CERT"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import "$CERT" -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+      - name: Sign app and CLI
+        env:
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+        run: |
           # Sign inside-out without --deep: --deep would stamp the app's entitlements onto the
           # root PF helper and Sparkle's helpers. Nested code gets hardened runtime only.
           SPARKLE=dist/Nest.app/Contents/Frameworks/Sparkle.framework/Versions/B
@@ -84,32 +159,66 @@ jobs:
             exit 1
           fi
 
-      - name: Create DMG and notarize
+      - name: Create and sign DMG
+        env:
+          CSC_NAME: ${{ secrets.CSC_NAME }}
         run: |
-          VERSION=$(cat version.txt)
           mkdir -p .dmg-staging
           cp -R dist/Nest.app .dmg-staging/
           cp dist/nestctl .dmg-staging/
           ln -sf /Applications .dmg-staging/Applications
           hdiutil create -volname "Nest" -srcfolder .dmg-staging -ov -format UDZO "dist/Nest-${VERSION}.dmg"
           rm -rf .dmg-staging
+          # An unsigned DMG fails Gatekeeper assessment ("no usable signature") even when stapled.
+          codesign --force --sign "$CSC_NAME" --timestamp "dist/Nest-${VERSION}.dmg"
+          codesign --verify --strict --verbose=2 "dist/Nest-${VERSION}.dmg"
+
+      - name: Notarize and staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
           xcrun notarytool submit "dist/Nest-${VERSION}.dmg" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --wait
           xcrun stapler staple "dist/Nest-${VERSION}.dmg"
+          # Notarizing the DMG also issues a ticket for the app inside it. Staple it to the app
+          # too, so the Sparkle ZIP below carries its ticket and passes Gatekeeper offline.
+          xcrun stapler staple dist/Nest.app
+
+      - name: Verify Gatekeeper acceptance
+        run: |
+          assess() {
+            local target=$1 output
+            shift
+            xcrun stapler validate "$target"
+            if ! output=$(spctl -a -vv "$@" "$target" 2>&1); then
+              echo "$output"
+              echo "::error::Gatekeeper rejected $target"
+              return 1
+            fi
+            echo "$output"
+            if [[ "$output" != *"source=Notarized Developer ID"* ]]; then
+              echo "::error::$target was not assessed as Notarized Developer ID"
+              return 1
+            fi
+          }
+          assess dist/Nest.app -t exec
+          assess "dist/Nest-${VERSION}.dmg" -t open --context context:primary-signature
 
       - name: Create Sparkle update ZIP
-        run: |
-          VERSION=$(cat version.txt)
-          ditto -c -k --keepParent dist/Nest.app "dist/Nest-${VERSION}.zip"
+        run: ditto -c -k --keepParent dist/Nest.app "dist/Nest-${VERSION}.zip"
 
       - name: Generate Sparkle appcast
+        env:
+          SPARKLE_KEY: ${{ secrets.SPARKLE_KEY }}
         run: |
-          set -euo pipefail
-          VERSION=$(cat version.txt)
-          DOWNLOAD_URL="https://github.com/xcrap/nest/releases/download/v${VERSION}/Nest-${VERSION}.zip"
+          RELEASE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases"
+          DOWNLOAD_URL="${RELEASE_URL}/download/v${VERSION}/Nest-${VERSION}.zip"
+          NOTES_URL="${RELEASE_URL}/tag/v${VERSION}"
           # stdout only: warnings on stderr must never end up inside the XML.
           SIGN_OUTPUT=$(.build/artifacts/sparkle/Sparkle/bin/sign_update "dist/Nest-${VERSION}.zip" -f <(echo "$SPARKLE_KEY"))
           ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2 || true)
@@ -118,7 +227,8 @@ jobs:
             echo "::error::sign_update did not return a signature and length: $SIGN_OUTPUT"
             exit 1
           fi
-          cat > appcast.xml << EOF
+          # Written to dist/ (git-ignored) so the push step can lay it onto a fresh main checkout.
+          cat > dist/appcast.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.net/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
             <channel>
@@ -128,6 +238,7 @@ jobs:
                 <sparkle:version>${VERSION}</sparkle:version>
                 <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
                 <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <sparkle:releaseNotesLink>${NOTES_URL}</sparkle:releaseNotesLink>
                 <pubDate>$(date -R)</pubDate>
                 <enclosure url="${DOWNLOAD_URL}" sparkle:edSignature="${ED_SIGNATURE}" length="${ED_LENGTH}" type="application/octet-stream" />
               </item>
@@ -135,43 +246,70 @@ jobs:
           </rss>
           EOF
           # appcast.xml on main is the live update feed; never publish a malformed one.
-          xmllint --noout appcast.xml
-
-      - name: Clean existing release assets
-        run: |
-          VERSION=$(cat version.txt)
-          for asset in $(gh release view "v${VERSION}" --json assets --jq '.assets[].name' 2>/dev/null); do
-            gh release delete-asset "v${VERSION}" "$asset" --yes 2>/dev/null || true
-          done
-        env:
-          GH_TOKEN: ${{ github.token }}
+          xmllint --noout dist/appcast.xml
 
       - name: Publish GitHub release
-        uses: ncipollo/release-action@v1
-        with:
-          allowUpdates: true
-          generateReleaseNotes: true
-          artifacts: "dist/Nest-*.dmg,dist/Nest-*.zip"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="v${VERSION}"
+          ASSETS=("dist/Nest-${VERSION}.dmg" "dist/Nest-${VERSION}.zip")
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Re-run for an existing release: replace the same-named assets in place.
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" --verify-tag --title "$TAG" --generate-notes
+          fi
 
       - name: Push appcast to main
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add appcast.xml
-          if ! git diff --cached --quiet; then
-            git commit -m "Update appcast for v$(cat version.txt)"
-          else
-            echo "appcast.xml unchanged; nothing to push"
-            exit 0
-          fi
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::$AUTH"
+          git_auth() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" "$@"; }
+          MAIN="$RUNNER_TEMP/appcast-main"
           for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git rebase origin/main
-            if git push origin HEAD:main; then
+            [ "$attempt" -eq 1 ] || sleep $((attempt * 3))
+            # Start from a fresh origin/main every attempt instead of rebasing a local commit.
+            if ! git_auth fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main; then
+              echo "fetch attempt $attempt failed, retrying..."
+              continue
+            fi
+            rm -rf "$MAIN"
+            git worktree prune
+            git worktree add --detach "$MAIN" origin/main
+            LIVE=""
+            if [ -f "$MAIN/appcast.xml" ]; then
+              LIVE=$(sed -n 's|.*<sparkle:version>\(.*\)</sparkle:version>.*|\1|p' "$MAIN/appcast.xml" | sort -V | tail -1)
+            fi
+            NEWEST=$(printf '%s\n%s\n' "$LIVE" "$VERSION" | sort -V | tail -1)
+            if [ "$NEWEST" != "$VERSION" ]; then
+              echo "::error title=Main lists a newer version::appcast.xml on main already lists $LIVE; not replacing it with $VERSION."
+              exit 1
+            fi
+            cp dist/appcast.xml "$MAIN/appcast.xml"
+            git -C "$MAIN" add appcast.xml
+            if git -C "$MAIN" diff --cached --quiet; then
+              echo "appcast.xml on main is already up to date"
+              exit 0
+            fi
+            git -C "$MAIN" \
+              -c user.name="github-actions[bot]" \
+              -c user.email="github-actions[bot]@users.noreply.github.com" \
+              commit -m "Update appcast for v${VERSION}"
+            if git_auth -C "$MAIN" push origin HEAD:refs/heads/main; then
               exit 0
             fi
             echo "push attempt $attempt rejected, retrying..."
-            sleep 3
           done
-          echo "failed to push appcast update after retries"
+          echo "::error title=Appcast not published::The v${VERSION} release is public but appcast.xml on main was not updated. Re-run this job from the tag."
           exit 1
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          if [ -e "$HOME/Library/Keychains/build.keychain-db" ]; then
+            security delete-keychain build.keychain
+          fi

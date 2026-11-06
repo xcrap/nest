@@ -3,13 +3,18 @@ SHELL := /bin/zsh
 APP_NAME := Nest
 DEV_BUNDLE_ID := dev.nest.app
 RELEASE_BUNDLE_ID := app.nest
-BUILD_DIR := .build/release
-DEBUG_BUILD_DIR := .build/arm64-apple-macosx/debug
+# Ask SwiftPM where products land: the layout differs between toolchains
+# (.build/<triple>/release vs .build/out/Products/Release). Each is computed on first use only.
+BUILD_DIR = $(eval BUILD_DIR := $$(shell swift build -c release --show-bin-path))$(BUILD_DIR)
+DEBUG_BUILD_DIR = $(eval DEBUG_BUILD_DIR := $$(shell swift build -c debug --show-bin-path))$(DEBUG_BUILD_DIR)
 DIST_DIR := dist
 APP_BUNDLE := $(DIST_DIR)/$(APP_NAME).app
 DEV_APP_BUNDLE := .build/$(APP_NAME)-dev.app
 VERSION := $(shell cat version.txt 2>/dev/null || echo 0.0.0)
 BUILD_ID := $(shell date -u +%Y%m%d%H%M%S)-$(shell git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)
+APP_RPATH := @executable_path/../Frameworks
+# Adds APP_RPATH to binary $(1) unless it is already there. Any install_name_tool error fails the build.
+ensure_app_rpath = if otool -l '$(1)' | awk '/cmd LC_RPATH/ { rpath = 1; next } rpath && $$1 == "path" { print $$2; rpath = 0 }' | grep -qxF '$(APP_RPATH)'; then echo 'rpath $(APP_RPATH) already in $(1)'; else echo 'Adding rpath $(APP_RPATH) to $(1)'; install_name_tool -add_rpath '$(APP_RPATH)' '$(1)'; fi
 DEV_PROCESS_PATTERN := '$(CURDIR)/[.]build/(arm64-apple-macosx/debug/Nest|Nest-dev[.]app/Contents/MacOS/Nest)([[:space:]]|$$)'
 
 .PHONY: dev build test run package dmg clean bump
@@ -31,7 +36,7 @@ dev:
 	cp $(DEBUG_BUILD_DIR)/Nest $(DEV_APP_BUNDLE)/Contents/MacOS/Nest
 	cp scripts/AppIcon.icns $(DEV_APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	cp -R $(DEBUG_BUILD_DIR)/Sparkle.framework $(DEV_APP_BUNDLE)/Contents/Frameworks/
-	install_name_tool -add_rpath @executable_path/../Frameworks $(DEV_APP_BUNDLE)/Contents/MacOS/Nest 2>/dev/null || true
+	@$(call ensure_app_rpath,$(DEV_APP_BUNDLE)/Contents/MacOS/Nest)
 	sed 's/$${VERSION}/$(VERSION)/g; s/$${BUILD_ID}/$(BUILD_ID)/g; s/$${BUNDLE_ID}/$(DEV_BUNDLE_ID)/g' \
 		scripts/Info.plist > $(DEV_APP_BUNDLE)/Contents/Info.plist
 	codesign --force --deep --sign - --timestamp=none $(DEV_APP_BUNDLE)
@@ -50,8 +55,8 @@ package: build
 	cp scripts/AppIcon.icns $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	cp scripts/app.nest.pfhelper.plist $(APP_BUNDLE)/Contents/Library/LaunchDaemons/app.nest.pfhelper.plist
 	mkdir -p $(APP_BUNDLE)/Contents/Frameworks
-	cp -R .build/arm64-apple-macosx/release/Sparkle.framework $(APP_BUNDLE)/Contents/Frameworks/
-	install_name_tool -add_rpath @executable_path/../Frameworks $(APP_BUNDLE)/Contents/MacOS/Nest 2>/dev/null || true
+	cp -R $(BUILD_DIR)/Sparkle.framework $(APP_BUNDLE)/Contents/Frameworks/
+	@$(call ensure_app_rpath,$(APP_BUNDLE)/Contents/MacOS/Nest)
 	sed 's/$${VERSION}/$(VERSION)/g; s/$${BUILD_ID}/$(BUILD_ID)/g; s/$${BUNDLE_ID}/$(RELEASE_BUNDLE_ID)/g' \
 		scripts/Info.plist > $(APP_BUNDLE)/Contents/Info.plist
 	codesign --force --deep --sign - --timestamp=none $(APP_BUNDLE)
