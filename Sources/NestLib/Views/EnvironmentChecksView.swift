@@ -267,6 +267,14 @@ public struct EnvironmentChecksView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
+                // Without the helper, Nest repairs PF with an administrator prompt and stops asking
+                // after one is declined or fails; this is the explicit way to ask again.
+                if check.id == .pfAnchor, !check.passed, helperStatus != .enabled, processController.frankenphpRunning {
+                    Button("Retry Repair") { retryPortRedirectRepair() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Ask for an administrator password to reload the port redirect rules")
+                }
             }
             if !check.passed && !check.fixHint.isEmpty {
                 Text(check.fixHint)
@@ -413,8 +421,18 @@ public struct EnvironmentChecksView: View {
         } else {
             helperMessage = "Helper repair could not be requested. Install or approve the helper first."
         }
-        // launchd throttles the helper to one run every 5 seconds. The wait is cancelled with
-        // the view, so a closed tab never re-runs checks behind the user's back.
+        // launchd throttles the helper to one run every 5 seconds.
+        scheduleRecheck()
+    }
+
+    private func retryPortRedirectRepair() {
+        processController.retryPortRedirectRepair()
+        helperMessage = "Retrying the port redirect repair. Checks will refresh in a few seconds."
+        scheduleRecheck()
+    }
+
+    /// The wait is cancelled with the view, so a closed tab never re-runs checks behind the user's back.
+    private func scheduleRecheck() {
         delayedRecheck?.cancel()
         delayedRecheck = Task {
             try? await Task.sleep(for: .seconds(6))

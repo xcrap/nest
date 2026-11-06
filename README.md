@@ -102,6 +102,7 @@ FrankenPHP, MariaDB, and dnsmasq all run via `brew services`.
 - `Sources/NestLib/`: library target (models, services, views)
 - `Sources/Nest/`: app entry point (`@main`)
 - `Sources/NestPFHelper/`: privileged root daemon for PF port redirects (prod bundle only)
+- `Sources/NestPFCore/`: testable `/etc/pf.conf` editing logic used by the helper
 - `Sources/NestCTL/`: `nestctl` command-line helper
 - `Tests/NestTests/`: test runner
 - `scripts/`: Info.plist template, entitlements, PF helper launchd plist
