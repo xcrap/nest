@@ -33,9 +33,14 @@ enum ProjectLaunchPlannerTests {
         assert(plan.definition.programArguments == ["/usr/bin/env", "bun", "run", "start"], "should build direct command")
         assert(plan.definition.environment["PATH"] == "/custom/bin:/usr/bin", "should set launch path")
         assert(plan.definition.environment["PORT"] == "3999", "should set port environment")
-        assert(plan.definition.environment["HOST"] == "0.0.0.0", "should set host environment")
+        assert(plan.definition.environment["HOST"] == "127.0.0.1", "should bind dev servers to loopback")
         assert(plan.definition.environment["NODE_ENV"] == "production", "should merge command environment")
         assert(plan.definition.keepAlive == false, "project launch agents should not keep alive")
+
+        var lan = project
+        lan.command = "HOST=0.0.0.0 bun run dev"
+        let lanPlan = ProjectLaunchPlanner.plan(for: lan, launchPath: "/usr/bin")
+        assert(lanPlan.definition.environment["HOST"] == "0.0.0.0", "a command can opt in to network access")
 
         return (passed, failed)
     }

@@ -29,7 +29,9 @@ public enum ProjectLaunchPlanner {
         let environment = [
             "PATH": launchPath,
             "PORT": "\(project.port)",
-            "HOST": "0.0.0.0"
+            // Loopback only: a dev server must not be reachable from the local network (public Wi-Fi).
+            // cloudflared reaches it on localhost; a project can still opt in with `HOST=0.0.0.0 …`.
+            "HOST": ProjectCommandResolver.loopbackHost
         ].merging(resolvedCommand.environmentOverrides) { _, override in override }
 
         return ProjectLaunchPlan(

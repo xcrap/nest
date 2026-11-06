@@ -78,6 +78,8 @@ public final class SiteStore: ObservableObject {
     private enum StoreSource {
         case envelope
         case legacy
+        /// Some records could not be decoded: the file on disk is still the only complete copy.
+        case partial
     }
 
     private struct LoadedValue<T> {
@@ -209,7 +211,7 @@ public final class SiteStore: ObservableObject {
         guard let result = loadStoredArray(Site.self, file: .sites) else { return }
         let (unique, changed) = Self.deduplicatingIDs(result.value, id: \.id)
         sites = unique
-        if result.source == .legacy || changed {
+        if shouldRewriteAtLoad(result, idsChanged: changed) {
             saveSites()
         }
     }
@@ -226,7 +228,7 @@ public final class SiteStore: ObservableObject {
         if changed {
             recordPersistenceError("Some projects shared an ID (and so a launch agent and log file); the duplicates were given new IDs.")
         }
-        if result.source == .legacy || changed {
+        if shouldRewriteAtLoad(result, idsChanged: changed) {
             saveProjects()
         }
     }
@@ -240,7 +242,7 @@ public final class SiteStore: ObservableObject {
         guard let result = loadStoredArray(TunnelRoute.self, file: .tunnelRoutes) else { return }
         let (unique, changed) = Self.deduplicatingIDs(result.value, id: \.id)
         tunnelRoutes = unique
-        if result.source == .legacy || changed {
+        if shouldRewriteAtLoad(result, idsChanged: changed) {
             saveTunnelRoutes()
         }
     }
@@ -370,20 +372,36 @@ public final class SiteStore: ObservableObject {
         if isEnvelope(data) {
             if let partial = try? decoder.decode(LossyEnvelope<Element>.self, from: data) {
                 guard isSupportedSchema(partial.schemaVersion, file: file) else { return nil }
-                reportSkippedRecords(partial.payload.skipped, file: file)
-                return LoadedValue(value: partial.payload.elements, source: .envelope)
+                return lossyLoad(partial.payload, file: file, source: .envelope)
             }
         } else if let legacy = try? decoder.decode([Element].self, from: data) {
             let backupMessage = backupFile(url(for: file), suffix: "legacy")
             recordPersistenceError("Migrated legacy \(file.label) storage to schema version \(StoreSchema.currentVersion). \(backupMessage)")
             return LoadedValue(value: legacy, source: .legacy)
         } else if let partial = try? decoder.decode(LossyArray<Element>.self, from: data) {
-            reportSkippedRecords(partial.skipped, file: file)
-            return LoadedValue(value: partial.elements, source: .legacy)
+            return lossyLoad(partial, file: file, source: .legacy)
         }
 
         markUnreadable(file, reason: "Cannot decode \(file.label): \(envelopeError.localizedDescription).")
         return nil
+    }
+
+    /// Readable records are kept in memory, but a partial load is never written back at launch.
+    /// When no record at all could be read, the file is treated as unreadable so that no later
+    /// save can replace every record with an empty or brand-new list.
+    private func lossyLoad<Element>(_ partial: LossyArray<Element>, file: StoreFile, source: StoreSource) -> LoadedValue<[Element]>? {
+        guard partial.skipped > 0 else { return LoadedValue(value: partial.elements, source: source) }
+        guard !partial.elements.isEmpty else {
+            markUnreadable(file, reason: "Cannot decode any of the \(partial.skipped) \(file.label) record(s).")
+            return nil
+        }
+        reportSkippedRecords(partial.skipped, file: file)
+        return LoadedValue(value: partial.elements, source: .partial)
+    }
+
+    /// Rewrites a file at load only when every record on disk survives the rewrite.
+    private func shouldRewriteAtLoad<T>(_ result: LoadedValue<T>, idsChanged: Bool) -> Bool {
+        result.source == .legacy || (idsChanged && result.source != .partial)
     }
 
     private func reportSkippedRecords(_ count: Int, file: StoreFile) {
@@ -583,19 +601,25 @@ public final class SiteStore: ObservableObject {
             port: port,
             command: command.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        // Publish the project only once it is durable; on failure `saveError(.projects)` says why.
+        guard saveEncodable(appProjects + [project], file: .projects) else { return project }
         appProjects.append(project)
-        saveProjects()
         reconcileTunnelLinks()
         return project
     }
 
-    public func updateProject(_ project: AppProject) {
-        guard let index = appProjects.firstIndex(where: { $0.id == project.id }) else { return }
+    /// Returns false, leaving the stored project unchanged, when it could not be saved.
+    @discardableResult
+    public func updateProject(_ project: AppProject) -> Bool {
+        guard let index = appProjects.firstIndex(where: { $0.id == project.id }) else { return false }
         var updated = normalizedProject(project)
         updated.updatedAt = Date()
-        appProjects[index] = updated
-        saveProjects()
+        var candidate = appProjects
+        candidate[index] = updated
+        guard saveEncodable(candidate, file: .projects) else { return false }
+        appProjects = candidate
         reconcileTunnelLinks()
+        return true
     }
 
     public func deleteProject(id: String) {

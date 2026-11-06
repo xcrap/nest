@@ -5,15 +5,17 @@ import Foundation
 public enum LocalRedirectProbe {
     /// Nest renders `localhost { tls internal; respond 204 }`, so HTTPS answers exactly 204.
     /// Plain HTTP is redirected to HTTPS by Caddy, which identifies itself in `Server`.
+    /// Both probes force IPv4: the PF rules redirect `inet` only and `.test` resolves to 127.0.0.1,
+    /// while curl would try `::1` first and could reach another server listening on `[::]:443`.
     public static func isRedirectReachingCaddy() -> Bool {
         let https = SystemProcess.capture("/usr/bin/curl", arguments: [
-            "--silent", "--insecure", "--output", "/dev/null",
+            "--silent", "--ipv4", "--insecure", "--output", "/dev/null",
             "--write-out", "%{http_code}", "--max-time", "2", "https://localhost:443/"
         ], timeout: 4)
         guard https.status == 0, https.output.trimmingCharacters(in: .whitespacesAndNewlines) == "204" else { return false }
 
         let http = SystemProcess.capture("/usr/bin/curl", arguments: [
-            "--silent", "--output", "/dev/null", "--dump-header", "-", "--max-time", "2", "http://localhost:80/"
+            "--silent", "--ipv4", "--output", "/dev/null", "--dump-header", "-", "--max-time", "2", "http://localhost:80/"
         ], timeout: 4)
         guard http.status == 0 else { return false }
         return isCaddyResponse(headers: http.output)

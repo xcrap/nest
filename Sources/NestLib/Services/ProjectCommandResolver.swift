@@ -11,6 +11,9 @@ public struct ProjectCommandSpec: Equatable, Sendable {
 }
 
 public enum ProjectCommandResolver {
+    /// Detected dev servers listen on loopback only; see `ProjectLaunchPlanner`.
+    public static let loopbackHost = "127.0.0.1"
+
     private struct ParsedProjectCommand: Sendable {
         let arguments: [String]
         let environmentAssignments: [String: String]
@@ -42,10 +45,10 @@ public enum ProjectCommandResolver {
         let scripts = json["scripts"] as? [String: Any] ?? [:]
 
         if dependencies["next"] != nil {
-            return directCommand(arguments: ["bun", "x", "next", "start", "-p", "\(port)"])
+            return directCommand(arguments: ["bun", "x", "next", "start", "-H", loopbackHost, "-p", "\(port)"])
         }
         if dependencies["vite"] != nil {
-            return directCommand(arguments: ["bun", "x", "vite", "--host", "--port", "\(port)"])
+            return directCommand(arguments: ["bun", "x", "vite", "--host", loopbackHost, "--port", "\(port)"])
         }
         if scripts["start"] != nil {
             return directCommand(arguments: ["bun", "run", "start"])

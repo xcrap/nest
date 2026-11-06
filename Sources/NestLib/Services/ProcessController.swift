@@ -146,8 +146,7 @@ public final class ProcessController: ObservableObject {
     public nonisolated static let legacyCloudflaredLaunchAgentLabels = ["app.nest.cloudflared"]
     public init(applyTunnel: @escaping TunnelApply = { settings, routes, sites, projects, running, push in
         try await ConfigurationService.shared.applyTunnel(settings: settings, routes: routes, sites: sites, projects: projects,
-            running: running, push: push, restart: { try await ProcessController.restartConnector(settings: settings) },
-            pushConfiguration: { try await CloudflareService.publishTunnel(settings: settings.cloudflareSettings, routes: routes, sites: sites, projects: projects) })
+            running: running, push: push, restart: { try await ProcessController.restartConnector(settings: settings) })
     }, probeRoute: @escaping (String) async -> RouteHealth = { await RouteHealthService().check(hostname: $0) },
        refreshDNS: @escaping () async throws -> Void = { try await RouteHealthService.refreshMacDNS() }) {
         self.applyTunnel = applyTunnel

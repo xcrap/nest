@@ -67,6 +67,61 @@ enum RobustnessTests {
             assert(try Data(contentsOf: directory.appendingPathComponent("sites.json")) == corrupt, "should leave the original bytes untouched")
         } catch { fail("unreadable file protection", error) }
 
+        // Test: a legacy array with unreadable records is not rewritten at launch.
+        do {
+            let directory = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let sitesURL = directory.appendingPathComponent("sites.json")
+            let legacy = try JSONSerialization.data(withJSONObject: [siteJSON(id: "a", domain: "a.test"), siteJSON(id: "b", domain: "b.test", status: "paused")])
+            try legacy.write(to: sitesURL)
+
+            let loaded = store(in: directory)
+            assert(loaded.sites.map(\.id) == ["a"], "should keep readable legacy sites")
+            assert(try Data(contentsOf: sitesURL) == legacy, "should not rewrite a partially readable legacy file at launch")
+        } catch { fail("partial legacy load", error) }
+
+        // Test: a list where no record can be read is protected like a corrupt file.
+        for (label, makeData) in [
+            ("legacy", { try JSONSerialization.data(withJSONObject: [siteJSON(id: "a", domain: "a.test", status: "paused")]) }),
+            ("envelope", { try envelope([siteJSON(id: "a", domain: "a.test", status: "paused")]) })
+        ] as [(String, () throws -> Data)] {
+            do {
+                let directory = temporaryDirectory()
+                defer { try? FileManager.default.removeItem(at: directory) }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let sitesURL = directory.appendingPathComponent("sites.json")
+                let original = try makeData()
+                try original.write(to: sitesURL)
+
+                let loaded = store(in: directory)
+                assert(loaded.unreadableFiles.contains(.sites), "\(label): should flag a list with no readable record")
+                _ = loaded.addSite(name: "New", domain: "new", rootPath: "/Users/test/new", documentRoot: ".")
+                assert(loaded.saveError(.sites) != nil, "\(label): should refuse to replace every record")
+                assert(try Data(contentsOf: sitesURL) == original, "\(label): should leave the original bytes untouched")
+            } catch { fail("fully unreadable \(label) list", error) }
+        }
+
+        // Test: a project that cannot be saved is neither published nor kept in memory.
+        do {
+            let directory = temporaryDirectory()
+            defer {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
+                try? FileManager.default.removeItem(at: directory)
+            }
+            let projects = store(in: directory)
+            var blog = projects.addProject(name: "Blog", hostname: "blog.example.com", directory: "/tmp/blog", port: 3000, command: "")
+            assert(projects.saveError(.projects) == nil, "should save a new project")
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+
+            blog.port = 4000
+            assert(!projects.updateProject(blog), "should report a failed project save")
+            assert(projects.appProjects.first?.port == 3000, "should keep the stored project after a failed save")
+            assert(projects.saveError(.projects) != nil, "should explain the failed project save")
+            _ = projects.addProject(name: "Shop", hostname: "shop.example.com", directory: "/tmp/shop", port: 3001, command: "")
+            assert(projects.appProjects.map(\.id) == [blog.id], "should not list a project that was never saved")
+        } catch { fail("project save failure", error) }
+
         // Test: a newer schema is not downgraded by an older app.
         do {
             let directory = temporaryDirectory()
@@ -275,6 +330,10 @@ enum RobustnessTests {
             assert(try String(contentsOf: victim, encoding: .utf8) == "keep me", "should leave the symlink target untouched")
             let regular = directory.appendingPathComponent("regular")
             assert(PFHelperManager.touchKickFile(at: regular.path), "should write a regular trigger file")
+            let hardLinked = directory.appendingPathComponent("hard-linked")
+            try FileManager.default.linkItem(at: victim, to: hardLinked)
+            assert(!PFHelperManager.touchKickFile(at: hardLinked.path), "should refuse a hard-linked trigger file")
+            assert(try String(contentsOf: victim, encoding: .utf8) == "keep me", "should leave the hard-link target untouched")
         } catch { fail("trigger file safety", error) }
 
         // Test: tunnels only become pending when the cloudflared config would change.

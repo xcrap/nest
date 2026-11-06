@@ -88,7 +88,12 @@ enum ProjectCommandResolverTests {
             try Data(package.utf8).write(to: directory.appendingPathComponent("package.json"))
 
             let spec = ProjectCommandResolver.resolve(command: "", directory: directory.path, port: 5173)
-            assert(spec.programArguments == ["/usr/bin/env", "bun", "x", "vite", "--host", "--port", "5173"], "should detect vite projects")
+            assert(spec.programArguments == ["/usr/bin/env", "bun", "x", "vite", "--host", "127.0.0.1", "--port", "5173"], "should detect vite projects on loopback")
+
+            let next = #"{"dependencies":{"next":"latest"}}"#
+            try Data(next.utf8).write(to: directory.appendingPathComponent("package.json"))
+            let nextSpec = ProjectCommandResolver.resolve(command: "", directory: directory.path, port: 3000)
+            assert(nextSpec.programArguments == ["/usr/bin/env", "bun", "x", "next", "start", "-H", "127.0.0.1", "-p", "3000"], "should detect next projects on loopback")
         } catch {
             failed += 1
             print("  FAIL: package detection test threw: \(error)")

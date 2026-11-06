@@ -159,8 +159,9 @@ public actor ConfigurationService {
                             pushConfiguration: (() async throws -> Void)? = nil) async throws -> String {
         try await applyTunnelLocally(settings: settings, routes: routes, sites: sites, projects: projects,
                                      running: running, restart: restart)
+        // Publishing (DNS records + ingress), not just the ingress push, so the app and nestctl behave alike.
         let pushAction = pushConfiguration ?? {
-            try await CloudflareService.pushTunnelConfiguration(settings: settings.cloudflareSettings, routes: routes, sites: sites, projects: projects)
+            try await CloudflareService.publishTunnel(settings: settings.cloudflareSettings, routes: routes, sites: sites, projects: projects)
         }
         // A remote push is not rolled back implicitly: report its partial outcome honestly.
         // It runs outside the lock so a slow network never blocks the next local apply.

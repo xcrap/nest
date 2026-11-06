@@ -198,6 +198,7 @@ public struct ProjectFormSheet: View {
                 port: parsedPort,
                 command: command
             )
+            if let error = store.saveError(.projects) { errorMessage = error; return }
         case .edit(var project):
             let previous = store.project(id: project.id) ?? project
             project.name = name
@@ -205,7 +206,11 @@ public struct ProjectFormSheet: View {
             project.directory = directory
             project.port = parsedPort
             project.command = command
-            store.updateProject(project)
+            // Never restart onto a definition that did not reach disk: the next launch would load the old one.
+            guard store.updateProject(project) else {
+                errorMessage = store.saveError(.projects) ?? "Could not save the project."
+                return
+            }
             // A running project keeps its old port/command until restarted; do it now so the
             // status and tunnel routes match what is actually serving.
             if let updated = store.project(id: project.id), processController.isProjectRunning(previous),
