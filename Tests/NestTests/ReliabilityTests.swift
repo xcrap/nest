@@ -97,14 +97,18 @@ enum ReliabilityTests {
         let project = AppProject(name: "Test", hostname: "test.local", directory: directory.path, port: 49123, command: "test")
         let plan = ProjectLaunchPlanner.plan(for: project)
         var started = false, stopped = false
-        let conflict = ProjectLifecycleService(listeners: { _ in [123] }, ownedPIDs: { _ in [] }, startAgent: { _ in started = true; return .init(status: 0, output: "") }, stopAgent: { _ in stopped = true; return .init(status: 0, output: "") })
+        let conflict = ProjectLifecycleService(listeners: { _ in [123] }, ownedPIDs: { _ in [] }, startAgent: { _ in started = true; return .init(status: 0, output: "") }, stopAgent: { _ in stopped = true; return .init(status: 0, output: "") },
+                                               jobExit: { _ in nil }, processIdentity: { _ in nil }, signalProcess: { _, _ in }, pause: { _ in })
         let state = conflict.start(plan, timeout: 0)
         check(!state.running && state.error?.contains("another process") == true, "occupied port is a conflict")
         check(!started, "conflict does not launch a project")
         _ = conflict.stop(plan, timeout: 0)
         check(!stopped, "stopping an unrelated listener does not kill it")
         var owned: Set<Int32> = [123]
-        let managed = ProjectLifecycleService(listeners: { _ in owned.isEmpty ? [] : [123] }, ownedPIDs: { _ in owned }, stopAgent: { _ in owned = []; return .init(status: 0, output: "") })
+        // Fake PIDs must never reach the real process table or kill().
+        let managed = ProjectLifecycleService(listeners: { _ in owned.isEmpty ? [] : [123] }, ownedPIDs: { _ in owned }, stopAgent: { _ in owned = []; return .init(status: 0, output: "") },
+                                              processIdentity: { owned.contains($0) ? ProcessIdentity(pid: $0, startTime: 1, uid: 0) : nil },
+                                              signalProcess: { _, _ in }, pause: { _ in })
         check(managed.state(plan).running, "owned listener is running")
         check(!managed.stop(plan, timeout: 0).running, "managed process stops through its launch agent")
         let verbose = await SystemProcess.captureAsync("/usr/bin/head", arguments: ["-c", "2097152", "/dev/zero"], timeout: 5)

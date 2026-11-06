@@ -19,8 +19,15 @@ let package = Package(
             path: "Sources/Nest",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        // Pure /etc/pf.conf editing rules, linked statically into the helper and tested by NestTests.
+        .target(
+            name: "NestPFCore",
+            path: "Sources/NestPFCore",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "NestPFHelper",
+            dependencies: ["NestPFCore"],
             path: "Sources/NestPFHelper",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
@@ -32,7 +39,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "NestTests",
-            dependencies: ["NestLib"],
+            dependencies: ["NestLib", "NestPFCore"],
             path: "Tests/NestTests",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

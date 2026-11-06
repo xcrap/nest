@@ -27,6 +27,7 @@ struct TestRunner {
         run("ProjectLaunchPlanner", ProjectLaunchPlannerTests.runAll)
         run("ProjectLifecycle", ProjectLifecycleTests.runAll)
         run("PFRestorePlanner", PFRestorePlannerTests.runAll)
+        run("PFConfEditor", PFConfEditorTests.runAll)
         run("ParkedFolderScanner", ParkedFolderScannerTests.runAll)
         run("ConfigRenderer", ConfigRendererTests.runAll)
         run("SiteStorePersistence", SiteStorePersistenceTests.runAll)
@@ -47,6 +48,12 @@ struct TestRunner {
         totalPassed += tunnels.passed
         totalFailed += tunnels.failed
         print("  \(tunnels.passed) passed, \(tunnels.failed) failed\n")
+
+        print("Suite: Process Controller")
+        let controller = await ProcessControllerTests.runAll()
+        totalPassed += controller.passed
+        totalFailed += controller.failed
+        print("  \(controller.passed) passed, \(controller.failed) failed\n")
 
         print("Suite: Storage Apply")
         let storage = await StorageApplyTests.runAll()

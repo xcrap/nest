@@ -48,32 +48,45 @@ public enum LaunchAgentService {
 
     @discardableResult
     public static func start(_ definition: LaunchAgentDefinition) -> CommandResult {
+        start(definition, directory: launchAgentsDirectory,
+              launchctl: { SystemProcess.capture("/bin/launchctl", arguments: $0, timeout: $0.first == "print" ? 3 : 30) },
+              pause: Thread.sleep(forTimeInterval:))
+    }
+
+    /// `start` with its plist directory and `launchctl` replaceable, for tests.
+    @discardableResult
+    public static func start(_ definition: LaunchAgentDefinition, directory: String,
+                             launchctl: ([String]) -> CommandResult, pause: (TimeInterval) -> Void) -> CommandResult {
+        let plistPath = (directory as NSString).appendingPathComponent("\(definition.label).plist")
         do {
-            try write(definition)
+            try write(definition, to: plistPath)
         } catch {
             return CommandResult(status: -1, output: error.localizedDescription)
         }
 
-        let plistPath = plistPath(for: definition.label)
         let serviceTarget = serviceTarget(for: definition.label)
-        _ = SystemProcess.capture("/bin/launchctl", arguments: ["enable", serviceTarget])
-        if isLoaded(label: definition.label) {
-            _ = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", serviceTarget])
-            _ = SystemProcess.capture("/bin/launchctl", arguments: ["bootout", domainTarget, plistPath])
+        func isLoaded() -> Bool { launchctl(["print", serviceTarget]).status == 0 }
+        _ = launchctl(["enable", serviceTarget])
+        if isLoaded() {
+            _ = launchctl(["bootout", serviceTarget])
+            _ = launchctl(["bootout", domainTarget, plistPath])
             // bootout returns before launchd has torn the job down; bootstrapping early fails.
             let deadline = Date().addingTimeInterval(5)
-            while isLoaded(label: definition.label) && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.1)
+            while isLoaded() && Date() < deadline {
+                pause(0.1)
             }
         }
 
         // RunAtLoad starts the job on bootstrap, so no kickstart is needed (it would restart it).
         var bootstrap = CommandResult(status: -1, output: "launchctl bootstrap did not run.")
         for attempt in 0..<5 {
-            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
-            bootstrap = SystemProcess.capture("/bin/launchctl", arguments: ["bootstrap", domainTarget, plistPath])
+            if attempt > 0 { pause(0.3) }
+            bootstrap = launchctl(["bootstrap", domainTarget, plistPath])
             if bootstrap.status == 0 { break }
         }
+        // A plist left behind has RunAtLoad set: the job would start at the next login even
+        // though this start was reported as failed.
+        if bootstrap.status != 0 { try? FileManager.default.removeItem(atPath: plistPath) }
         return bootstrap
     }
 
@@ -175,6 +188,57 @@ public enum LaunchAgentService {
         return parseChildProcesses(table.output)
     }
 
+    /// The parent → children map plus every executable name, from a single `ps` call, so a
+    /// status refresh needs no separate `pgrep`.
+    public static func processTable() -> (children: [Int32: [Int32]], names: Set<String>) {
+        let table = SystemProcess.capture("/bin/ps", arguments: ["-axco", "pid=,ppid=,comm="], timeout: 3)
+        guard table.status == 0 else { return ([:], []) }
+        return parseProcessTable(table.output)
+    }
+
+    /// Parses `ps -axco pid=,ppid=,comm=` rows. Names may contain spaces.
+    public static func parseProcessTable(_ output: String) -> (children: [Int32: [Int32]], names: Set<String>) {
+        var children: [Int32: [Int32]] = [:]
+        var names: Set<String> = []
+        for line in output.split(separator: "\n") {
+            let columns = line.split(maxSplits: 2, whereSeparator: { $0.isWhitespace })
+            guard columns.count >= 2, let pid = Int32(columns[0]), let parent = Int32(columns[1]) else { continue }
+            children[parent, default: []].append(pid)
+            if columns.count == 3 { names.insert(columns[2].trimmingCharacters(in: .whitespaces)) }
+        }
+        return (children, names)
+    }
+
+    /// How a job that launchd already ran has ended, or nil while it runs or has not run yet.
+    public static func exitDescription(label: String) -> String? {
+        let result = SystemProcess.capture("/bin/launchctl", arguments: ["print", serviceTarget(for: label)], timeout: 3)
+        guard result.status == 0 else { return nil }
+        return parseJobExit(result.output)
+    }
+
+    /// Reads `launchctl print`: a job that has run (`runs >= 1`) and is now `not running` has
+    /// exited. Anything else (running, spawn scheduled, never run) is not treated as an exit.
+    public static func parseJobExit(_ output: String) -> String? {
+        var state: String?
+        var runs = 0
+        var exitCode: String?
+        var signal: String?
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            func value(_ key: String) -> String? {
+                trimmed.hasPrefix(key + " = ") ? String(trimmed.dropFirst(key.count + 3)) : nil
+            }
+            if let value = value("state") { state = state ?? value }
+            else if let count = value("runs") { runs = max(runs, Int(count) ?? 0) }
+            else if let code = value("last exit code") { exitCode = exitCode ?? code }
+            else if let name = value("last terminating signal") { signal = signal ?? name }
+        }
+        guard state == "not running", runs > 0 else { return nil }
+        if let signal { return "was terminated by \(signal)" }
+        if let exitCode, let status = Int(exitCode.prefix { $0.isNumber || $0 == "-" }) { return "exited with status \(status)" }
+        return "exited"
+    }
+
     public static func parseChildProcesses(_ output: String) -> [Int32: [Int32]] {
         var children: [Int32: [Int32]] = [:]
         for line in output.split(separator: "\n") {
@@ -196,9 +260,9 @@ public enum LaunchAgentService {
         return tree
     }
 
-    private static func write(_ definition: LaunchAgentDefinition) throws {
+    private static func write(_ definition: LaunchAgentDefinition, to path: String) throws {
         let fm = FileManager.default
-        try fm.createDirectory(atPath: launchAgentsDirectory, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
 
         let outDirectory = (definition.standardOutPath as NSString).deletingLastPathComponent
         let errDirectory = (definition.standardErrorPath as NSString).deletingLastPathComponent
@@ -229,6 +293,6 @@ public enum LaunchAgentService {
             options: 0
         )
 
-        try data.write(to: URL(fileURLWithPath: plistPath(for: definition.label)), options: .atomic)
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 }

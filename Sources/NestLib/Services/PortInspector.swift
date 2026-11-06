@@ -2,29 +2,6 @@ import Foundation
 import Darwin
 
 public enum PortInspector {
-    public static func isPortInUse(_ port: Int) -> Bool {
-        !pids(onPort: port).isEmpty
-    }
-
-    public static func waitForPortState(
-        _ port: Int,
-        inUse expectedState: Bool,
-        timeoutNanoseconds: UInt64,
-        pollNanoseconds: UInt32 = 150_000_000
-    ) -> Bool {
-        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
-
-        while DispatchTime.now().uptimeNanoseconds < deadline {
-            if isPortInUse(port) == expectedState {
-                return true
-            }
-
-            usleep(pollNanoseconds / 1_000)
-        }
-
-        return isPortInUse(port) == expectedState
-    }
-
     public static func pids(onPort port: Int) -> [Int32] {
         guard (1...65_535).contains(port) else { return [] }
         let result = SystemProcess.capture("/usr/sbin/lsof", arguments: ["-nP", "-t", "-iTCP:\(port)", "-sTCP:LISTEN"])
@@ -34,12 +11,21 @@ public enum PortInspector {
             .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    /// Every listening TCP port and the processes listening on it, from a single `lsof` call.
-    public static func listeningSockets() -> [Int: Set<Int32>] {
-        let result = SystemProcess.capture("/usr/sbin/lsof", arguments: ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn"])
+    /// Listeners on the given ports and the processes listening on them, from a single `lsof`
+    /// call scoped to those ports (`-iTCP:p1,p2,…`) instead of every socket on the Mac.
+    public static func listeningSockets(ports: [Int]) -> [Int: Set<Int32>] {
+        guard let selector = tcpSelector(ports: ports) else { return [:] }
+        let result = SystemProcess.capture("/usr/sbin/lsof", arguments: ["-nP", selector, "-sTCP:LISTEN", "-F", "pn"])
         // lsof exits 1 when nothing matches.
         guard result.status == 0 || result.status == 1 else { return [:] }
         return parseListeningSockets(result.output)
+    }
+
+    /// nil when no port is valid: an empty list must never widen to every port.
+    public static func tcpSelector(ports: [Int]) -> String? {
+        let valid = Set(ports.filter { (1...65_535).contains($0) }).sorted()
+        guard !valid.isEmpty else { return nil }
+        return "-iTCP:" + valid.map(String.init).joined(separator: ",")
     }
 
     /// Parses `lsof -F pn` output: `p<pid>` starts a process, `n<address>:<port>` names a socket.

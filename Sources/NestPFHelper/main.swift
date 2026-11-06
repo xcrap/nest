@@ -1,26 +1,10 @@
 import Foundation
+import NestPFCore
 
-let anchorName = "app.nest"
-let anchorPath = "/etc/pf.anchors/\(anchorName)"
-let pfConfPath = "/etc/pf.conf"
-let pfConfBackupPath = "/etc/pf.conf.nest-backup"
-
-let anchorContents = """
-rdr pass on lo0 inet proto tcp from any to any port 80 -> 127.0.0.1 port 8080
-rdr pass on lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443
-
-"""
-
-let anchorDeclaration = "rdr-anchor \"\(anchorName)\""
-let anchorLoad = "load anchor \"\(anchorName)\" from \"\(anchorPath)\""
-let markerStart = "# BEGIN NEST PF ANCHOR"
-let markerEnd = "# END NEST PF ANCHOR"
-let managedPFBlock = """
-\(markerStart)
-\(anchorDeclaration)
-\(anchorLoad)
-\(markerEnd)
-"""
+let anchorPath = PFConfEditor.anchorPath
+let pfConfPath = PFConfEditor.pfConfPath
+let pfConfBackupPath = PFConfEditor.pfConfBackupPath
+let anchorContents = PFConfEditor.anchorContents
 
 func log(_ message: String) {
     let line = "[nest-pfhelper] \(message)\n"
@@ -42,6 +26,34 @@ func run(_ executable: String, _ args: [String]) -> Int32 {
     }
     p.waitUntilExit()
     return p.terminationStatus
+}
+
+/// Runs a command and returns its standard output; standard error still reaches the helper log.
+func output(_ executable: String, _ args: [String]) -> (status: Int32, text: String) {
+    let p = Process()
+    let pipe = Pipe()
+    p.executableURL = URL(fileURLWithPath: executable)
+    p.arguments = args
+    p.standardOutput = pipe
+    p.standardError = FileHandle.standardError
+    do {
+        try p.run()
+    } catch {
+        log("failed to spawn \(executable): \(error)")
+        return (-1, "")
+    }
+    // Drain before waiting so a full pipe cannot block the child.
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return (p.terminationStatus, String(decoding: data, as: UTF8.self))
+}
+
+/// `pfctl -E` takes another enable reference on every call (and the token is discarded), so
+/// enable only when PF is off. If the status cannot be read, enable as before.
+func pfNeedsEnabling() -> Bool {
+    let info = output("/sbin/pfctl", ["-s", "info"])
+    guard info.status == 0 else { return true }
+    return !PFConfEditor.isEnabled(statusInfo: info.text)
 }
 
 func write(_ contents: String, to path: String) throws {
@@ -67,54 +79,6 @@ func restore(_ original: String?, to path: String) {
 func rollback(anchor: String?, pfConf: String?) {
     restore(anchor, to: anchorPath)
     restore(pfConf, to: pfConfPath)
-}
-
-struct UnbalancedMarkers: Error, CustomStringConvertible {
-    var description: String { "\(pfConfPath) has unbalanced Nest markers; refusing to edit it" }
-}
-
-/// Removes only Nest's own lines. A start marker without its end marker would otherwise
-/// swallow every rule after it, so that case is refused instead of guessed at.
-func removingManagedPFBlock(from content: String) throws -> String {
-    var output: [String] = []
-    var insideManagedBlock = false
-
-    for line in content.components(separatedBy: "\n") {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed == markerStart {
-            guard !insideManagedBlock else { throw UnbalancedMarkers() }
-            insideManagedBlock = true
-            continue
-        }
-        if trimmed == markerEnd {
-            guard insideManagedBlock else { throw UnbalancedMarkers() }
-            insideManagedBlock = false
-            continue
-        }
-        if insideManagedBlock {
-            guard trimmed.isEmpty || trimmed == anchorDeclaration || trimmed == anchorLoad else { throw UnbalancedMarkers() }
-            continue
-        }
-        if trimmed == anchorDeclaration || trimmed == anchorLoad {
-            continue
-        }
-        output.append(line)
-    }
-
-    guard !insideManagedBlock else { throw UnbalancedMarkers() }
-    return output.joined(separator: "\n")
-}
-
-func insertingManagedPFBlock(into content: String) throws -> String {
-    let cleaned = try removingManagedPFBlock(from: content)
-    var lines = cleaned.components(separatedBy: "\n")
-    let insertIndex = lines.firstIndex { line in
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return trimmed.hasPrefix("rdr-anchor") || trimmed.hasPrefix("load anchor")
-    } ?? lines.count
-
-    lines.insert(contentsOf: managedPFBlock.components(separatedBy: "\n"), at: insertIndex)
-    return lines.joined(separator: "\n")
 }
 
 /// Keeps the first pristine copy (raw bytes) and refuses to continue if it cannot be written.
@@ -146,7 +110,7 @@ func validateAndApply(originalAnchor: String?, originalPFConf: String?, enablePF
         exit(syntaxStatus)
     }
 
-    let arguments = enablePF ? ["-Ef", pfConfPath] : ["-f", pfConfPath]
+    let arguments = enablePF && pfNeedsEnabling() ? ["-Ef", pfConfPath] : ["-f", pfConfPath]
     let status = run("/sbin/pfctl", arguments)
     if status != 0 {
         log("pfctl \(arguments.joined(separator: " ")) exited \(status); rolling back")
@@ -178,7 +142,7 @@ case "install", "--install", "repair", "--repair":
             log("wrote \(anchorPath)")
         }
 
-        let updatedPFConf = try insertingManagedPFBlock(into: currentPFConf)
+        let updatedPFConf = try PFConfEditor.insertingManagedBlock(into: currentPFConf)
         if updatedPFConf != currentPFConf {
             try backupPFConfIfNeeded(originalPFConfFile?.data)
             try write(updatedPFConf, to: pfConfPath)
@@ -194,7 +158,7 @@ case "install", "--install", "repair", "--repair":
 
 case "uninstall", "--uninstall":
     do {
-        let updatedPFConf = try removingManagedPFBlock(from: currentPFConf)
+        let updatedPFConf = try PFConfEditor.removingManagedBlock(from: currentPFConf)
         if updatedPFConf != currentPFConf {
             try backupPFConfIfNeeded(originalPFConfFile?.data)
             try write(updatedPFConf, to: pfConfPath)

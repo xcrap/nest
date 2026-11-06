@@ -49,4 +49,24 @@ public enum ProjectLaunchPlanner {
             )
         )
     }
+
+    /// What status checks use (label, port, directory, log), without resolving the command:
+    /// that may read and parse package.json, and a refresh runs every few seconds for every
+    /// project. The result has no program arguments, so it cannot be launched.
+    public static func statusPlan(for project: AppProject) -> ProjectLaunchPlan {
+        ProjectLaunchPlan(
+            projectID: project.id,
+            projectName: project.name,
+            port: project.port,
+            definition: LaunchAgentDefinition(
+                label: project.launchAgentLabel,
+                programArguments: [],
+                workingDirectory: project.directory,
+                environment: ["PORT": "\(project.port)"],
+                standardOutPath: project.logPath,
+                standardErrorPath: project.logPath,
+                keepAlive: false
+            )
+        )
+    }
 }

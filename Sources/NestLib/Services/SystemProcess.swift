@@ -89,10 +89,39 @@ public enum SystemProcess {
             }
         }, onCancel: { flag.cancel() })
     }
+}
 
+/// A process as it was when observed. A PID alone can be reused by an unrelated process
+/// after the original exits; the start time and owner tell the two apart.
+public struct ProcessIdentity: Equatable, Sendable {
+    public var pid: Int32
+    public var startTime: UInt64
+    public var uid: UInt32
+
+    public init(pid: Int32, startTime: UInt64, uid: UInt32) {
+        self.pid = pid
+        self.startTime = startTime
+        self.uid = uid
+    }
+}
+
+public enum ProcessTable {
+    /// `SZOMB` from <sys/proc.h>: exited, waiting to be reaped.
+    private static let zombieStatus: UInt32 = 5
+
+    /// nil once the process has exited (zombies included).
+    public static func identity(of pid: Int32) -> ProcessIdentity? {
+        guard pid > 1 else { return nil }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size, info.pbi_status != zombieStatus else { return nil }
+        return ProcessIdentity(pid: pid, startTime: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec, uid: info.pbi_uid)
+    }
+
+    /// Signals only the exact process recorded earlier, and only if it belongs to this user.
     @discardableResult
-    public static func run(_ executablePath: String, arguments: [String] = [], currentDirectory: String? = nil,
-                           environment: [String: String]? = nil) -> Int32 {
-        capture(executablePath, arguments: arguments, currentDirectory: currentDirectory, environment: environment).status
+    public static func signal(_ recorded: ProcessIdentity, _ signal: Int32) -> Bool {
+        guard recorded.uid == getuid(), identity(of: recorded.pid) == recorded else { return false }
+        return Darwin.kill(recorded.pid, signal) == 0
     }
 }
