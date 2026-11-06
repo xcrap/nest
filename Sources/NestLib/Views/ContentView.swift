@@ -24,15 +24,24 @@ public enum SidebarItem: String, CaseIterable, Identifiable {
 
 public struct ContentView: View {
     @EnvironmentObject var store: SiteStore
-    @EnvironmentObject var processController: ProcessController
-    @State private var selection: SidebarItem? = .sites
+    /// Not observed: only the sidebar service rows depend on service state, and they observe
+    /// it themselves. Observing it here would re-render the whole window on every change.
+    private let processController: ProcessController
+    @SceneStorage("sidebarSelection") private var selection: SidebarItem = .sites
 
-    public init() {}
+    public init(processController: ProcessController) {
+        self.processController = processController
+    }
+
+    /// The sidebar list reports nil when the selection is cleared; keep the current section.
+    private var listSelection: Binding<SidebarItem?> {
+        Binding(get: { selection }, set: { if let item = $0 { selection = item } })
+    }
 
     public var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                List(SidebarItem.allCases, selection: $selection) { item in
+                List(SidebarItem.allCases, selection: listSelection) { item in
                     Label {
                         Text(item.rawValue)
                     } icon: {
@@ -45,46 +54,7 @@ public struct ContentView: View {
 
                 Divider()
 
-                VStack(spacing: 8) {
-                    serviceRow(
-                        "FrankenPHP",
-                        running: processController.frankenphpRunning,
-                        onToggle: {
-                            if processController.frankenphpRunning {
-                                processController.stopFrankenPHP()
-                            } else {
-                                startFrankenPHP()
-                            }
-                        }
-                    )
-                    serviceRow(
-                        "Cloudflared",
-                        running: processController.cloudflaredRunning,
-                        onToggle: {
-                            if processController.cloudflaredRunning {
-                                processController.stopCloudflared()
-                            } else {
-                                startCloudflared()
-                            }
-                        }
-                    )
-                    serviceRow(
-                        "MariaDB",
-                        running: processController.mariadbRunning,
-                        onToggle: {
-                            if processController.mariadbRunning {
-                                processController.stopMariaDB()
-                            } else {
-                                let paths = store.settings.runtimePaths
-                                processController.startMariaDB(serverBinary: paths.mariadbServer)
-                            }
-                        }
-                    )
-                }
-                .padding(10)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                SidebarServicesView(store: store)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
         } detail: {
@@ -102,13 +72,12 @@ public struct ContentView: View {
                     LogsView()
                 case .settings:
                     WorkspaceSettingsView()
-                case nil:
-                    emptyState
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationSplitViewStyle(.balanced)
+        .focusedSceneValue(\.sidebarSelection, $selection)
         .onAppear {
             processController.markTunnelsPending(store: store)
         }
@@ -132,50 +101,62 @@ public struct ContentView: View {
     private func syncSavedTunnels() {
         processController.markTunnelsPending(store: store, automaticallyApply: true)
     }
+}
 
-    private func serviceRow(_ name: String, running: Bool, onToggle: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+/// Start/stop rows for the services. The only part of the window that observes every
+/// service status change.
+private struct SidebarServicesView: View {
+    @EnvironmentObject private var processController: ProcessController
+    /// Read at action time only.
+    let store: SiteStore
+
+    var body: some View {
+        VStack(spacing: 8) {
+            serviceRow("FrankenPHP", running: processController.frankenphpRunning, error: processController.frankenphpError) {
+                if processController.frankenphpRunning {
+                    processController.stopFrankenPHP()
+                } else {
+                    processController.startFrankenPHP(store: store)
+                }
+            }
+            serviceRow("Cloudflared", running: processController.cloudflaredRunning, error: processController.cloudflaredError) {
+                if processController.cloudflaredRunning {
+                    processController.stopCloudflared()
+                } else {
+                    processController.applyTunnels(store: store, start: true)
+                }
+            }
+            serviceRow("MariaDB", running: processController.mariadbRunning, error: processController.mariadbError) {
+                if processController.mariadbRunning {
+                    processController.stopMariaDB()
+                } else {
+                    processController.startMariaDB(serverBinary: store.settings.runtimePaths.mariadbServer)
+                }
+            }
+        }
+        .padding(10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+    }
+
+    private func serviceRow(_ name: String, running: Bool, error: String?, onToggle: @escaping () -> Void) -> some View {
+        let busy = processController.isServiceBusy(name)
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Circle().fill(running ? Color.green : Color.secondary.opacity(0.2)).frame(width: 7, height: 7)
                     .accessibilityHidden(true)
                 Text(name).font(.callout).lineLimit(1)
+                    .accessibilityValue(running ? "Running" : "Stopped")
                 Spacer()
-                Button(processController.isServiceBusy(name) ? "…" : (running ? "Stop" : "Start"), action: onToggle)
+                Button(busy ? "…" : (running ? "Stop" : "Start"), action: onToggle)
                     .font(.callout).buttonStyle(.bordered).controlSize(.small)
-                    .disabled(processController.isServiceBusy(name))
+                    .disabled(busy)
                     .accessibilityLabel("\(running ? "Stop" : "Start") \(name)")
             }
-            if let error = serviceError(name) {
+            if let error {
                 Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             }
         }
     }
-
-    private func serviceError(_ name: String) -> String? {
-        switch name {
-        case "FrankenPHP": return processController.frankenphpError
-        case "MariaDB": return processController.mariadbError
-        default: return processController.cloudflaredError
-        }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "bird")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(.quaternary)
-            Text("Select a section")
-                .font(.title3)
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    private func startFrankenPHP() {
-        processController.startFrankenPHP(store: store)
-    }
-
-    private func startCloudflared() {
-        processController.applyTunnels(store: store, start: true)
-    }
-
 }

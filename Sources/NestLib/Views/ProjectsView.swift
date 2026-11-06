@@ -39,15 +39,19 @@ public struct ProjectsView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(projects) { project in
+                            // Rows get plain values and are Equatable, so a status change
+                            // re-renders only the rows whose values changed.
                             ProjectRow(
                                 project: project,
                                 isRunning: processController.isProjectRunning(project),
                                 operation: processController.projectOperation(for: project.id),
                                 error: processController.projectError(for: project.id),
+                                onToggleRunning: { toggleRunning(project) },
                                 onEdit: { editingProject = project },
                                 onShowLog: { logProject = project },
                                 onDelete: { pendingDeletion = project }
                             )
+                            .equatable()
                             if project.id != lastID {
                                 Divider().padding(.leading, 36)
                             }
@@ -82,6 +86,15 @@ public struct ProjectsView: View {
         .onAppear(perform: refreshStatuses)
     }
 
+    /// Reads the live status at click time, not the value the row was rendered with.
+    private func toggleRunning(_ project: AppProject) {
+        if processController.isProjectRunning(project) {
+            processController.stopProject(project)
+        } else {
+            processController.startProject(project)
+        }
+    }
+
     /// The record is removed only once its launch agent is gone; otherwise it would keep
     /// starting at login with no row left to stop it.
     private func delete(_ project: AppProject) {
@@ -107,7 +120,8 @@ public struct ProjectsView: View {
                     Button {
                         searchText = ""
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Label("Clear Filter", systemImage: "xmark.circle.fill")
+                            .labelStyle(.iconOnly)
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -127,7 +141,8 @@ public struct ProjectsView: View {
             Button {
                 refreshStatuses()
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Refresh Status", systemImage: "arrow.clockwise")
+                    .labelStyle(.iconOnly)
                     .font(.callout)
             }
             .buttonStyle(.bordered)
@@ -137,7 +152,8 @@ public struct ProjectsView: View {
             Button {
                 showAddSheet = true
             } label: {
-                Image(systemName: "plus")
+                Label("Add Project", systemImage: "plus")
+                    .labelStyle(.iconOnly)
                     .font(.callout)
             }
             .buttonStyle(.bordered)
@@ -175,13 +191,12 @@ public struct ProjectsView: View {
 
 // MARK: - Project Row
 
-private struct ProjectRow: View {
-    @EnvironmentObject var processController: ProcessController
-
+private struct ProjectRow: View, Equatable {
     let project: AppProject
     let isRunning: Bool
     let operation: ProcessController.ProjectOperation?
     let error: String?
+    let onToggleRunning: () -> Void
     let onEdit: () -> Void
     let onShowLog: () -> Void
     let onDelete: () -> Void
@@ -189,6 +204,14 @@ private struct ProjectRow: View {
     /// Row-local so hovering redraws one row, not the whole list.
     @State private var isHovered = false
     @State private var hoveredAction: String?
+    /// Keyboard focus on a row action keeps the actions visible without hovering.
+    @FocusState private var focusedAction: String?
+
+    /// The closures only capture `project`, so comparing the values is enough.
+    static func == (lhs: ProjectRow, rhs: ProjectRow) -> Bool {
+        lhs.project == rhs.project && lhs.isRunning == rhs.isRunning
+            && lhs.operation == rhs.operation && lhs.error == rhs.error
+    }
 
     private var isBusy: Bool {
         operation != nil
@@ -200,6 +223,7 @@ private struct ProjectRow: View {
                 Circle()
                     .fill(isRunning ? Color.green : Color.secondary.opacity(0.2))
                     .frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
 
                 Text(project.name)
                     .font(.callout)
@@ -224,22 +248,18 @@ private struct ProjectRow: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .frame(width: 50, alignment: .trailing)
+                    .accessibilityLabel("Port \(project.port)")
 
                 HStack(spacing: 0) {
-                    rowAction(icon: "doc.text", help: "Logs") { onShowLog() }
-                    rowAction(icon: "pencil", help: "Edit") { onEdit() }
-                    rowAction(icon: "trash", help: "Delete") { onDelete() }
+                    rowAction(icon: "doc.text", title: "View Logs") { onShowLog() }
+                    rowAction(icon: "pencil", title: "Edit") { onEdit() }
+                    rowAction(icon: "trash", title: "Delete") { onDelete() }
                 }
-                .opacity(isHovered ? 1 : 0)
+                .opacity(isHovered || focusedAction != nil ? 1 : 0)
                 .disabled(isBusy)
 
-                StartStopButton(isRunning: isRunning, isPending: isBusy) {
-                    if isRunning {
-                        processController.stopProject(project)
-                    } else {
-                        processController.startProject(project)
-                    }
-                }
+                StartStopButton(isRunning: isRunning, isPending: isBusy, action: onToggleRunning)
+                    .accessibilityLabel("\(isRunning ? "Stop" : "Start") \(project.name)")
             }
 
             if let error, !error.isEmpty {
@@ -265,23 +285,26 @@ private struct ProjectRow: View {
                 .disabled(isBusy)
             Button("View Logs") { onShowLog() }
                 .disabled(isBusy)
-            Button(isRunning ? "Stop" : "Start") {
-                if isRunning {
-                    processController.stopProject(project)
-                } else {
-                    processController.startProject(project)
-                }
-            }
-            .disabled(isBusy)
+            Button(isRunning ? "Stop" : "Start") { onToggleRunning() }
+                .disabled(isBusy)
             Divider()
             Button("Delete…", role: .destructive) { onDelete() }
                 .disabled(isBusy)
         }
+        // The hover-only buttons are invisible to VoiceOver; offer the same actions on the row.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(project.name)
+        .accessibilityValue(isBusy ? (operation?.label ?? "") : (isRunning ? "Running" : "Stopped"))
+        .accessibilityAction(named: "View Logs") { if !isBusy { onShowLog() } }
+        .accessibilityAction(named: "Edit") { if !isBusy { onEdit() } }
+        .accessibilityAction(named: isRunning ? "Stop" : "Start") { if !isBusy { onToggleRunning() } }
+        .accessibilityAction(named: "Delete") { if !isBusy { onDelete() } }
     }
 
-    private func rowAction(icon: String, help: String, action: @escaping () -> Void) -> some View {
+    private func rowAction(icon: String, title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
+            Label(title, systemImage: icon)
+                .labelStyle(.iconOnly)
                 .font(.callout)
                 .frame(width: 26, height: 26)
                 .background(
@@ -293,7 +316,9 @@ private struct ProjectRow: View {
         .buttonStyle(.plain)
         .foregroundStyle(hoveredAction == icon ? .primary : .secondary)
         .onHover { h in hoveredAction = h ? icon : nil }
-        .help(help)
+        .focused($focusedAction, equals: icon)
+        .help(title)
+        .accessibilityLabel("\(title) \(project.name)")
     }
 }
 
@@ -302,10 +327,7 @@ private struct ProjectRow: View {
 private struct ProjectLogSheet: View {
     let project: AppProject
     @Environment(\.dismiss) private var dismiss
-    @State private var content = ""
-    @State private var isLoading = false
-    @State private var loadTask: Task<Void, Never>?
-    @State private var refreshTask: Task<Void, Never>?
+    @StateObject private var log = LogTailModel()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -316,6 +338,7 @@ private struct ProjectLogSheet: View {
                     Text(project.logPath)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
                 Spacer()
                 Button("Close") { dismiss() }
@@ -325,68 +348,27 @@ private struct ProjectLogSheet: View {
 
             Divider()
 
-            Group {
-                if isLoading && content.isEmpty {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if content.isEmpty {
-                    VStack(spacing: 12) {
-                        Spacer()
-                        Image(systemName: "doc.text")
-                            .font(.system(size: 28, weight: .light))
-                            .foregroundStyle(.quaternary)
-                        Text("No log output yet.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity)
-                } else {
-                    LogTextView(text: content)
-                }
+            ZStack {
+                LogTextView(model: log)
+                    .opacity(log.status == .content ? 1 : 0)
+                    .accessibilityHidden(log.status != .content)
+                LogStatusPlaceholder(
+                    status: log.status,
+                    path: project.logPath,
+                    emptyTitle: "No log output yet",
+                    missingTitle: "No log output yet",
+                    missingDetail: "The log file is created when the project first runs."
+                )
             }
         }
         .frame(minWidth: 720, minHeight: 420)
-        .onAppear {
-            load()
-            startRefreshLoop()
-        }
-        .onDisappear {
-            stopRefreshLoop()
-            cancelLoad()
-        }
-    }
-
-    private func load() {
-        cancelLoad()
-        isLoading = true
-        let logPath = project.logPath
-        loadTask = Task {
-            let loaded = await LogTailReader.load(path: logPath)
-            guard !Task.isCancelled else { return }
-            isLoading = false
-            if content != loaded { content = loaded }
-        }
-    }
-
-    private func startRefreshLoop() {
-        stopRefreshLoop()
-        refreshTask = Task {
+        .task(id: project.logPath) {
+            log.follow(path: project.logPath)
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
-                await MainActor.run { load() }
+                log.refresh()
             }
         }
-    }
-
-    private func stopRefreshLoop() {
-        refreshTask?.cancel()
-        refreshTask = nil
-    }
-
-    private func cancelLoad() {
-        loadTask?.cancel()
-        loadTask = nil
     }
 }

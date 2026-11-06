@@ -3,11 +3,8 @@ import SwiftUI
 public struct LogsView: View {
     @EnvironmentObject var store: SiteStore
     @State private var selectedLog: LogFile = .frankenphp
-    @State private var content: String = ""
-    @State private var isLoading = false
+    @StateObject private var log = LogTailModel()
     @State private var autoRefresh = false
-    @State private var loadTask: Task<Void, Never>?
-    @State private var refreshTask: Task<Void, Never>?
     @State private var confirmClear = false
     @State private var clearError: String?
 
@@ -28,12 +25,16 @@ public struct LogsView: View {
             logContent
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .task(id: logReloadKey) {
-            reloadLog()
+        .task(id: currentLogPath) {
+            log.follow(path: currentLogPath)
         }
-        .onDisappear {
-            stopRefreshLoop()
-            cancelLoad()
+        .task(id: autoRefresh) {
+            guard autoRefresh else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                log.refresh()
+            }
         }
         .alert("Clear \(selectedLog.rawValue) Log?", isPresented: $confirmClear) {
             Button("Clear", role: .destructive) { clearLog() }
@@ -79,24 +80,26 @@ public struct LogsView: View {
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
-            .onChange(of: autoRefresh) {
-                if autoRefresh { startRefreshLoop() } else { stopRefreshLoop() }
-            }
+            .help("Refresh every 2 seconds")
+            .accessibilityLabel("Auto-refresh log")
 
             Button {
-                reloadLog()
+                log.refresh()
             } label: {
-                Image(systemName: "arrow.clockwise")
+                Label("Refresh Log", systemImage: "arrow.clockwise")
+                    .labelStyle(.iconOnly)
                     .font(.callout)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .disabled(currentLogPath.isEmpty)
             .help("Refresh")
 
             Button {
                 confirmClear = true
             } label: {
-                Image(systemName: "trash")
+                Label("Clear Log", systemImage: "trash")
+                    .labelStyle(.iconOnly)
                     .font(.callout)
             }
             .buttonStyle(.bordered)
@@ -112,44 +115,23 @@ public struct LogsView: View {
     private var logContent: some View {
         Group {
             if currentLogPath.isEmpty {
-                VStack(spacing: 12) {
-                    Spacer()
-                    Image(systemName: "doc.text.magnifyingglass")
-                        .font(.system(size: 32, weight: .light))
-                        .foregroundStyle(.quaternary)
-                    Text("Set the log file path in Settings > Paths.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-            } else if isLoading && content.isEmpty {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if content.isEmpty {
-                VStack(spacing: 12) {
-                    Spacer()
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 32, weight: .light))
-                        .foregroundStyle(.quaternary)
-                    Text("Log file is empty.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
+                LogPlaceholder(icon: "doc.text.magnifyingglass", title: "No log file configured",
+                               detail: "Set the log file path in Settings > Paths.")
             } else {
-                LogTextView(text: content)
+                // The text view stays mounted so it keeps its scroll position and selection
+                // while the status changes; placeholders cover it instead.
+                ZStack {
+                    LogTextView(model: log)
+                        .opacity(log.status == .content ? 1 : 0)
+                        .accessibilityHidden(log.status != .content)
+                    LogStatusPlaceholder(status: log.status, path: currentLogPath)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Logic
-
-    private var logReloadKey: String {
-        "\(selectedLog.rawValue)|\(currentLogPath)"
-    }
 
     private var currentLogPath: String {
         switch selectedLog {
@@ -164,49 +146,71 @@ public struct LogsView: View {
         guard !path.isEmpty else { return }
         do {
             try LogTailReader.truncate(path: path)
-            content = ""
+            log.reload()
         } catch {
             clearError = error.localizedDescription
         }
     }
+}
 
-    private func reloadLog() {
-        cancelLoad()
-        let path = currentLogPath
-        guard !path.isEmpty else {
-            isLoading = false
-            content = ""
-            return
+/// What to show over the log text when there is no output to display.
+struct LogStatusPlaceholder: View {
+    let status: LogTailModel.Status
+    let path: String
+    var emptyTitle = "Log file is empty"
+    var missingTitle = "Log file not found"
+    var missingDetail: String?
+
+    var body: some View {
+        switch status {
+        case .idle, .content:
+            EmptyView()
+        case .loading:
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(nsColor: .textBackgroundColor))
+        case .missing:
+            LogPlaceholder(
+                icon: "questionmark.folder",
+                title: missingTitle,
+                detail: missingDetail ?? "Nothing exists at \(path) yet. The service creates it when it first writes; otherwise check the path in Settings > Paths."
+            )
+        case .unreadable(let message):
+            LogPlaceholder(icon: "exclamationmark.triangle", title: "Can’t read the log file", detail: message, warning: true)
+        case .empty:
+            LogPlaceholder(icon: "doc.text", title: emptyTitle, detail: nil)
         }
-        isLoading = true
-        loadTask = Task {
-            let loaded = await LogTailReader.load(path: path)
-            guard !Task.isCancelled else { return }
-            if currentLogPath == path {
-                isLoading = false
-                if content != loaded { content = loaded }
+    }
+}
+
+/// Centered message shown instead of log output.
+struct LogPlaceholder: View {
+    let icon: String
+    let title: String
+    let detail: String?
+    var warning = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.quaternary))
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: 420)
             }
         }
-    }
-
-    private func startRefreshLoop() {
-        stopRefreshLoop()
-        refreshTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard !Task.isCancelled else { return }
-                await MainActor.run { reloadLog() }
-            }
-        }
-    }
-
-    private func stopRefreshLoop() {
-        refreshTask?.cancel()
-        refreshTask = nil
-    }
-
-    private func cancelLoad() {
-        loadTask?.cancel()
-        loadTask = nil
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
+        .accessibilityElement(children: .combine)
     }
 }

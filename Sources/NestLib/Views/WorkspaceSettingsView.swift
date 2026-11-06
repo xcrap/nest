@@ -24,7 +24,7 @@ public struct WorkspaceSettingsView: View {
     public var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Picker("", selection: $selection) {
+                Picker("Settings section", selection: $selection) {
                     ForEach(orderedTabs) { tab in
                         Text(tab.rawValue).tag(tab)
                     }

@@ -12,7 +12,12 @@ public struct SitesView: View {
     @State private var showExportPicker = false
     @State private var exportDocument: SiteExportDocument?
     @State private var importResult: ImportResult?
-    @State private var hoveredSiteId: String?
+    /// A folder dropped on the list; pre-fills the Add Site sheet.
+    @State private var droppedFolder: URL?
+    @State private var isDropTargeted = false
+    /// Looked up when the view appears rather than on every render.
+    @State private var terminalName = "Terminal"
+    @State private var editorApp: SiteActions.ExternalApp?
 
     public init() {}
 
@@ -46,12 +51,11 @@ public struct SitesView: View {
         let visibleSites = filteredSites(pinned: pinned, recent: recent)
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                TextField("Filter sites…", text: $searchText).textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Filter sites by name, domain or path")
                 Picker("Show", selection: $filter) {
                     Text("All").tag("All"); Text("Pinned").tag("Pinned"); Text("Recent").tag("Recent")
                 }.frame(width: 115)
                 Text("\(store.runningSites.count)/\(store.sites.count) enabled").font(.callout).foregroundStyle(.secondary)
+                Spacer()
                 Menu("Import / Export") {
                     Button("Import Sites…") { showImportPicker = true }
                     Button("Import Parked Folder…") { showFolderImportPicker = true }
@@ -70,9 +74,25 @@ public struct SitesView: View {
             if store.sites.isEmpty {
                 ContentUnavailableView {
                     Label("No sites yet", systemImage: "globe")
+                } description: {
+                    Text("Add a site, or drop a project folder here.")
                 } actions: { Button("Add Site") { showAddSheet = true } }
             } else if visibleSites.isEmpty {
-                ContentUnavailableView.search(text: searchText.isEmpty ? filter : searchText)
+                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                } else if filter == "Pinned" {
+                    ContentUnavailableView {
+                        Label("No Pinned Sites", systemImage: "pin")
+                    } description: {
+                        Text("Pin a site with its pin button or from its context menu to keep it here.")
+                    } actions: { Button("Show All Sites") { filter = "All" } }
+                } else {
+                    ContentUnavailableView {
+                        Label("No Recent Sites", systemImage: "clock")
+                    } description: {
+                        Text("Sites you open in the browser appear here.")
+                    } actions: { Button("Show All Sites") { filter = "All" } }
+                }
             } else {
                 Table(visibleSites, selection: $selection, sortOrder: $sortOrder) {
                     TableColumn("Pin") { site in
@@ -94,7 +114,7 @@ public struct SitesView: View {
                             Button { SiteActions.reveal(site) } label: { Image(systemName: "folder") }
                                 .help("Show in Finder").accessibilityLabel("Show \(site.name) in Finder")
                             Button { SiteActions.terminal(site) } label: { Image(systemName: "terminal") }
-                                .help("Open Terminal").accessibilityLabel("Open Terminal at \(site.name)")
+                                .help("Open in \(terminalName)").accessibilityLabel("Open \(site.name) in \(terminalName)")
                             Button { editingSite = site } label: { Image(systemName: "pencil") }
                                 .help("Edit Site").accessibilityLabel("Edit \(site.name)")
                         }.buttonStyle(.borderless)
@@ -111,7 +131,10 @@ public struct SitesView: View {
                     if let site = store.sites.first(where: { ids.contains($0.id) }) {
                         Button("Open in Browser") { openSite(site) }
                         Button("Show in Finder") { SiteActions.reveal(site) }
-                        Button("Open Terminal") { SiteActions.terminal(site) }
+                        Button("Open in \(terminalName)") { SiteActions.terminal(site) }
+                        if let editorApp {
+                            Button("Open in \(editorApp.name)") { SiteActions.editor(site) }
+                        }
                         Button("Edit…") { editingSite = site }
                         Button(pinned.contains(site.id) ? "Unpin" : "Pin") { togglePin(site) }
                         Divider()
@@ -120,6 +143,10 @@ public struct SitesView: View {
                 } primaryAction: { ids in
                     if let site = store.sites.first(where: { ids.contains($0.id) }) { openSite(site) }
                 }
+                // Delete key / Edit → Delete, with the same confirmation as the menu item.
+                .onDeleteCommand {
+                    if let site = selectedSite { pendingDeletion = site }
+                }
             }
             if let site = selectedSite {
                 HStack {
@@ -127,13 +154,40 @@ public struct SitesView: View {
                     Spacer()
                     Button("Open") { openSite(site) }.keyboardShortcut("o", modifiers: .command)
                     Button("Finder") { SiteActions.reveal(site) }.keyboardShortcut("f", modifiers: [.command, .shift])
-                    Button("Terminal") { SiteActions.terminal(site) }.keyboardShortcut("t", modifiers: [.command, .shift])
+                    Button(terminalName) { SiteActions.terminal(site) }.keyboardShortcut("t", modifiers: [.command, .shift])
+                        .help("Open in \(terminalName)")
+                    if let editorApp {
+                        Button(editorApp.name) { SiteActions.editor(site) }
+                            .help("Open in \(editorApp.name)")
+                    }
                     Button("Edit") { editingSite = site }.keyboardShortcut("e", modifiers: .command)
                     Button("Delete…", role: .destructive) { pendingDeletion = site }
                 }.padding(10).background(.bar).id(site.id)
             }
         }
-        .sheet(isPresented: $showAddSheet) { SiteFormSheet(mode: .add) }
+        .modifier(FindShortcut())
+        .searchable(text: $searchText, placement: .toolbar, prompt: "Filter sites")
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let folder = urls.first(where: \.hasDirectoryPath) ?? urls.first(where: isDirectory) else { return false }
+            droppedFolder = folder
+            showAddSheet = true
+            return true
+        } isTargeted: { isDropTargeted = $0 }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 3)
+                    .padding(4)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onAppear {
+            terminalName = SiteActions.terminalApp?.name ?? "Terminal"
+            editorApp = SiteActions.editorApp
+        }
+        .sheet(isPresented: $showAddSheet, onDismiss: { droppedFolder = nil }) {
+            SiteFormSheet(mode: .add, folder: droppedFolder)
+        }
         .sheet(item: $editingSite) { SiteFormSheet(mode: .edit($0)) }
         .fileImporter(isPresented: $showImportPicker, allowedContentTypes: [.json], onCompletion: handleImport)
         .fileImporter(isPresented: $showFolderImportPicker, allowedContentTypes: [.folder], onCompletion: handleParkedFolderImport)
@@ -160,6 +214,10 @@ public struct SitesView: View {
         } catch {
             importResult = ImportResult(message: "Could not export sites: \(error.localizedDescription)")
         }
+    }
+
+    private func isDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
     }
 
     private func togglePin(_ site: Site) {
@@ -207,6 +265,28 @@ public struct SitesView: View {
             message += "\nSkipped invalid folders:\n" + summary.skippedInvalidFolders.joined(separator: "\n")
         }
         importResult = ImportResult(message: message)
+    }
+}
+
+/// ⌘F focuses the toolbar search field. Only an explicit fallback on macOS 15+, where the
+/// focus can be set; if a menu command already handles ⌘F it takes precedence.
+private struct FindShortcut: ViewModifier {
+    @FocusState private var searchFocused: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content
+                .searchFocused($searchFocused)
+                .background {
+                    Button("Find Sites") { searchFocused = true }
+                        .keyboardShortcut("f", modifiers: .command)
+                        .opacity(0)
+                        .frame(width: 0, height: 0)
+                        .accessibilityHidden(true)
+                }
+        } else {
+            content
+        }
     }
 }
 

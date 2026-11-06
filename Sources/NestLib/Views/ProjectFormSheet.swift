@@ -82,36 +82,42 @@ public struct ProjectFormSheet: View {
     private var form: some View {
         VStack(spacing: 16) {
             field("Name") {
-                TextField("Azores Webcams", text: $name)
+                TextField("Name", text: $name, prompt: Text("My App"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .name)
             }
 
             field("Hostname") {
-                TextField("azo.waka.pt", text: $hostname)
+                TextField("Hostname", text: $hostname, prompt: Text("app.example.com"))
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .hostname)
             }
 
             field("Directory") {
                 HStack(spacing: 8) {
-                    TextField("/Users/xcrap/projects/app", text: $directory)
+                    TextField("Directory", text: $directory, prompt: Text("~/Code/my-app"))
+                        .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .focused($focusedField, equals: .directory)
                     Button("Browse...") { pickDirectory() }
                         .controlSize(.small)
+                        .accessibilityLabel("Browse for the project directory")
                 }
             }
 
             HStack(spacing: 12) {
                 field("Port") {
-                    TextField("3999", text: $port)
+                    TextField("Port", text: $port, prompt: Text("3000"))
+                        .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .focused($focusedField, equals: .port)
                 }
 
                 field("Command") {
-                    TextField("Leave blank to auto-detect", text: $command)
+                    TextField("Command", text: $command, prompt: Text("Leave blank to auto-detect"))
+                        .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .focused($focusedField, equals: .command)
                 }
@@ -153,6 +159,7 @@ public struct ProjectFormSheet: View {
                 .font(.callout)
                 .fontWeight(.medium)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -166,6 +173,8 @@ public struct ProjectFormSheet: View {
         }
 
         let normalizedHostname = NestValidation.normalizedDomain(hostname)
+        // Accept "~/…" as typed; services need the expanded path.
+        let directory = (self.directory as NSString).expandingTildeInPath
         let candidate = AppProject(
             id: mode.id,
             name: name,

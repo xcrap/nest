@@ -2,8 +2,10 @@ import SwiftUI
 
 public struct ConfigPreviewView: View {
     @EnvironmentObject private var store: SiteStore
-    @EnvironmentObject private var processController: ProcessController
     @EnvironmentObject private var documents: ConfigDocumentStore
+    /// Read only when saving; observing the controller would re-render the editor on every
+    /// service status change.
+    @Environment(\.actionProcessController) private var processController
     @State private var selectedConfig: ConfigFile = .caddyfile
     @State private var confirmDiscard = false
 
@@ -53,8 +55,9 @@ public struct ConfigPreviewView: View {
                 Text("Generated from your sites and routes. Edit those records to change routing; use Overrides for custom Caddy configuration.")
                     .font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(12)
             }
-            if let error = documents.error { Text(error).foregroundStyle(.red).textSelection(.enabled).padding(8) }
-            if let message = documents.message { Text(message).foregroundStyle(.secondary).padding(8) }
+            // Status is tied to the file it came from, so it never shows on another file.
+            if let error = documents.error(for: path) { Text(error).foregroundStyle(.red).textSelection(.enabled).padding(8) }
+            if let message = documents.message(for: path) { Text(message).foregroundStyle(.secondary).padding(8) }
             Divider()
             if selectedConfig.generated {
                 ScrollView([.vertical, .horizontal]) {
@@ -62,9 +65,13 @@ public struct ConfigPreviewView: View {
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .topLeading).padding(12)
                 }
             } else {
-                TextEditor(text: Binding(get: { documents.drafts[path]?.content ?? "" }, set: { documents.edit(path: path, content: $0) }))
-                    .font(.system(.callout, design: .monospaced)).disabled(documents.busy)
-                    .accessibilityLabel("\(selectedConfig.rawValue) configuration editor")
+                ConfigTextEditor(
+                    text: Binding(get: { documents.drafts[path]?.content ?? "" }, set: { documents.edit(path: path, content: $0) }),
+                    // Without a loaded draft there is nothing to edit; typing would be discarded.
+                    isEditable: !documents.busy && documents.drafts[path] != nil,
+                    accessibilityLabel: "\(selectedConfig.rawValue) configuration editor"
+                )
+                .id(path) // One editor, and one undo history, per file.
             }
         }
         .task(id: path) {
@@ -80,7 +87,7 @@ public struct ConfigPreviewView: View {
         let target = path
         let config = selectedConfig
         let settings = store.settings
-        let running = processController.frankenphpRunning
+        let running = processController?.frankenphpRunning ?? false
         Task {
             await documents.save(path: target) { content in
                 if config == .security || config == .snippet || config == .overrides {

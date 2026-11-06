@@ -11,36 +11,22 @@ private enum MainWindowScene {
 
 @main
 struct NestApp: App {
+    /// The delegate owns the app's state, so the menu bar item, launch checks and wake
+    /// handling work even when the main window is never shown.
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var store = SiteStore()
-    @StateObject private var processController = ProcessController()
-    @StateObject private var configDocuments = ConfigDocumentStore()
-    private let updaterController = SPUStandardUpdaterController(startingUpdater: AppSettings.reviewDirectory == nil, updaterDelegate: nil, userDriverDelegate: nil)
 
     var body: some Scene {
         Window("Nest", id: MainWindowScene.id) {
-            MainWindowSceneView(
-                appDelegate: appDelegate,
-                store: store,
-                processController: processController,
-                updaterController: updaterController
-            )
-            .environmentObject(configDocuments)
-            .onAppear { appDelegate.configDocuments = configDocuments }
+            MainWindowSceneView(appDelegate: appDelegate)
         }
         .defaultSize(width: 960, height: 640)
         .windowResizability(.contentMinSize)
         .commands {
-            CommandGroup(replacing: .sidebar) {
-                Button("Toggle Sidebar") {
-                    NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
-                }
-                .keyboardShortcut("b", modifiers: .command)
-            }
+            SectionCommands()
         }
 
         Settings {
-            SettingsView(updater: updaterController.updater)
+            SettingsView(updater: appDelegate.updaterController.updater)
         }
     }
 }
@@ -49,22 +35,16 @@ private struct MainWindowSceneView: View {
     @Environment(\.openWindow) private var openWindow
 
     let appDelegate: AppDelegate
-    let store: SiteStore
-    let processController: ProcessController
-    let updaterController: SPUStandardUpdaterController
 
     var body: some View {
-        ContentView()
-            .environmentObject(store)
-            .environmentObject(processController)
+        ContentView(processController: appDelegate.processController)
+            .environmentObject(appDelegate.store)
+            .environmentObject(appDelegate.processController)
+            .environmentObject(appDelegate.configDocuments)
+            .environment(\.actionProcessController, appDelegate.processController)
             .frame(minWidth: 800, minHeight: 500)
             .onAppear {
-                appDelegate.store = store
-                appDelegate.processController = processController
-                appDelegate.updaterController = updaterController
                 appDelegate.openMainWindowAction = openWindow
-                appDelegate.setupStatusBar()
-                appDelegate.reconcileNetworkAtLaunchIfNeeded()
             }
     }
 }
@@ -73,24 +53,30 @@ private struct MainWindowSceneView: View {
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    var configDocuments: ConfigDocumentStore?
+    /// Created on first use (window or launch setup), not when the delegate is constructed.
+    lazy var store = SiteStore()
+    let processController = ProcessController()
+    let configDocuments = ConfigDocumentStore()
+    lazy var updaterController = SPUStandardUpdaterController(
+        startingUpdater: AppSettings.reviewDirectory == nil,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
     var statusItem: NSStatusItem?
-    var store: SiteStore?
-    var processController: ProcessController?
-    var updaterController: SPUStandardUpdaterController?
     var openMainWindowAction: OpenWindowAction?
     private let statusMenu = NSMenu()
     private var statusTimer: Timer?
     private var statusObservation: AnyCancellable?
     private var didReconcileNetwork = false
+    private var didFinishSetup = false
 
-    /// Runs the PF/DNS check once per launch; reopening the window must not repeat it
-    /// (a broken redirect can trigger an administrator prompt).
+    /// Runs the PF/DNS check once per launch; it must not repeat (a broken redirect can
+    /// trigger an administrator prompt).
     func reconcileNetworkAtLaunchIfNeeded() {
         guard !didReconcileNetwork else { return }
         didReconcileNetwork = true
         DispatchQueue.main.async { [weak self] in
-            self?.processController?.reconcileSystemNetworkState()
+            self?.processController.reconcileSystemNetworkState()
         }
     }
 
@@ -108,6 +94,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         NSApp.setActivationPolicy(.regular)
+        guard !didFinishSetup else { return }
+        didFinishSetup = true
+
+        _ = updaterController
+        setupStatusBar()
+        reconcileNetworkAtLaunchIfNeeded()
 
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
@@ -118,16 +110,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let dirtyEditors = configDocuments?.drafts.values.contains(where: { $0.dirty }) == true
-        let dirtyCloudflare = configDocuments?.cloudflareDraft.map {
-            NestValidation.normalizedCloudflareSettings($0) != store?.settings.cloudflareSettings
-        } ?? false
-        guard dirtyEditors || dirtyCloudflare else { return .terminateNow }
+        guard didFinishSetup else { return .terminateNow }
+        var unsaved: [String] = []
+        if configDocuments.hasDirtyEditors { unsaved.append("Settings → Config") }
+        if configDocuments.hasUnsavedRuntimePaths(comparedTo: store.settings.runtimePaths) { unsaved.append("Settings → Paths") }
+        if let draft = configDocuments.cloudflareDraft,
+           NestValidation.normalizedCloudflareSettings(draft) != store.settings.cloudflareSettings {
+            unsaved.append("Settings → Cloudflare")
+        }
+        guard !unsaved.isEmpty else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Discard unsaved configuration changes?"
-        alert.informativeText = dirtyEditors
-            ? "Your editor drafts have not been saved. Return to Settings → Config to save them."
-            : "Your Cloudflare settings have not been saved. Return to Settings → Cloudflare to save them."
+        alert.informativeText = "You have unsaved changes in \(ListFormatter.localizedString(byJoining: unsaved)). Return there to save them."
         alert.addButton(withTitle: "Keep Editing")
         alert.addButton(withTitle: "Discard and Quit")
         return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
@@ -145,22 +139,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func setupStatusBar() {
         guard statusItem == nil else { return }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem?.button {
-            if let appIcon = NSImage(named: NSImage.applicationIconName) {
-                let resized = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
-                    appIcon.draw(in: rect)
-                    return true
-                }
-                resized.isTemplate = false
-                button.image = resized
-            }
-        }
         statusMenu.delegate = self
         statusItem?.menu = statusMenu
         buildMenu()
         refreshStatus()
         // Rebuild when status changes (also while the menu is open); coalesced to one pass per change burst.
-        statusObservation = processController?.objectWillChange
+        statusObservation = processController.objectWillChange
             .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.buildMenu() }
         // Poll only while a Nest window is on screen; the menu refreshes itself when opened.
@@ -179,7 +163,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshStatus() {
-        guard let store, let processController else { return }
         processController.refreshStatusSnapshot(settings: store.settings, projects: store.appProjects)
     }
 
@@ -192,27 +175,62 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshStatus()
     }
 
+    private var serviceErrors: [(service: String, message: String)] {
+        [("FrankenPHP", processController.frankenphpError),
+         ("MariaDB", processController.mariadbError),
+         ("Cloudflared", processController.cloudflaredError)]
+            .compactMap { (service: String, message: String?) -> (service: String, message: String)? in
+                guard let message, !message.isEmpty else { return nil }
+                return (service, message)
+            }
+    }
+
+    /// Monochrome template icon: filled while any service runs, outlined when all are stopped.
+    private func updateStatusIcon(anyRunning: Bool) {
+        guard let button = statusItem?.button else { return }
+        let errors = serviceErrors
+        let state = anyRunning ? "services running" : "services stopped"
+        let description = errors.isEmpty ? "Nest, \(state)" : "Nest, \(state), \(errors.count) error\(errors.count == 1 ? "" : "s")"
+        let symbol = NSImage(systemSymbolName: anyRunning ? "bird.fill" : "bird", accessibilityDescription: description)
+            ?? NSImage(systemSymbolName: anyRunning ? "circle.fill" : "circle", accessibilityDescription: description)
+        let image = symbol?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)) ?? symbol
+        image?.isTemplate = true
+        button.image = image
+        button.toolTip = errors.isEmpty
+            ? "Nest: \(state)"
+            : "Nest: \(state)\n" + errors.map { "\($0.service): \($0.message)" }.joined(separator: "\n")
+    }
+
+    private func addStatusItem(_ name: String, running: Bool, error: String?, to menu: NSMenu) {
+        let item = NSMenuItem(title: "\(name): \(running ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: running ? "circle.fill" : "circle", accessibilityDescription: nil)
+        item.image?.isTemplate = true
+        menu.addItem(item)
+
+        guard let error, !error.isEmpty else { return }
+        // A failed start must be visible even when the window is closed.
+        let firstLine = error.split(whereSeparator: \.isNewline).first.map(String.init) ?? error
+        let title = firstLine.count > 80 ? String(firstLine.prefix(79)) + "…" : firstLine
+        let errorItem = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        errorItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Error")
+        errorItem.image?.isTemplate = true
+        errorItem.indentationLevel = 1
+        errorItem.toolTip = error
+        errorItem.isEnabled = false
+        menu.addItem(errorItem)
+    }
+
     func buildMenu() {
         let menu = statusMenu
         menu.removeAllItems()
-        let phpRunning = processController?.frankenphpRunning ?? false
-        let dbRunning = processController?.mariadbRunning ?? false
-        let cloudflaredRunning = processController?.cloudflaredRunning ?? false
+        let phpRunning = processController.frankenphpRunning
+        let dbRunning = processController.mariadbRunning
+        let cloudflaredRunning = processController.cloudflaredRunning
+        updateStatusIcon(anyRunning: phpRunning || dbRunning || cloudflaredRunning)
 
-        let phpItem = NSMenuItem(title: "FrankenPHP: \(phpRunning ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
-        phpItem.image = NSImage(systemSymbolName: phpRunning ? "circle.fill" : "circle", accessibilityDescription: nil)
-        phpItem.image?.isTemplate = true
-        menu.addItem(phpItem)
-
-        let dbItem = NSMenuItem(title: "MariaDB: \(dbRunning ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
-        dbItem.image = NSImage(systemSymbolName: dbRunning ? "circle.fill" : "circle", accessibilityDescription: nil)
-        dbItem.image?.isTemplate = true
-        menu.addItem(dbItem)
-
-        let cloudflareItem = NSMenuItem(title: "Cloudflared: \(cloudflaredRunning ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
-        cloudflareItem.image = NSImage(systemSymbolName: cloudflaredRunning ? "circle.fill" : "circle", accessibilityDescription: nil)
-        cloudflareItem.image?.isTemplate = true
-        menu.addItem(cloudflareItem)
+        addStatusItem("FrankenPHP", running: phpRunning, error: processController.frankenphpError, to: menu)
+        addStatusItem("MariaDB", running: dbRunning, error: processController.mariadbError, to: menu)
+        addStatusItem("Cloudflared", running: cloudflaredRunning, error: processController.cloudflaredError, to: menu)
 
         menu.addItem(.separator())
 
@@ -273,17 +291,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func checkForUpdates() {
-        updaterController?.checkForUpdates(nil)
+        updaterController.checkForUpdates(nil)
     }
 
     @objc func stopAllServices() {
-        processController?.stopFrankenPHP()
-        processController?.stopCloudflared()
-        processController?.stopMariaDB()
+        processController.stopFrankenPHP()
+        processController.stopCloudflared()
+        processController.stopMariaDB()
     }
 
     @objc func startAllServices() {
-        guard let store, let pc = processController else { return }
+        let pc = processController
         let paths = store.settings.runtimePaths
         if !pc.frankenphpRunning && !paths.frankenphpBinary.isEmpty {
             pc.startFrankenPHP(store: store)
@@ -297,29 +315,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func toggleFrankenPHP() {
-        guard let pc = processController, let store else { return }
-        if pc.frankenphpRunning {
-            pc.stopFrankenPHP()
+        if processController.frankenphpRunning {
+            processController.stopFrankenPHP()
         } else {
-            pc.startFrankenPHP(store: store)
+            processController.startFrankenPHP(store: store)
         }
     }
 
     @objc func toggleMariaDB() {
-        guard let pc = processController, let store else { return }
-        if pc.mariadbRunning {
-            pc.stopMariaDB()
+        if processController.mariadbRunning {
+            processController.stopMariaDB()
         } else {
-            pc.startMariaDB(serverBinary: store.settings.runtimePaths.mariadbServer)
+            processController.startMariaDB(serverBinary: store.settings.runtimePaths.mariadbServer)
         }
     }
 
     @objc func toggleCloudflared() {
-        guard let pc = processController, let store else { return }
-        if pc.cloudflaredRunning {
-            pc.stopCloudflared()
+        if processController.cloudflaredRunning {
+            processController.stopCloudflared()
         } else {
-            pc.applyTunnels(store: store, start: true)
+            processController.applyTunnels(store: store, start: true)
         }
     }
 
@@ -327,7 +342,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Delay to let network stack stabilize after wake
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
-            self?.processController?.handleSystemWake()
+            self?.processController.handleSystemWake()
         }
     }
 
@@ -338,34 +353,76 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 struct SettingsView: View {
     let updater: SPUUpdater
-    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var loginStatus = SMAppService.mainApp.status
+    @State private var loginError: String?
     @State private var autoUpdate = true
+
+    /// On while registered, including while macOS waits for the user's approval.
+    private var launchAtLogin: Binding<Bool> {
+        Binding(
+            get: { loginStatus == .enabled || loginStatus == .requiresApproval },
+            set: { setLaunchAtLogin($0) }
+        )
+    }
 
     var body: some View {
         Form {
-            Toggle("Launch Nest at login", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) {
-                    do {
-                        if launchAtLogin { try SMAppService.mainApp.register() }
-                        else { try SMAppService.mainApp.unregister() }
-                    } catch {
-                        launchAtLogin = SMAppService.mainApp.status == .enabled
+            Section {
+                Toggle("Launch Nest at login", isOn: launchAtLogin)
+
+                if loginStatus == .requiresApproval {
+                    HStack(alignment: .firstTextBaseline) {
+                        Label("Allow Nest in System Settings → General → Login Items to finish turning this on.", systemImage: "exclamationmark.circle")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Open Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                     }
                 }
-
-            Toggle("Automatically check for updates", isOn: $autoUpdate)
-                .onChange(of: autoUpdate) {
-                    updater.automaticallyChecksForUpdates = autoUpdate
+                if let loginError {
+                    Label(loginError, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .lineLimit(4)
                 }
-                .onAppear {
-                    autoUpdate = updater.automaticallyChecksForUpdates
-                }
+            }
 
-            Button("Check for Updates Now…") {
-                updater.checkForUpdates()
+            Section {
+                Toggle("Automatically check for updates", isOn: $autoUpdate)
+                    .onChange(of: autoUpdate) {
+                        updater.automaticallyChecksForUpdates = autoUpdate
+                    }
+                    .onAppear {
+                        autoUpdate = updater.automaticallyChecksForUpdates
+                    }
+
+                Button("Check for Updates Now…") {
+                    updater.checkForUpdates()
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 400, height: 160)
+        .frame(width: 440, height: loginStatus == .requiresApproval || loginError != nil ? 280 : 200)
+        .onAppear { loginStatus = SMAppService.mainApp.status }
+        // The user may approve (or remove) the login item in System Settings meanwhile.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginStatus = SMAppService.mainApp.status
+        }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        loginError = nil
+        do {
+            if enabled { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+        } catch {
+            loginError = enabled
+                ? "Could not turn on launch at login: \(error.localizedDescription)"
+                : "Could not turn off launch at login: \(error.localizedDescription)"
+        }
+        loginStatus = SMAppService.mainApp.status
+        // Registration that needs approval is reported by the status, not as a failure.
+        if loginStatus == .requiresApproval { loginError = nil }
     }
 }

@@ -2,7 +2,7 @@ import SwiftUI
 
 public struct RuntimePathsView: View {
     @EnvironmentObject var store: SiteStore
-    @State private var paths: RuntimePaths = RuntimePaths()
+    @EnvironmentObject var documents: ConfigDocumentStore
     @State private var validationIssues: [String] = []
     @State private var optionalIssues: [String] = []
     @State private var saved = false
@@ -12,31 +12,44 @@ public struct RuntimePathsView: View {
 
     public init() {}
 
+    /// Edits (and Auto-Detect results) live in the shared document store until saved, so
+    /// they survive tab switches and are covered by the quit check.
+    private var paths: Binding<RuntimePaths> {
+        Binding(
+            get: { documents.runtimePathsDraft ?? store.settings.runtimePaths },
+            set: { documents.runtimePathsDraft = $0 }
+        )
+    }
+
+    private var hasUnsavedChanges: Bool {
+        documents.hasUnsavedRuntimePaths(comparedTo: store.settings.runtimePaths)
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 12) {
                     settingsCard(title: "FrankenPHP", icon: "bolt.fill", color: .purple) {
                         VStack(spacing: 12) {
-                            pathRow("Binary", path: $paths.frankenphpBinary)
-                            pathRow("php.ini", path: $paths.phpIniPath)
-                            pathRow("Log File", path: $paths.frankenphpLog)
+                            pathRow("Binary", section: "FrankenPHP", path: paths.frankenphpBinary)
+                            pathRow("php.ini", section: "FrankenPHP", path: paths.phpIniPath)
+                            pathRow("Log File", section: "FrankenPHP", path: paths.frankenphpLog)
                         }
                     }
 
                     settingsCard(title: "MariaDB", icon: "cylinder.fill", color: .blue) {
                         VStack(spacing: 12) {
-                            pathRow("Server (mariadbd)", path: $paths.mariadbServer)
-                            pathRow("Client (mariadb)", path: $paths.mariadbClient)
-                            pathRow("mysqldump", path: $paths.mysqldump)
-                            pathRow("Log File", path: $paths.mariadbLog)
+                            pathRow("Server (mariadbd)", section: "MariaDB", path: paths.mariadbServer)
+                            pathRow("Client (mariadb)", section: "MariaDB", path: paths.mariadbClient)
+                            pathRow("mysqldump", section: "MariaDB", path: paths.mysqldump)
+                            pathRow("Log File", section: "MariaDB", path: paths.mariadbLog)
                         }
                     }
 
                     settingsCard(title: "Cloudflared", icon: "network", color: .green) {
                         VStack(spacing: 12) {
-                            pathRow("Binary", path: $paths.cloudflaredBinary)
-                            pathRow("Log File", path: $paths.cloudflaredLog)
+                            pathRow("Binary", section: "Cloudflared", path: paths.cloudflaredBinary)
+                            pathRow("Log File", section: "Cloudflared", path: paths.cloudflaredLog)
                         }
                     }
 
@@ -47,6 +60,7 @@ public struct RuntimePathsView: View {
                                     Image(systemName: "exclamationmark.triangle.fill")
                                         .foregroundStyle(.orange)
                                         .font(.callout)
+                                        .accessibilityHidden(true)
                                     Text(issue)
                                         .font(.callout)
                                         .foregroundStyle(.secondary)
@@ -80,6 +94,11 @@ public struct RuntimePathsView: View {
             Divider()
 
             HStack(spacing: 8) {
+                if hasUnsavedChanges {
+                    Text("Unsaved changes")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 if detected {
                     Label("Detected", systemImage: "checkmark.circle.fill")
                         .font(.callout)
@@ -98,11 +117,23 @@ public struct RuntimePathsView: View {
 
                 Spacer()
 
+                if hasUnsavedChanges {
+                    Button("Revert") {
+                        documents.runtimePathsDraft = nil
+                        validationIssues = []
+                        validated = false
+                        optionalIssues = store.settings.runtimePaths.optionalIssues()
+                    }
+                    .controlSize(.small)
+                    .help("Discard unsaved path changes")
+                }
+
                 Button("Validate") {
-                    let issues = paths.validate()
+                    let current = paths.wrappedValue
+                    let issues = current.validate()
                     withAnimation {
                         validationIssues = issues
-                        optionalIssues = paths.optionalIssues()
+                        optionalIssues = current.optionalIssues()
                     }
                     validated = issues.isEmpty
                     saved = false
@@ -111,14 +142,16 @@ public struct RuntimePathsView: View {
 
                 Button {
                     detecting = true
+                    let draft = paths
                     Task {
                         // Detection launches FrankenPHP to find php.ini; keep the UI responsive.
                         let detectedPaths = await BlockingWork.run(qos: .userInitiated) { RuntimePaths.detectDefaults() }
                         detecting = false
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            paths = detectedPaths
+                            draft.wrappedValue = detectedPaths
                             detected = true
                         }
+                        optionalIssues = detectedPaths.optionalIssues()
                         try? await Task.sleep(for: .seconds(2))
                         withAnimation { detected = false }
                     }
@@ -129,44 +162,47 @@ public struct RuntimePathsView: View {
                 .controlSize(.small)
                 .disabled(detecting)
 
-                Button("Save") {
-                    let issues = paths.validate()
-                    optionalIssues = paths.optionalIssues()
-                    guard issues.isEmpty else {
-                        withAnimation {
-                            validationIssues = issues
-                            saved = false
-                        }
-                        return
-                    }
-
-                    // Keep the in-memory settings identical to disk if the save fails.
-                    let previous = store.settings.runtimePaths
-                    store.settings.runtimePaths = paths
-                    guard store.saveSettings() else {
-                        store.settings.runtimePaths = previous
-                        validationIssues = [store.saveError(.settings) ?? "Could not save settings."]
-                        saved = false
-                        return
-                    }
-                    withAnimation {
-                        validationIssues = []
-                        saved = true
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        withAnimation { saved = false }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .keyboardShortcut("s", modifiers: .command)
+                Button("Save", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .keyboardShortcut("s", modifiers: .command)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
         .onAppear {
-            paths = store.settings.runtimePaths
-            optionalIssues = paths.optionalIssues()
+            optionalIssues = paths.wrappedValue.optionalIssues()
+        }
+    }
+
+    private func save() {
+        let current = paths.wrappedValue
+        let issues = current.validate()
+        optionalIssues = current.optionalIssues()
+        guard issues.isEmpty else {
+            withAnimation {
+                validationIssues = issues
+                saved = false
+            }
+            return
+        }
+
+        // Keep the in-memory settings identical to disk if the save fails.
+        let previous = store.settings.runtimePaths
+        store.settings.runtimePaths = current
+        guard store.saveSettings() else {
+            store.settings.runtimePaths = previous
+            validationIssues = [store.saveError(.settings) ?? "Could not save settings."]
+            saved = false
+            return
+        }
+        documents.runtimePathsDraft = nil
+        withAnimation {
+            validationIssues = []
+            saved = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation { saved = false }
         }
     }
 
@@ -180,9 +216,11 @@ public struct RuntimePathsView: View {
                     .foregroundStyle(color)
                     .frame(width: 20, height: 20)
                     .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+                    .accessibilityHidden(true)
                 Text(title)
                     .font(.callout)
                     .fontWeight(.semibold)
+                    .accessibilityAddTraits(.isHeader)
             }
             content()
         }
@@ -191,13 +229,15 @@ public struct RuntimePathsView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
-    private func pathRow(_ label: String, path: Binding<String>) -> some View {
+    private func pathRow(_ label: String, section: String, path: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             HStack(spacing: 8) {
-                TextField("", text: path)
+                TextField("\(section) \(label) path", text: path)
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.callout, design: .monospaced))
                 Button("Browse...") {
@@ -205,11 +245,13 @@ public struct RuntimePathsView: View {
                     panel.canChooseDirectories = false
                     panel.canChooseFiles = true
                     panel.allowsMultipleSelection = false
+                    panel.message = "Choose the \(section) \(label)"
                     if panel.runModal() == .OK, let url = panel.url {
                         path.wrappedValue = url.path
                     }
                 }
                 .controlSize(.small)
+                .accessibilityLabel("Browse for \(section) \(label)")
             }
         }
     }

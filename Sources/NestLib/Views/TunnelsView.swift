@@ -67,14 +67,22 @@ public struct TunnelsView: View {
             } else if routes.isEmpty {
                 ContentUnavailableView.search(text: searchText)
             } else {
+                let cloudflaredBusy = processController.isServiceBusy("Cloudflared")
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(routes) { route in
+                            // Rows get plain values and are Equatable, so "Check All" re-renders
+                            // only the row whose health changed instead of every row per update.
                             TunnelRouteRow(
                                 route: route,
+                                health: processController.routeHealth[route.id],
+                                cloudflaredBusy: cloudflaredBusy,
+                                onSetActive: { setActive(route, $0) },
+                                onCheck: { processController.checkRoute(route) },
                                 onEdit: { editingRoute = route },
                                 onDelete: { routePendingDeletion = route }
                             )
+                            .equatable()
                             if route.id != lastID {
                                 Divider().padding(.leading, 36)
                             }
@@ -119,20 +127,29 @@ public struct TunnelsView: View {
         )
     }
 
+    private func setActive(_ route: TunnelRoute, _ active: Bool) {
+        var updated = route
+        updated.active = active
+        store.updateTunnelRoute(updated)
+    }
+
     private var toolbar: some View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .font(.callout)
+                    .accessibilityHidden(true)
                 TextField("Filter...", text: $searchText)
                     .textFieldStyle(.plain)
                     .font(.callout)
+                    .accessibilityLabel("Filter routes")
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Label("Clear Filter", systemImage: "xmark.circle.fill")
+                            .labelStyle(.iconOnly)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -152,7 +169,8 @@ public struct TunnelsView: View {
             Button {
                 showAddSheet = true
             } label: {
-                Image(systemName: "plus")
+                Label("Add Route", systemImage: "plus")
+                    .labelStyle(.iconOnly)
                     .font(.callout)
             }
             .buttonStyle(.bordered)
@@ -186,17 +204,23 @@ public struct TunnelsView: View {
 
 // MARK: - Tunnel Route Row
 
-private struct TunnelRouteRow: View {
-    @EnvironmentObject private var store: SiteStore
-    @EnvironmentObject private var processController: ProcessController
-
+private struct TunnelRouteRow: View, Equatable {
     let route: TunnelRoute
+    let health: RouteHealth?
+    let cloudflaredBusy: Bool
+    let onSetActive: (Bool) -> Void
+    let onCheck: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
 
     /// Row-local so hovering redraws one row, not the whole list.
     @State private var isHovered = false
     @State private var hoveredAction: String?
+
+    /// The closures only capture `route`, so comparing the values is enough.
+    static func == (lhs: TunnelRouteRow, rhs: TunnelRouteRow) -> Bool {
+        lhs.route == rhs.route && lhs.health == rhs.health && lhs.cloudflaredBusy == rhs.cloudflaredBusy
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -227,7 +251,7 @@ private struct TunnelRouteRow: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let health = processController.routeHealth[route.id] {
+            if let health {
                 Text(health.label).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(health.label)
             }
 
@@ -236,19 +260,14 @@ private struct TunnelRouteRow: View {
                 rowAction(icon: "trash", help: "Delete") { onDelete() }
             }
 
-
             Toggle("Enable \(route.publicHostname)", isOn: Binding(
                 get: { route.active },
-                set: { newValue in
-                    var updated = route
-                    updated.active = newValue
-                    store.updateTunnelRoute(updated)
-                }
+                set: { onSetActive($0) }
             ))
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.mini)
-            .disabled(processController.isServiceBusy("Cloudflared"))
+            .disabled(cloudflaredBusy)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -258,14 +277,10 @@ private struct TunnelRouteRow: View {
             withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
         }
         .contextMenu {
-            Button("Check Reachability") { processController.checkRoute(route) }
-                .disabled(!route.active || processController.routeHealth[route.id] == .checking)
+            Button("Check Reachability") { onCheck() }
+                .disabled(!route.active || health == .checking)
             Button("Edit Route") { onEdit() }
-            Button(route.active ? "Disable" : "Enable") {
-                var updated = route
-                updated.active.toggle()
-                store.updateTunnelRoute(updated)
-            }
+            Button(route.active ? "Disable" : "Enable") { onSetActive(!route.active) }
             Divider()
             Button("Delete Route", role: .destructive) { onDelete() }
         }
