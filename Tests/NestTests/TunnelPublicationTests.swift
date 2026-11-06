@@ -185,24 +185,32 @@ enum TunnelPublicationTests {
             check(TunnelDNSProtocol.methods.filter { $0 == "POST" }.count == many.count, "every missing record is created")
         } catch { check(false, "concurrent DNS: \(error)") }
 
-        // Without a readable zone, DNS is skipped but the ingress still goes out.
+        // An "Edit zone DNS" token may not read zone details: an unreadable zone skips only
+        // the zone check, and DNS is created exactly as before.
         var unknownZone = cf
         unknownZone.zoneId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        TunnelDNSProtocol.configure { request in
+        let unreadableZone: (URLRequest) -> (Int, String) = { request in
             if request.url!.path.hasSuffix("/zones/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
                 return (403, #"{"success":false,"errors":[{"code":9109,"message":"Unauthorized"}],"result":null}"#)
             }
-            return (200, request.url!.path.hasSuffix("/configurations") ? ok : #"{"success":true,"errors":[],"result":[]}"#)
+            if request.url!.path.hasSuffix("/configurations") || request.httpMethod == "POST" { return (200, ok) }
+            return (200, #"{"success":true,"errors":[],"result":[]}"#)
         }
+        TunnelDNSProtocol.configure(unreadableZone)
         do {
-            try await CloudflareService.publishTunnel(settings: unknownZone, routes: Array(publishRoutes.prefix(2)), sites: [], projects: [], session: session)
-            check(false, "unreadable zone must fail DNS")
-        } catch {
-            check(TunnelDNSProtocol.methods.isEmpty && TunnelDNSProtocol.requests.contains { $0.httpMethod == "PUT" },
-                  "unreadable zone creates no records but still publishes ingress")
-            check(error.localizedDescription.contains("zone") && error.localizedDescription.contains("listed.example.com, new.example.com"),
-                  "unreadable zone failure names the hostnames once")
-        }
+            try await CloudflareService.ensureTunnelDNS(hostname: "new.example.com", settings: unknownZone, session: session)
+            check(TunnelDNSProtocol.zoneLookups == 1 && TunnelDNSProtocol.methods == ["GET", "POST"],
+                  "a 403 zone lookup still creates the missing record")
+            check(CloudflareService.cachedZoneName(zoneId: unknownZone.zoneId) == nil, "a failed zone lookup is not cached as a zone name")
+        } catch { check(false, "unreadable zone must not block DNS: \(error)") }
+        TunnelDNSProtocol.configure(unreadableZone)
+        do {
+            try await CloudflareService.publishTunnel(settings: unknownZone, routes: [publishRoutes[1], publishRoutes[3]], sites: [], projects: [], session: session)
+            check(TunnelDNSProtocol.zoneLookups == 1, "publication tries the zone lookup once")
+            check(Set(TunnelDNSProtocol.names) == ["new.example.com", "app.other.org"] && TunnelDNSProtocol.methods.filter { $0 == "POST" }.count == 2,
+                  "without a known zone no hostname is refused and DNS is created as before")
+            check(TunnelDNSProtocol.requests.filter { $0.httpMethod == "PUT" }.count == 1, "unreadable zone still publishes ingress")
+        } catch { check(false, "unreadable zone must not fail publication: \(error)") }
 
         var settings = AppSettings()
         settings.cloudflareSettings = cf

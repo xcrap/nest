@@ -300,6 +300,13 @@ public enum CloudflareService {
         return name
     }
 
+    /// The zone name for the zone check, or nil when it cannot be read. An "Edit zone DNS" token
+    /// may not be allowed to read zone details, so an unreadable zone only skips the zone check;
+    /// it never blocks DNS changes the token can make.
+    private static func zoneNameIfReadable(settings: CloudflareSettings, session: URLSession) async -> String? {
+        try? await zoneName(settings: settings, session: session)
+    }
+
     /// The zone name if an earlier call already looked it up; never touches the network.
     public static func cachedZoneName(zoneId: String) -> String? {
         zoneNames.name(for: zoneId)
@@ -365,13 +372,13 @@ public enum CloudflareService {
 
     /// Idempotent publication: reuse only a proxied CNAME to this tunnel. Never take over
     /// an existing address or a hostname belonging to a different service, and never create
-    /// a record for a hostname outside the configured zone.
+    /// a record for a hostname known to be outside the configured zone. When the zone name
+    /// cannot be read, the zone check is skipped and DNS is handled as before.
     public static func ensureTunnelDNS(hostname: String, settings: CloudflareSettings, session: URLSession = defaultSession) async throws {
         try requireAPI(settings)
         let issues = NestValidation.domainIssues(hostname, field: "Public hostname")
         guard issues.isEmpty else { throw CloudflareServiceError.invalidTunnelConfiguration(issues) }
-        let zone = try await zoneName(settings: settings, session: session)
-        guard isHostname(hostname, inZone: zone) else {
+        if let zone = await zoneNameIfReadable(settings: settings, session: session), !isHostname(hostname, inZone: zone) {
             throw CloudflareServiceError.hostnameOutsideZone(hostname: hostname, zone: zone)
         }
         try await ensureTunnelDNSRecord(hostname: hostname, settings: settings, session: session)
@@ -414,19 +421,14 @@ public enum CloudflareService {
         guard !unique.isEmpty else { return [] }
 
         var failures: [String: String] = [:]
-        let zone: String
-        do {
-            zone = try await zoneName(settings: settings, session: session)
-        } catch {
-            let reason = "Could not read the Cloudflare zone to verify hostnames (\(error.localizedDescription)). Check the Zone ID and that the API token can read this zone."
-            return unique.map { ($0, reason) }
-        }
+        // Only a known zone can refuse a hostname; an unreadable one skips the check.
+        let zone = await zoneNameIfReadable(settings: settings, session: session)
 
         var candidates: [String] = []
         for hostname in unique {
             if let issue = NestValidation.domainIssues(hostname, field: "Public hostname").first {
                 failures[hostname] = issue
-            } else if let issue = zoneIssue(hostname: hostname, zone: zone) {
+            } else if let zone, let issue = zoneIssue(hostname: hostname, zone: zone) {
                 failures[hostname] = issue
             } else {
                 candidates.append(hostname)

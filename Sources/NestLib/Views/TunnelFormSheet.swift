@@ -199,8 +199,8 @@ public struct TunnelFormSheet: View {
         return CloudflareService.zoneIssue(hostname: candidateHostname, zone: zoneName)
     }
 
-    /// One cached lookup per zone; without API access the form simply skips the zone check
-    /// (publishing still enforces it).
+    /// One cached lookup per zone; without API access, or when the token cannot read the zone,
+    /// the form shows no zone warning (publishing then skips the zone check too).
     private func loadZoneName() async {
         let settings = store.settings.cloudflareSettings
         guard settings.hasAPIConfiguration else { return }
