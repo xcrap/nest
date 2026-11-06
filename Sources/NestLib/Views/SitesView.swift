@@ -25,6 +25,7 @@ public struct SitesView: View {
     @State private var sortOrder = [KeyPathComparator(\Site.name)]
     @State private var filter = "All"
     @State private var pendingDeletion: Site?
+    @State private var siteError: String?
     @AppStorage("pinnedSites") private var pinnedSites = ""
     @AppStorage("recentSites") private var recentSites = ""
 
@@ -122,7 +123,7 @@ public struct SitesView: View {
                     TableColumn("Enabled") { site in
                         Toggle("Enable \(site.name)", isOn: Binding(
                             get: { site.status == .running },
-                            set: { store.setSiteStatus(id: site.id, status: $0 ? .running : .stopped) }
+                            set: { setEnabled(site, $0) }
                         )).labelsHidden().toggleStyle(.switch).controlSize(.mini)
                             .disabled(processController.caddyApplyState.isBusy || processController.isServiceBusy("FrankenPHP"))
                     }.width(58)
@@ -200,11 +201,25 @@ public struct SitesView: View {
         } message: { Text(importResult?.message ?? "") }
         .alert("Delete Site?", isPresented: .init(get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } })) {
             Button("Delete", role: .destructive) {
-                if let site = pendingDeletion { store.deleteSite(id: site.id) }
+                if let site = pendingDeletion, !store.deleteSite(id: site.id) {
+                    siteError = store.saveError(.sites) ?? "Could not delete \(site.name)."
+                }
                 pendingDeletion = nil
             }
             Button("Cancel", role: .cancel) { pendingDeletion = nil }
         } message: { Text("Remove \(pendingDeletion?.name ?? "this site") from Nest? Its files will stay on disk.") }
+        .alert("Could Not Update Site", isPresented: .init(get: { siteError != nil }, set: { if !$0 { siteError = nil } })) {
+            Button("OK") { siteError = nil }
+        } message: { Text(siteError ?? "") }
+    }
+
+    /// The store refuses to run an invalid or duplicate site; say why instead of leaving the switch off silently.
+    private func setEnabled(_ site: Site, _ enabled: Bool) {
+        let issues = enabled ? store.runIssues(for: site) : []
+        guard !store.setSiteStatus(id: site.id, status: enabled ? .running : .stopped) else { return }
+        siteError = issues.isEmpty
+            ? (store.saveError(.sites) ?? "Could not \(enabled ? "enable" : "disable") \(site.name).")
+            : "\(site.name) cannot be enabled: \(issues.joined(separator: " "))"
     }
     /// Encode only when exporting, and surface failures instead of writing an empty file.
     private func prepareExport() {
