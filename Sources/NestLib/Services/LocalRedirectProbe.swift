@@ -21,9 +21,10 @@ public enum LocalRedirectProbe {
         return isCaddyResponse(headers: http.output)
     }
 
+    /// Caddy binds its `localhost:2019` admin endpoint to 127.0.0.1, so ask there and never `::1`.
     public static func isCaddyAdminReachable() -> Bool {
         SystemProcess.capture("/usr/bin/curl", arguments: [
-            "--silent", "--fail", "--max-time", "2", "--output", "/dev/null", "http://localhost:2019/config/"
+            "--silent", "--fail", "--ipv4", "--max-time", "2", "--output", "/dev/null", "http://localhost:2019/config/"
         ], timeout: 3).status == 0
     }
 

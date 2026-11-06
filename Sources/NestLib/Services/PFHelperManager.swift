@@ -38,6 +38,26 @@ public enum PFHelperManager {
         }
     }
 
+    /// `SMAppService` only answers for the app bundle that embeds the daemon, so a binary outside
+    /// Nest.app (nestctl) always sees `.notFound`, even with the helper installed. launchd itself
+    /// still knows the job, and the helper leaves its anchor behind once it has run.
+    public static func statusFromSystem(
+        launchdKnowsService: () -> Bool = { isServiceLoadedInLaunchd() },
+        anchorInstalled: () -> Bool = { FileManager.default.fileExists(atPath: anchorPath) },
+        redirectWorking: () -> Bool = { LocalRedirectProbe.isRedirectReachingCaddy() }
+    ) -> PFHelperStatus {
+        guard isSupported else { return .unsupported }
+        if launchdKnowsService() { return .enabled }
+        // A live redirect through the helper's anchor means it ran, even if launchctl could not tell.
+        if anchorInstalled(), redirectWorking() { return .enabled }
+        return .notRegistered
+    }
+
+    /// `launchctl print system/<label>` exits 0 only while launchd has the daemon loaded.
+    public static func isServiceLoadedInLaunchd() -> Bool {
+        SystemProcess.capture("/bin/launchctl", arguments: ["print", "system/\(serviceLabel)"], timeout: 5).status == 0
+    }
+
     /// Register the daemon with launchd. User will see a macOS prompt to approve
     /// in System Settings → Login Items & Extensions the first time.
     public static func register() throws {

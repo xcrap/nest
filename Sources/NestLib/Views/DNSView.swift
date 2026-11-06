@@ -5,6 +5,9 @@ public struct DNSView: View {
 
     @State private var records: [CloudflareDNSRecord] = []
     @State private var isLoading = false
+    /// A reload asked for while one is in flight runs after it, so a list fetched before a
+    /// create or delete never has the last word.
+    @State private var reloadQueued = false
     @State private var isMutating = false
     @State private var loadError: String?
     @State private var errorMessage: String?
@@ -54,7 +57,8 @@ public struct DNSView: View {
                                 record: record,
                                 onDelete: { recordPendingDeletion = record }
                             )
-                            .disabled(isMutating)
+                            // A list that is being replaced must not offer actions on stale rows.
+                            .disabled(isMutating || isLoading)
                             if record.id != records.last?.id {
                                 Divider().padding(.leading, 16)
                             }
@@ -115,6 +119,12 @@ public struct DNSView: View {
 
             Spacer()
 
+            if isLoading && !records.isEmpty {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Loading DNS routes")
+            }
+
             Button {
                 reload()
             } label: {
@@ -125,6 +135,7 @@ public struct DNSView: View {
             .controlSize(.small)
             .disabled(!store.settings.cloudflareSettings.hasAPIConfiguration || isLoading)
             .help("Refresh")
+            .accessibilityLabel("Refresh DNS routes")
 
             Button {
                 showAddSheet = true
@@ -136,6 +147,7 @@ public struct DNSView: View {
             .controlSize(.small)
             .disabled(!store.settings.cloudflareSettings.hasAPIConfiguration || isLoading || isMutating)
             .help("Add DNS Route")
+            .accessibilityLabel("Add DNS Route")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -181,16 +193,33 @@ public struct DNSView: View {
     }
 
     private func reload() {
-        guard store.settings.cloudflareSettings.hasAPIConfiguration, !isLoading else { return }
+        guard store.settings.cloudflareSettings.hasAPIConfiguration else { return }
+        guard !isLoading else {
+            reloadQueued = true
+            return
+        }
         isLoading = true
+        reloadQueued = false
         Task {
+            let result: Result<[CloudflareDNSRecord], Error>
             do {
-                records = try await CloudflareService.listDNSRecords(settings: store.settings.cloudflareSettings)
-                loadError = nil
+                result = .success(try await CloudflareService.listDNSRecords(settings: store.settings.cloudflareSettings))
             } catch {
-                loadError = error.localizedDescription
+                result = .failure(error)
             }
             isLoading = false
+            // This list predates a change made while it loaded; fetch again instead of showing it.
+            if reloadQueued {
+                reload()
+                return
+            }
+            switch result {
+            case .success(let loaded):
+                records = loaded
+                loadError = nil
+            case .failure(let error):
+                loadError = error.localizedDescription
+            }
         }
     }
 
@@ -242,8 +271,10 @@ private struct DNSRouteRow: View {
     let record: CloudflareDNSRecord
     let onDelete: () -> Void
 
+    @Environment(\.isEnabled) private var isEnabled
     @State private var isHovered = false
     @State private var hoveredAction: String?
+    @FocusState private var deleteFocused: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -301,8 +332,11 @@ private struct DNSRouteRow: View {
             .buttonStyle(.plain)
             .foregroundStyle(hoveredAction == "trash" ? .primary : .secondary)
             .onHover { h in hoveredAction = h ? "trash" : nil }
-            .opacity(isHovered ? 1 : 0)
+            // Hover reveals it for the mouse; keyboard focus reveals it for Full Keyboard Access.
+            .focused($deleteFocused)
+            .opacity(isHovered || deleteFocused ? 1 : 0)
             .help("Delete")
+            .accessibilityLabel("Delete \(record.name)")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -314,6 +348,17 @@ private struct DNSRouteRow: View {
         .contextMenu {
             Button("Delete Route", role: .destructive) { onDelete() }
         }
+        // VoiceOver reads the row as one element and offers Delete as an action, so the
+        // hover-only button is never the sole way to reach it.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityDescription)
+        .accessibilityAction(named: "Delete Route") {
+            if isEnabled { onDelete() }
+        }
+    }
+
+    private var accessibilityDescription: String {
+        "\(record.type) record \(record.name) points to \(record.content)\(record.proxied ? ", proxied" : "")"
     }
 }
 

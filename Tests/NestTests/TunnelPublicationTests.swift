@@ -41,7 +41,8 @@ enum TunnelPublicationTests {
         config.protocolClasses = [TunnelDNSProtocol.self]
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
-        let cf = CloudflareSettings(apiToken: "fixture-token", zoneId: "fixture-zone", accountId: "fixture-account", tunnelId: "fixture-id",
+        let cf = CloudflareSettings(apiToken: "fixture-token", zoneId: "0123456789abcdef0123456789abcdef", accountId: "fedcba9876543210fedcba9876543210",
+            tunnelId: "6ff42ae2-765d-4adf-8112-31c55c1551ef",
             tunnelName: "fixture", tunnelDomain: "fixture.cfargotunnel.com", configPath: "/tmp/fixture.yaml", credentialsFilePath: "/tmp/fixture.json")
         let existing = #"{"success":true,"errors":[],"result":[{"id":"record","name":"new.example.com","type":"CNAME","content":"fixture.cfargotunnel.com","proxied":true,"ttl":1}]}"#
         TunnelDNSProtocol.configure { _ in (200, existing) }
@@ -49,6 +50,7 @@ enum TunnelPublicationTests {
             try await CloudflareService.ensureTunnelDNS(hostname: "new.example.com", settings: cf, session: session)
             check(TunnelDNSProtocol.methods == ["GET"], "matching DNS is reused without writes")
             check(TunnelDNSProtocol.names == ["new.example.com"], "DNS lookup is scoped to the exact hostname")
+            check(TunnelDNSProtocol.zoneLookups == 1, "the zone name is looked up before DNS changes")
         } catch { check(false, "existing DNS: \(error)") }
         TunnelDNSProtocol.configure { request in
             (200, request.httpMethod == "POST" ? #"{"success":true,"errors":[],"result":{}}"# : #"{"success":true,"errors":[],"result":[]}"#)
@@ -56,6 +58,9 @@ enum TunnelPublicationTests {
         do {
             try await CloudflareService.ensureTunnelDNS(hostname: "new.example.com", settings: cf, session: session)
             check(TunnelDNSProtocol.methods == ["GET", "POST"], "missing DNS is created once")
+            check(TunnelDNSProtocol.zoneLookups == 0, "the zone name is cached per zone ID")
+            check(TunnelDNSProtocol.requests.allSatisfy { $0.timeoutInterval == CloudflareService.requestTimeout },
+                  "Cloudflare requests use the short timeout")
         } catch { check(false, "new DNS: \(error)") }
         for conflicting in [existing.replacingOccurrences(of: "fixture.cfargotunnel.com", with: "other.example.com"), existing.replacingOccurrences(of: "true,\"ttl", with: "false,\"ttl")] {
             TunnelDNSProtocol.configure { _ in (200, conflicting) }
@@ -69,6 +74,135 @@ enum TunnelPublicationTests {
             try await CloudflareService.ensureTunnelDNS(hostname: "new.example.com", settings: cf, session: session)
             check(false, "DNS permission failure must throw")
         } catch { check(error.localizedDescription.contains("403") && TunnelDNSProtocol.methods == ["GET"], "failed DNS lookup never creates a record") }
+
+        // Hostnames outside the zone would be created relative to it (app.other.org.example.com).
+        TunnelDNSProtocol.configure { _ in (200, #"{"success":true,"errors":[],"result":[]}"#) }
+        do {
+            try await CloudflareService.ensureTunnelDNS(hostname: "app.other.org", settings: cf, session: session)
+            check(false, "out-of-zone hostname must fail")
+        } catch {
+            check(TunnelDNSProtocol.methods.isEmpty && error.localizedDescription.contains("outside the Cloudflare zone example.com"),
+                  "out-of-zone hostnames are refused before any DNS request")
+        }
+        check(CloudflareService.isHostname("example.com", inZone: "example.com"), "zone apex is in the zone")
+        check(CloudflareService.isHostname("A.Example.com.", inZone: "example.com"), "zone check ignores case and trailing dot")
+        check(!CloudflareService.isHostname("badexample.com", inZone: "example.com"), "a suffix that is not a label boundary is outside the zone")
+        check(CloudflareService.zoneIssue(hostname: "x.other.org", zone: "example.com")?.contains("x.other.org") == true, "zone issue names the hostname")
+        check(CloudflareService.zoneIssue(hostname: "x.example.com", zone: "example.com") == nil, "in-zone hostnames have no zone issue")
+        check(CloudflareService.cachedZoneName(zoneId: cf.zoneId.uppercased()) == "example.com", "cached zone name is available to forms")
+
+        // IDs are validated before they are interpolated into URLs.
+        check(CloudflareService.isValidHexIdentifier("0123456789ABCDEF0123456789abcdef"), "32 hex characters are a valid ID")
+        check(!CloudflareService.isValidHexIdentifier("fixture-zone"), "non-hex zone IDs are rejected")
+        check(!CloudflareService.isValidHexIdentifier("0123456789abcdef0123456789abcde/"), "path characters are rejected")
+        check(CloudflareService.isValidTunnelIdentifier("6ff42ae2-765d-4adf-8112-31c55c1551ef"), "tunnel UUIDs are valid")
+        check(CloudflareService.isValidTunnelIdentifier("6ff42ae2765d4adf811231c55c1551ef"), "undashed tunnel IDs are valid")
+        check(!CloudflareService.isValidTunnelIdentifier("6ff42ae2-765d-4adf-8112-31c55c1551e/"), "malformed tunnel IDs are rejected")
+        check(CloudflareService.identifierIssues(cf).isEmpty, "valid fixture IDs have no issues")
+        var badZone = cf
+        badZone.zoneId = "zone/../../accounts"
+        var badAccount = cf
+        badAccount.accountId = "account"
+        var badTunnel = cf
+        badTunnel.tunnelId = "id?x=1"
+        for (field, broken) in [("Zone ID", badZone), ("Account ID", badAccount), ("Tunnel ID", badTunnel)] {
+            TunnelDNSProtocol.configure { _ in (200, #"{"success":true,"errors":[],"result":[]}"#) }
+            do {
+                try await CloudflareService.publishTunnel(settings: broken, routes: [], sites: [], projects: [], session: session)
+                check(false, "invalid \(field) must fail")
+            } catch {
+                check(TunnelDNSProtocol.requests.isEmpty && TunnelDNSProtocol.zoneLookups == 0 && error.localizedDescription.contains(field),
+                      "invalid \(field) fails before any request")
+            }
+        }
+        do {
+            _ = try await CloudflareService.listDNSRecords(settings: badZone, session: session)
+            check(false, "listing with an invalid zone ID must fail")
+        } catch { check(TunnelDNSProtocol.requests.isEmpty, "listing validates the zone ID") }
+        do {
+            try await CloudflareService.deleteDNSRecord(id: "../zones", settings: cf, session: session)
+            check(false, "invalid record IDs must fail")
+        } catch { check(TunnelDNSProtocol.requests.isEmpty, "record IDs are validated before deleting") }
+
+        // Listing follows result_info pagination.
+        TunnelDNSProtocol.configure { request in
+            let page = TunnelDNSProtocol.query(request, "page") ?? "1"
+            let name = page == "1" ? "a.example.com" : "b.example.com"
+            return (200, #"{"success":true,"errors":[],"result":[{"id":"r\#(page)","name":"\#(name)","type":"CNAME","content":"fixture.cfargotunnel.com","proxied":true,"ttl":1}],"result_info":{"page":\#(page),"total_pages":2}}"#)
+        }
+        do {
+            let records = try await CloudflareService.listDNSRecords(settings: cf, session: session)
+            check(records.map(\.name) == ["a.example.com", "b.example.com"], "records from every page are returned")
+            check(TunnelDNSProtocol.requests.compactMap { TunnelDNSProtocol.query($0, "page") } == ["1", "2"], "each page is requested once")
+            check(TunnelDNSProtocol.requests.allSatisfy { TunnelDNSProtocol.query($0, "content") == "fixture.cfargotunnel.com" },
+                  "listing is filtered to the tunnel")
+        } catch { check(false, "pagination: \(error)") }
+
+        // One bad route never blocks the others: the ingress is pushed and failures are listed.
+        let publishRoutes = [
+            TunnelRoute(id: "listed", kind: .php, subdomain: "listed", publicDomain: "example.com", localDomain: "a.test", originPort: 443),
+            TunnelRoute(id: "new", kind: .php, subdomain: "new", publicDomain: "example.com", localDomain: "b.test", originPort: 443),
+            TunnelRoute(id: "taken", kind: .php, subdomain: "taken", publicDomain: "example.com", localDomain: "c.test", originPort: 443),
+            TunnelRoute(id: "foreign", kind: .php, subdomain: "app", publicDomain: "other.org", localDomain: "d.test", originPort: 443),
+            TunnelRoute(id: "off", kind: .php, subdomain: "off", publicDomain: "example.com", localDomain: "e.test", originPort: 443, active: false)
+        ]
+        let ok = #"{"success":true,"errors":[],"result":{}}"#
+        let listed = #"{"success":true,"errors":[],"result":[{"id":"l","name":"listed.example.com","type":"CNAME","content":"fixture.cfargotunnel.com","proxied":true,"ttl":1}],"result_info":{"page":1,"total_pages":1}}"#
+        let taken = #"{"success":true,"errors":[],"result":[{"id":"t","name":"taken.example.com","type":"A","content":"192.0.2.1","proxied":false,"ttl":1}]}"#
+        TunnelDNSProtocol.configure { request in
+            if request.url!.path.hasSuffix("/configurations") || request.httpMethod == "POST" { return (200, ok) }
+            if TunnelDNSProtocol.query(request, "content") != nil { return (200, listed) }
+            if TunnelDNSProtocol.query(request, "name") == "taken.example.com" { return (200, taken) }
+            return (200, #"{"success":true,"errors":[],"result":[]}"#)
+        }
+        do {
+            try await CloudflareService.publishTunnel(settings: cf, routes: publishRoutes, sites: [], projects: [], session: session)
+            check(false, "partial DNS failure must still throw")
+        } catch {
+            let message = error.localizedDescription
+            check(message.contains("taken.example.com") && message.contains("app.other.org") && message.contains("2 hostnames"),
+                  "every failed hostname is reported together")
+            check(!message.contains("new.example.com") && !message.contains("listed.example.com"), "ready hostnames are not reported as failures")
+            let pushes = TunnelDNSProtocol.requests.filter { $0.httpMethod == "PUT" }
+            check(pushes.count == 1, "ingress is pushed despite DNS failures")
+            let ingress = pushes.first.flatMap(TunnelDNSProtocol.body).map { String(decoding: $0, as: UTF8.self) } ?? ""
+            check(ingress.contains("new.example.com") && ingress.contains("taken.example.com") && !ingress.contains("off.example.com"),
+                  "pushed ingress has every active route and drops disabled ones")
+            check(Set(TunnelDNSProtocol.names) == ["new.example.com", "taken.example.com"], "only hostnames missing from the listing are looked up by name")
+            check(TunnelDNSProtocol.methods.filter { $0 == "POST" }.count == 1, "only the missing record is created")
+        }
+
+        // Many uncovered hostnames are all checked (a few at a time).
+        let many = (1...9).map { TunnelRoute(id: "m\($0)", kind: .php, subdomain: "m\($0)", publicDomain: "example.com", localDomain: "m.test", originPort: 443) }
+        TunnelDNSProtocol.configure { request in
+            if request.url!.path.hasSuffix("/configurations") || request.httpMethod == "POST" { return (200, ok) }
+            return (200, #"{"success":true,"errors":[],"result":[]}"#)
+        }
+        do {
+            try await CloudflareService.publishTunnel(settings: cf, routes: many, sites: [], projects: [], session: session)
+            check(Set(TunnelDNSProtocol.names) == Set(many.map(\.publicHostname)) && TunnelDNSProtocol.names.count == many.count,
+                  "every uncovered hostname is looked up exactly once")
+            check(TunnelDNSProtocol.methods.filter { $0 == "POST" }.count == many.count, "every missing record is created")
+        } catch { check(false, "concurrent DNS: \(error)") }
+
+        // Without a readable zone, DNS is skipped but the ingress still goes out.
+        var unknownZone = cf
+        unknownZone.zoneId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        TunnelDNSProtocol.configure { request in
+            if request.url!.path.hasSuffix("/zones/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+                return (403, #"{"success":false,"errors":[{"code":9109,"message":"Unauthorized"}],"result":null}"#)
+            }
+            return (200, request.url!.path.hasSuffix("/configurations") ? ok : #"{"success":true,"errors":[],"result":[]}"#)
+        }
+        do {
+            try await CloudflareService.publishTunnel(settings: unknownZone, routes: Array(publishRoutes.prefix(2)), sites: [], projects: [], session: session)
+            check(false, "unreadable zone must fail DNS")
+        } catch {
+            check(TunnelDNSProtocol.methods.isEmpty && TunnelDNSProtocol.requests.contains { $0.httpMethod == "PUT" },
+                  "unreadable zone creates no records but still publishes ingress")
+            check(error.localizedDescription.contains("zone") && error.localizedDescription.contains("listed.example.com, new.example.com"),
+                  "unreadable zone failure names the hostnames once")
+        }
 
         var settings = AppSettings()
         settings.cloudflareSettings = cf
@@ -131,30 +265,65 @@ enum TunnelPublicationTests {
     }
 }
 
+/// Answers `GET /zones/{id}` with zone `example.com` unless the handler fails that request, and
+/// keeps zone lookups out of `requests`, so DNS assertions only see the calls they are about.
 private final class TunnelDNSProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var handler: ((URLRequest) -> (Int, String))?
-    private static var requests: [URLRequest] = []
+    private static var allRequests: [URLRequest] = []
+    private static var zoneRequests = 0
     static func configure(_ handler: @escaping (URLRequest) -> (Int, String)) {
         lock.lock(); defer { lock.unlock() }
-        self.handler = handler; requests = []
+        self.handler = handler; allRequests = []; zoneRequests = 0
     }
-    static var methods: [String] {
+    /// Every request except zone lookups.
+    static var requests: [URLRequest] {
         lock.lock(); defer { lock.unlock() }
-        return requests.map { $0.httpMethod ?? "GET" }
+        return allRequests.filter { !isZoneLookup($0) }
+    }
+    static var zoneLookups: Int {
+        lock.lock(); defer { lock.unlock() }
+        return zoneRequests
+    }
+    /// Methods of DNS record requests only.
+    static var methods: [String] {
+        requests.filter { $0.url!.path.contains("/dns_records") }.map { $0.httpMethod ?? "GET" }
     }
     static var names: [String] {
-        lock.lock(); defer { lock.unlock() }
-        return requests.compactMap { URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "name" })?.value }
+        requests.compactMap { query($0, "name") }
+    }
+    static func query(_ request: URLRequest, _ name: String) -> String? {
+        URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == name })?.value
+    }
+    static func body(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open(); defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
+    private static func isZoneLookup(_ request: URLRequest) -> Bool {
+        request.url!.path.range(of: #"/zones/[^/]+$"#, options: .regularExpression) != nil
     }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.lock.lock()
-        Self.requests.append(request)
+        Self.allRequests.append(request)
+        let isZone = Self.isZoneLookup(request)
+        if isZone { Self.zoneRequests += 1 }
         let handler = Self.handler
         Self.lock.unlock()
-        let (status, body) = handler!(request)
+        var (status, body) = handler!(request)
+        if isZone, status == 200 {
+            (status, body) = (200, #"{"success":true,"errors":[],"result":{"id":"zone","name":"example.com"}}"#)
+        }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)

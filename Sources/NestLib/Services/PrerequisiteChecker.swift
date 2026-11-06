@@ -65,12 +65,35 @@ public struct PrerequisiteChecker {
 
     /// Run all prerequisite checks and return results.
     public static func checkAll() -> [CheckResult] {
-        var results: [CheckResult] = []
-        results.append(checkDnsmasq())
-        results.append(checkResolver())
-        results.append(checkLocalCA())
-        results.append(checkPFAnchor())
-        return results
+        checkAll(pfHelperStatus: nil)
+    }
+
+    /// Run all prerequisite checks. Each check waits on its own processes (dig, pgrep, security,
+    /// curl), so they run concurrently; results keep the fixed order of `CheckID`.
+    /// - Parameter pfHelperStatus: the helper's state when the caller knows it better than
+    ///   `SMAppService` does (nestctl runs outside the app bundle); nil asks `PFHelperManager`.
+    public static func checkAll(pfHelperStatus: PFHelperStatus?) -> [CheckResult] {
+        let checks: [() -> CheckResult] = [
+            checkDnsmasq,
+            checkResolver,
+            checkLocalCA,
+            { checkPFAnchor(helperStatus: pfHelperStatus) }
+        ]
+        let results = ConcurrentResults<CheckResult>(count: checks.count)
+        DispatchQueue.concurrentPerform(iterations: checks.count) { index in
+            results.set(checks[index](), at: index)
+        }
+        return results.values
+    }
+
+    /// True when any result is a failed check at error severity (what `nestctl doctor` exits 1 on).
+    public static func containsErrors(_ results: [CheckResult]) -> Bool {
+        results.contains { !$0.passed && $0.severity == .error }
+    }
+
+    /// `nestctl doctor`'s exit status: 1 when it printed any `[error]` line, else 0.
+    public static func doctorExitStatus(runtimeIssues: [String], checks: [CheckResult]) -> Int32 {
+        runtimeIssues.isEmpty && !containsErrors(checks) ? 0 : 1
     }
 
     public static let dnsmasqConfigPath = "/opt/homebrew/etc/dnsmasq.conf"
@@ -101,7 +124,7 @@ public struct PrerequisiteChecker {
                 case "port":
                     port = Int(parts[1]) ?? port
                 case "address":
-                    if ["/.test/127.0.0.1", "/test/127.0.0.1"].contains(parts[1]) { resolvesTest = true }
+                    if addressResolvesTestDomains(parts[1]) { resolvesTest = true }
                 case "conf-file", "conf-dir":
                     guard allowIncludes else { continue }
                     for file in includedFiles(line) {
@@ -117,18 +140,61 @@ public struct PrerequisiteChecker {
         return DnsmasqConfiguration(port: port, resolvesTestDomains: resolvesTest)
     }
 
-    /// Resolves `conf-file=<path>` and `conf-dir=<dir>[,*.ext]` lines to file paths.
+    /// Whether an `address=` value (`/domain[/domain...]/ip`) answers `.test` with 127.0.0.1.
+    /// `test`, `.test` and the `#` wildcard all cover `.test` names.
+    public static func addressResolvesTestDomains(_ value: String) -> Bool {
+        let fields = value.trimmingCharacters(in: .whitespaces).split(separator: "/", omittingEmptySubsequences: false)
+        // "/test/127.0.0.1" splits into ["", "test", "127.0.0.1"].
+        guard fields.count >= 3, fields.first?.isEmpty == true, fields.last == "127.0.0.1" else { return false }
+        return fields.dropFirst().dropLast().contains { domain in
+            ["test", ".test", "#"].contains(domain.trimmingCharacters(in: .whitespaces).lowercased())
+        }
+    }
+
+    /// dnsmasq's `conf-dir=<dir>[,<ext>...]` rules: names starting with `.`, ending in `~`, or
+    /// starting and ending with `#` are always skipped; `*.ext` reads only matching files, and a
+    /// plain `.ext` skips matching files.
+    public static func confDirIncludes(_ name: String, extensions: [String]) -> Bool {
+        if name.hasPrefix(".") || name.hasSuffix("~") || (name.count > 1 && name.hasPrefix("#") && name.hasSuffix("#")) {
+            return false
+        }
+        let patterns = extensions.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let required = patterns.filter { $0.hasPrefix("*") }.map { String($0.dropFirst()) }
+        let excluded = patterns.filter { !$0.hasPrefix("*") }
+        if excluded.contains(where: { name.hasSuffix($0) }) { return false }
+        return required.isEmpty || required.contains { name.hasSuffix($0) }
+    }
+
+    /// Resolves `conf-file=<path>` and `conf-dir=<dir>[,<ext>...]` lines to file paths.
     public static func defaultIncludedFiles(_ line: String) -> [String] {
         let value = line.split(separator: "=", maxSplits: 1).last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
-        if line.hasPrefix("conf-file") { return [value] }
-        let parts = value.split(separator: ",").map(String.init)
-        guard let directory = parts.first else { return [] }
-        let suffix = parts.dropFirst().first.map { $0.hasPrefix("*") ? String($0.dropFirst()) : $0 }
+        if line.hasPrefix("conf-file") { return value.isEmpty ? [] : [value] }
+        let parts = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let directory = parts.first, !directory.isEmpty else { return [] }
+        let extensions = Array(parts.dropFirst())
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
         return names
-            .filter { !$0.hasPrefix(".") && !$0.hasSuffix("~") && (suffix == nil || $0.hasSuffix(suffix!)) }
+            .filter { confDirIncludes($0, extensions: extensions) }
             .sorted()
             .map { (directory as NSString).appendingPathComponent($0) }
+    }
+
+    /// True when `dig +short` output contains the loopback answer Nest expects for `.test`.
+    public static func digAnswerIsLoopback(_ output: String) -> Bool {
+        output.split(whereSeparator: \.isNewline).contains { $0.trimmingCharacters(in: .whitespaces) == "127.0.0.1" }
+    }
+
+    public static let digPath = "/usr/bin/dig"
+
+    /// Asks dnsmasq itself (not macOS's resolver) for a random `.test` name, so a config that was
+    /// edited but never loaded is caught. Returns nil when dig is unavailable.
+    public static func queryDnsmasqForTestDomain(port: Int, digPath: String = PrerequisiteChecker.digPath) -> Bool? {
+        guard FileManager.default.isExecutableFile(atPath: digPath) else { return nil }
+        let name = "nest-check-\(UUID().uuidString.prefix(8).lowercased()).test"
+        let result = SystemProcess.capture(digPath, arguments: [
+            "+short", "+time=1", "+tries=1", "@127.0.0.1", "-p", String(port), name, "A"
+        ], timeout: 4)
+        return result.status == 0 && digAnswerIsLoopback(result.output)
     }
 
     public static func readDnsmasqConfiguration() -> DnsmasqConfiguration? {
@@ -207,8 +273,31 @@ public struct PrerequisiteChecker {
             )
         }
 
-        // Check if running
+        // A live answer is the real test: it proves the running dnsmasq loaded this config.
+        let answered = queryDnsmasqForTestDomain(port: configuration.port)
+        if answered == true {
+            return CheckResult(
+                id: .dnsmasq,
+                category: .dns,
+                name: "dnsmasq",
+                passed: true,
+                detail: "dnsmasq answers *.test with 127.0.0.1 on port \(configuration.port).",
+                fixHint: ""
+            )
+        }
+
         let running = isProcessRunning("dnsmasq")
+        if running, answered == false {
+            return CheckResult(
+                id: .dnsmasq,
+                category: .dns,
+                name: "dnsmasq",
+                passed: false,
+                detail: "dnsmasq is running but does not answer *.test with 127.0.0.1 on port \(configuration.port). Restart it to load the current config.",
+                fixHint: "brew services restart dnsmasq",
+                fixCommands: ["brew services restart dnsmasq"]
+            )
+        }
         if !running {
             return CheckResult(
                 id: .dnsmasq,
@@ -320,14 +409,20 @@ public struct PrerequisiteChecker {
 
     /// Check if PF anchor for port redirect exists.
     public static func checkPFAnchor() -> CheckResult {
+        checkPFAnchor(helperStatus: nil)
+    }
+
+    /// - Parameter helperStatus: overrides `PFHelperManager.status`, which only answers
+    ///   correctly from inside Nest.app.
+    public static func checkPFAnchor(helperStatus: PFHelperStatus?) -> CheckResult {
         if PFHelperManager.isSupported {
-            return checkPFAnchorViaHelper()
+            return checkPFAnchorViaHelper(status: helperStatus ?? PFHelperManager.status)
         }
         return checkPFAnchorLegacy()
     }
 
-    private static func checkPFAnchorViaHelper() -> CheckResult {
-        switch PFHelperManager.status {
+    private static func checkPFAnchorViaHelper(status: PFHelperStatus) -> CheckResult {
+        switch status {
         case .enabled:
             if isPortRedirectWorking() {
                 return CheckResult(
@@ -483,5 +578,23 @@ public struct PrerequisiteChecker {
 
     private static func isCaddyAdminReachable() -> Bool {
         LocalRedirectProbe.isCaddyAdminReachable()
+    }
+}
+
+/// Fixed-size, lock-protected slots for results produced on concurrent queues.
+private final class ConcurrentResults<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var slots: [Value?]
+
+    init(count: Int) { slots = Array(repeating: nil, count: count) }
+
+    func set(_ value: Value, at index: Int) {
+        lock.lock(); defer { lock.unlock() }
+        slots[index] = value
+    }
+
+    var values: [Value] {
+        lock.lock(); defer { lock.unlock() }
+        return slots.compactMap { $0 }
     }
 }

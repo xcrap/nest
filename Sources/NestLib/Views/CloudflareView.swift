@@ -44,12 +44,15 @@ public struct CloudflareView: View {
 
             footer
         }
+        // Export what is saved, never a half-edited draft; the menu says so when they differ.
         .fileExporter(
             isPresented: $exportSettings,
-            document: CloudflareSettingsDocument(settings: cloudflareSettings),
+            document: CloudflareSettingsDocument(settings: store.settings.cloudflareSettings),
             contentType: .json,
             defaultFilename: "nest-cloudflare-settings"
-        ) { _ in }
+        ) { result in
+            handleSettingsExport(result)
+        }
         .fileImporter(isPresented: $importSettings, allowedContentTypes: [.json]) { result in
             handleSettingsImport(result)
         }
@@ -69,7 +72,9 @@ public struct CloudflareView: View {
         HStack(spacing: 8) {
             Menu {
                 Button("Import Settings...") { importSettings = true }
-                Button("Export Settings...") { exportSettings = true }
+                Button(hasUnsavedChanges ? "Export Saved Settings..." : "Export Settings...") {
+                    exportSettings = true
+                }
             } label: {
                 Image(systemName: "arrow.left.arrow.right")
                     .font(.callout)
@@ -77,6 +82,7 @@ public struct CloudflareView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Transfer Settings")
+            .accessibilityLabel("Transfer Settings")
 
             Spacer()
 
@@ -215,6 +221,7 @@ public struct CloudflareView: View {
     private var validationCard: some View {
         let issues = TunnelConfigRenderer(settings: cloudflareSettings)
             .validationIssues(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects)
+            + CloudflareService.identifierIssues(NestValidation.normalizedCloudflareSettings(cloudflareSettings))
         if !issues.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -275,6 +282,7 @@ public struct CloudflareView: View {
             TextField("", text: text)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.callout, design: .monospaced))
+                .accessibilityLabel(label)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -297,6 +305,12 @@ public struct CloudflareView: View {
     private func syncTunnelConfig() {
         processController.applyTunnels(store: store,
             push: store.settings.cloudflareSettings.hasAPIConfiguration, start: store.tunnelRoutes.contains(where: \.active))
+    }
+
+    private func handleSettingsExport(_ result: Result<URL, Error>) {
+        guard case .failure(let error) = result else { return }
+        if let cocoaError = error as? CocoaError, cocoaError.code == .userCancelled { return }
+        statusMessage = "Could not export Cloudflare settings: \(error.localizedDescription)"
     }
 
     private func handleSettingsImport(_ result: Result<URL, Error>) {

@@ -24,6 +24,8 @@ public enum CloudflareServiceError: LocalizedError {
     case invalidTunnelConfiguration([String])
     case requestFailed(String)
     case invalidResponse
+    case invalidIdentifiers([String])
+    case hostnameOutsideZone(hostname: String, zone: String)
 
     public var errorDescription: String? {
         switch self {
@@ -37,6 +39,10 @@ public enum CloudflareServiceError: LocalizedError {
             return message
         case .invalidResponse:
             return "Cloudflare returned an invalid response."
+        case .invalidIdentifiers(let issues):
+            return "Cloudflare API settings are invalid: \(issues.joined(separator: " "))"
+        case .hostnameOutsideZone(let hostname, let zone):
+            return CloudflareService.zoneMismatchMessage(hostname: hostname, zone: zone)
         }
     }
 }
@@ -81,6 +87,10 @@ private struct CloudflareRemoteTunnelConfiguration: Decodable {
 
 private struct CloudflareEmptyPayload: Decodable {}
 
+private struct CloudflareZone: Decodable {
+    var name: String
+}
+
 private struct CloudflareAPIError: Decodable {
     var code: Int?
     var message: String
@@ -115,7 +125,114 @@ private struct CloudflareTunnelConfigurationPayload: Encodable {
     }
 }
 
+/// Zone names never change for a zone ID, so one lookup per process is enough.
+private final class CloudflareZoneNameCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: [String: String] = [:]
+
+    func name(for zoneId: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return names[zoneId.lowercased()]
+    }
+
+    func store(_ name: String, for zoneId: String) {
+        lock.lock(); defer { lock.unlock() }
+        names[zoneId.lowercased()] = name
+    }
+}
+
 public enum CloudflareService {
+    /// Cloudflare calls fail within this many seconds instead of URLSession's 60 s default,
+    /// so a save never appears to hang on an unreachable API.
+    public static let requestTimeout: TimeInterval = 20
+
+    /// The session every Cloudflare call uses unless a caller injects its own (tests use a stub).
+    /// Ephemeral: API responses and credentials never land in an on-disk cache.
+    public static let defaultSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = requestTimeout
+        configuration.timeoutIntervalForResource = requestTimeout * 3
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
+
+    /// How many per-hostname DNS lookups run at once during a publish.
+    public static let dnsLookupConcurrency = 4
+
+    private static let apiBase = "https://api.cloudflare.com/client/v4"
+    private static let zoneNames = CloudflareZoneNameCache()
+
+    // MARK: - Validation
+
+    /// Zone and account IDs are 32 hexadecimal characters.
+    public static func isValidHexIdentifier(_ value: String) -> Bool {
+        value.utf8.count == 32 && value.utf8.allSatisfy(isHexDigit)
+    }
+
+    /// Tunnel IDs are UUIDs (`cloudflared` names the credentials file after them); the
+    /// undashed 32-character form is accepted too.
+    public static func isValidTunnelIdentifier(_ value: String) -> Bool {
+        if isValidHexIdentifier(value) { return true }
+        let groups = value.split(separator: "-", omittingEmptySubsequences: false)
+        return groups.map(\.utf8.count) == [8, 4, 4, 4, 12] && groups.allSatisfy { $0.utf8.allSatisfy(isHexDigit) }
+    }
+
+    /// Problems with the IDs Nest interpolates into Cloudflare API URLs. Empty fields are
+    /// reported by `hasAPIConfiguration` instead, so they are skipped here.
+    public static func identifierIssues(_ settings: CloudflareSettings, zone: Bool = true, tunnel: Bool = true) -> [String] {
+        var issues: [String] = []
+        if zone, !settings.zoneId.isEmpty, !isValidHexIdentifier(settings.zoneId) {
+            issues.append("Zone ID must be the 32-character hexadecimal ID shown on the zone's Overview page.")
+        }
+        if tunnel, !settings.accountId.isEmpty, !isValidHexIdentifier(settings.accountId) {
+            issues.append("Account ID must be the 32-character hexadecimal ID shown on the zone's Overview page.")
+        }
+        if tunnel, !settings.tunnelId.isEmpty, !isValidTunnelIdentifier(settings.tunnelId) {
+            issues.append("Tunnel ID must be the tunnel's UUID (for example 6ff42ae2-765d-4adf-8112-31c55c1551ef).")
+        }
+        return issues
+    }
+
+    private static func isHexDigit(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte) || (65...70).contains(byte) || (97...102).contains(byte)
+    }
+
+    private static func requireAPI(_ settings: CloudflareSettings, zone: Bool = true, tunnel: Bool = false) throws {
+        guard settings.hasAPIConfiguration else { throw CloudflareServiceError.missingAPIConfiguration }
+        let issues = identifierIssues(settings, zone: zone, tunnel: tunnel)
+        guard issues.isEmpty else { throw CloudflareServiceError.invalidIdentifiers(issues) }
+    }
+
+    /// True when `hostname` is the zone apex or one of its subdomains.
+    public static func isHostname(_ hostname: String, inZone zone: String) -> Bool {
+        let host = NestValidation.normalizedDomain(hostname)
+        let zone = NestValidation.normalizedDomain(zone)
+        guard !host.isEmpty, !zone.isEmpty else { return false }
+        return host == zone || host.hasSuffix(".\(zone)")
+    }
+
+    /// Cloudflare treats a name outside the zone as relative to it, so `app.other.org` in
+    /// zone `example.com` would become `app.other.org.example.com`.
+    public static func zoneMismatchMessage(hostname: String, zone: String) -> String {
+        "\(hostname) is outside the Cloudflare zone \(zone). Use \(zone) or a subdomain of it, or set the Zone ID of the zone that owns this hostname."
+    }
+
+    /// The validation message for a hostname, or nil when it belongs to the zone.
+    public static func zoneIssue(hostname: String, zone: String) -> String? {
+        isHostname(hostname, inZone: zone) ? nil : zoneMismatchMessage(hostname: hostname, zone: zone)
+    }
+
+    // MARK: - Requests
+
+    private static func apiRequest(_ url: URL, method: String = "GET", settings: CloudflareSettings, body: Data? = nil) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: requestTimeout)
+        request.httpMethod = method
+        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        return request
+    }
+
     private static func decodeAPIResponse<ResultType: Decodable>(
         _ resultType: ResultType.Type,
         data: Data,
@@ -165,63 +282,78 @@ public enum CloudflareService {
         return decoded
     }
 
-    public static func listDNSRecords(settings: CloudflareSettings) async throws -> [CloudflareDNSRecord] {
-        guard settings.hasAPIConfiguration else {
-            throw CloudflareServiceError.missingAPIConfiguration
+    // MARK: - Zone
+
+    /// The zone's domain name (e.g. `example.com`), fetched once per zone ID and kept in memory.
+    public static func zoneName(settings: CloudflareSettings, session: URLSession = defaultSession) async throws -> String {
+        try requireAPI(settings)
+        if let cached = zoneNames.name(for: settings.zoneId) { return cached }
+        let url = URL(string: "\(apiBase)/zones/\(settings.zoneId)")!
+        let (data, response) = try await session.data(for: apiRequest(url, settings: settings))
+        let zone = try decodeAPIResponse(CloudflareZone.self, data: data, response: response,
+            defaultFailureMessage: "Could not read the Cloudflare zone.")
+        let name = NestValidation.normalizedDomain(zone?.name ?? "")
+        guard NestValidation.domainIssues(name, field: "Zone name").isEmpty else {
+            throw CloudflareServiceError.invalidResponse
         }
+        zoneNames.store(name, for: settings.zoneId)
+        return name
+    }
+
+    /// The zone name if an earlier call already looked it up; never touches the network.
+    public static func cachedZoneName(zoneId: String) -> String? {
+        zoneNames.name(for: zoneId)
+    }
+
+    // MARK: - DNS records
+
+    /// Every CNAME pointing at this tunnel, following Cloudflare's pagination.
+    public static func listDNSRecords(settings: CloudflareSettings, session: URLSession = defaultSession) async throws -> [CloudflareDNSRecord] {
+        try requireAPI(settings)
 
         var records: [CloudflareDNSRecord] = []
         var page = 1
         var totalPages = 1
         repeat {
-            var components = URLComponents(string: "https://api.cloudflare.com/client/v4/zones/\(settings.zoneId)/dns_records")!
+            var components = URLComponents(string: "\(apiBase)/zones/\(settings.zoneId)/dns_records")!
             components.queryItems = [
                 URLQueryItem(name: "type", value: "CNAME"),
                 URLQueryItem(name: "content", value: settings.tunnelDomain),
                 URLQueryItem(name: "per_page", value: "100"),
                 URLQueryItem(name: "page", value: String(page))
             ]
-            var request = URLRequest(url: components.url!)
-            request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: apiRequest(components.url!, settings: settings))
             let envelope = try decodeAPIEnvelope(
                 [CloudflareDNSRecord].self,
                 data: data,
                 response: response,
                 defaultFailureMessage: "Cloudflare request failed."
             )
-            records += envelope.result ?? []
+            let pageRecords = envelope.result ?? []
+            records += pageRecords
             totalPages = envelope.resultInfo?.totalPages ?? 1
             page += 1
+            // An empty page means the listing ended, whatever total_pages claimed.
+            if pageRecords.isEmpty { break }
         } while page <= totalPages && page <= 100
 
         return records
-            .filter { $0.content == settings.tunnelDomain }
+            .filter { normalizedContent($0.content) == normalizedContent(settings.tunnelDomain) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    public static func createDNSRecord(subdomain: String, settings: CloudflareSettings, session: URLSession = .shared) async throws {
-        guard settings.hasAPIConfiguration else {
-            throw CloudflareServiceError.missingAPIConfiguration
-        }
+    public static func createDNSRecord(subdomain: String, settings: CloudflareSettings, session: URLSession = defaultSession) async throws {
+        try requireAPI(settings)
 
-        let url = URL(string: "https://api.cloudflare.com/client/v4/zones/\(settings.zoneId)/dns_records")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
+        let url = URL(string: "\(apiBase)/zones/\(settings.zoneId)/dns_records")!
+        let body = try JSONSerialization.data(withJSONObject: [
             "type": "CNAME",
             "name": subdomain,
             "content": settings.tunnelDomain,
             "proxied": true,
             "ttl": 1
         ])
-
-        request.timeoutInterval = 20
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: apiRequest(url, method: "POST", settings: settings, body: body))
         _ = try decodeAPIResponse(
             CloudflareEmptyPayload.self,
             data: data,
@@ -232,50 +364,156 @@ public enum CloudflareService {
     }
 
     /// Idempotent publication: reuse only a proxied CNAME to this tunnel. Never take over
-    /// an existing address or a hostname belonging to a different service.
-    public static func ensureTunnelDNS(hostname: String, settings: CloudflareSettings, session: URLSession = .shared) async throws {
-        guard settings.hasAPIConfiguration else { throw CloudflareServiceError.missingAPIConfiguration }
+    /// an existing address or a hostname belonging to a different service, and never create
+    /// a record for a hostname outside the configured zone.
+    public static func ensureTunnelDNS(hostname: String, settings: CloudflareSettings, session: URLSession = defaultSession) async throws {
+        try requireAPI(settings)
         let issues = NestValidation.domainIssues(hostname, field: "Public hostname")
         guard issues.isEmpty else { throw CloudflareServiceError.invalidTunnelConfiguration(issues) }
-        var components = URLComponents(string: "https://api.cloudflare.com/client/v4/zones/\(settings.zoneId)/dns_records")!
+        let zone = try await zoneName(settings: settings, session: session)
+        guard isHostname(hostname, inZone: zone) else {
+            throw CloudflareServiceError.hostnameOutsideZone(hostname: hostname, zone: zone)
+        }
+        try await ensureTunnelDNSRecord(hostname: hostname, settings: settings, session: session)
+    }
+
+    /// The per-hostname lookup, without the zone check its callers already made.
+    private static func ensureTunnelDNSRecord(hostname: String, settings: CloudflareSettings, session: URLSession) async throws {
+        var components = URLComponents(string: "\(apiBase)/zones/\(settings.zoneId)/dns_records")!
         components.queryItems = [URLQueryItem(name: "name", value: hostname), URLQueryItem(name: "per_page", value: "100")]
-        var request = URLRequest(url: components.url!)
-        request.timeoutInterval = 20
-        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: apiRequest(components.url!, settings: settings))
         let records = try decodeAPIResponse([CloudflareDNSRecord].self, data: data, response: response,
             defaultFailureMessage: "Could not check DNS for \(hostname).") ?? []
         if records.isEmpty {
             try await createDNSRecord(subdomain: hostname, settings: settings, session: session)
-        } else if !records.contains(where: {
-            $0.name.lowercased() == hostname.lowercased() && $0.type == "CNAME" && $0.proxied
-                && $0.content.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == settings.tunnelDomain.lowercased()
-        }) {
+        } else if !records.contains(where: { isTunnelRecord($0, hostname: hostname, settings: settings) }) {
             throw ConfigurationFailure("\(hostname) already has a DNS record that does not point to this tunnel with proxying enabled. Review it in Cloudflare; Nest left it unchanged.")
         }
     }
 
-    public static func publishTunnel(settings: CloudflareSettings, routes: [TunnelRoute], sites: [Site], projects: [AppProject]) async throws {
-        for route in routes where route.active {
-            do { try await ensureTunnelDNS(hostname: route.publicHostname, settings: settings) }
-            catch { throw ConfigurationFailure("DNS setup for \(route.publicHostname) failed: \(error.localizedDescription). Earlier DNS records may already have been created; retry is safe.") }
-        }
-        do { try await pushTunnelConfiguration(settings: settings, routes: routes, sites: sites, projects: projects) }
-        catch { throw ConfigurationFailure("DNS is ready, but publishing routes failed: \(error.localizedDescription)") }
+    private static func normalizedContent(_ value: String) -> String {
+        value.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
     }
 
-    public static func deleteDNSRecord(id: String, settings: CloudflareSettings) async throws {
-        guard settings.hasAPIConfiguration else {
-            throw CloudflareServiceError.missingAPIConfiguration
+    private static func isTunnelRecord(_ record: CloudflareDNSRecord, hostname: String, settings: CloudflareSettings) -> Bool {
+        record.name.lowercased() == hostname.lowercased() && record.type == "CNAME" && record.proxied
+            && normalizedContent(record.content) == normalizedContent(settings.tunnelDomain)
+    }
+
+    /// Makes sure every hostname has a proxied CNAME to this tunnel and returns the hostnames
+    /// that could not be set up, with the reason. One listing covers hostnames that are
+    /// already published; only the rest are looked up by name, a few at a time.
+    public static func ensureTunnelDNS(
+        hostnames: [String],
+        settings: CloudflareSettings,
+        session: URLSession = defaultSession
+    ) async throws -> [(hostname: String, reason: String)] {
+        try requireAPI(settings)
+        var seen = Set<String>()
+        let unique = hostnames.map { NestValidation.normalizedDomain($0) }.filter { seen.insert($0).inserted }
+        guard !unique.isEmpty else { return [] }
+
+        var failures: [String: String] = [:]
+        let zone: String
+        do {
+            zone = try await zoneName(settings: settings, session: session)
+        } catch {
+            let reason = "Could not read the Cloudflare zone to verify hostnames (\(error.localizedDescription)). Check the Zone ID and that the API token can read this zone."
+            return unique.map { ($0, reason) }
         }
 
-        let url = URL(string: "https://api.cloudflare.com/client/v4/zones/\(settings.zoneId)/dns_records/\(id)")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var candidates: [String] = []
+        for hostname in unique {
+            if let issue = NestValidation.domainIssues(hostname, field: "Public hostname").first {
+                failures[hostname] = issue
+            } else if let issue = zoneIssue(hostname: hostname, zone: zone) {
+                failures[hostname] = issue
+            } else {
+                candidates.append(hostname)
+            }
+        }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // A failed listing only costs speed: every hostname is then checked by name.
+        let published = Set(((try? await listDNSRecords(settings: settings, session: session)) ?? [])
+            .filter { $0.type == "CNAME" && $0.proxied }
+            .map { NestValidation.normalizedDomain($0.name) })
+        let remaining = candidates.filter { !published.contains($0) }
+
+        await withTaskGroup(of: (String, String?).self) { group in
+            var queue = remaining.makeIterator()
+            func enqueue(_ hostname: String) {
+                group.addTask {
+                    do {
+                        try await ensureTunnelDNSRecord(hostname: hostname, settings: settings, session: session)
+                        return (hostname, nil)
+                    } catch {
+                        return (hostname, error.localizedDescription)
+                    }
+                }
+            }
+            for _ in 0..<max(1, dnsLookupConcurrency) {
+                guard let hostname = queue.next() else { break }
+                enqueue(hostname)
+            }
+            while let (hostname, failure) = await group.next() {
+                if let failure { failures[hostname] = failure }
+                if let next = queue.next() { enqueue(next) }
+            }
+        }
+
+        return unique.compactMap { hostname in failures[hostname].map { (hostname, $0) } }
+    }
+
+    /// Publishes DNS and the ingress list. One hostname's DNS problem never holds back the
+    /// rest: the ingress (including removed or disabled routes) is always pushed, and the
+    /// failed hostnames are reported together afterwards.
+    public static func publishTunnel(
+        settings: CloudflareSettings,
+        routes: [TunnelRoute],
+        sites: [Site],
+        projects: [AppProject],
+        session: URLSession = defaultSession
+    ) async throws {
+        guard settings.hasLocalConfiguration else { throw CloudflareServiceError.missingLocalConfiguration }
+        try requireAPI(settings, zone: true, tunnel: true)
+        let issues = TunnelConfigRenderer(settings: settings).validationIssues(routes: routes, sites: sites, projects: projects)
+        guard issues.isEmpty else { throw CloudflareServiceError.invalidTunnelConfiguration(issues) }
+
+        let failures = try await ensureTunnelDNS(
+            hostnames: routes.filter(\.active).map(\.publicHostname), settings: settings, session: session)
+        let failureSummary = summarize(failures)
+
+        do {
+            try await pushTunnelConfiguration(settings: settings, routes: routes, sites: sites, projects: projects, session: session)
+        } catch {
+            if failures.isEmpty {
+                throw ConfigurationFailure("DNS is ready, but publishing routes failed: \(error.localizedDescription)")
+            }
+            throw ConfigurationFailure("Publishing routes failed: \(error.localizedDescription). DNS setup also failed for \(failureSummary)")
+        }
+
+        guard failures.isEmpty else {
+            throw ConfigurationFailure("DNS setup failed for \(failureSummary) The route list was still published, so other hostnames are ready; retry is safe.")
+        }
+    }
+
+    /// "2 hostnames: a.example.com, b.example.com. <each distinct reason once>"
+    private static func summarize(_ failures: [(hostname: String, reason: String)]) -> String {
+        let count = failures.count == 1 ? "1 hostname" : "\(failures.count) hostnames"
+        var reasons: [String] = []
+        for failure in failures where !reasons.contains(failure.reason) { reasons.append(failure.reason) }
+        let sentences = reasons.map { $0.hasSuffix(".") ? $0 : "\($0)." }
+        return "\(count): \(failures.map(\.hostname).joined(separator: ", ")). \(sentences.joined(separator: " "))"
+    }
+
+    public static func deleteDNSRecord(id: String, settings: CloudflareSettings, session: URLSession = defaultSession) async throws {
+        try requireAPI(settings)
+        guard !id.isEmpty, id.utf8.allSatisfy({ isHexDigit($0) || $0 == UInt8(ascii: "-") }) else {
+            throw CloudflareServiceError.invalidIdentifiers(["DNS record ID \"\(id)\" is not a Cloudflare record ID."])
+        }
+
+        let url = URL(string: "\(apiBase)/zones/\(settings.zoneId)/dns_records/\(id)")!
+        let (data, response) = try await session.data(for: apiRequest(url, method: "DELETE", settings: settings))
         _ = try decodeAPIResponse(
             CloudflareEmptyPayload.self,
             data: data,
@@ -289,14 +527,13 @@ public enum CloudflareService {
         settings: CloudflareSettings,
         routes: [TunnelRoute],
         sites: [Site],
-        projects: [AppProject]
+        projects: [AppProject],
+        session: URLSession = defaultSession
     ) async throws {
         guard settings.hasLocalConfiguration else {
             throw CloudflareServiceError.missingLocalConfiguration
         }
-        guard settings.hasAPIConfiguration else {
-            throw CloudflareServiceError.missingAPIConfiguration
-        }
+        try requireAPI(settings, zone: false, tunnel: true)
 
         let renderer = TunnelConfigRenderer(settings: settings)
         let issues = renderer.validationIssues(routes: routes, sites: sites, projects: projects)
@@ -305,9 +542,9 @@ public enum CloudflareService {
         }
 
         let resolvedRoutes = renderer.resolvedRoutes(routes: routes, sites: sites, projects: projects)
-        let url = URL(string: "https://api.cloudflare.com/client/v4/accounts/\(settings.accountId)/cfd_tunnel/\(settings.tunnelId)/configurations")!
+        let url = URL(string: "\(apiBase)/accounts/\(settings.accountId)/cfd_tunnel/\(settings.tunnelId)/configurations")!
         // Nest owns the ingress list, but WARP private-network routing is configured elsewhere: keep it.
-        let warpRoutingEnabled = try await remoteWarpRoutingEnabled(url: url, settings: settings)
+        let warpRoutingEnabled = try await remoteWarpRoutingEnabled(url: url, settings: settings, session: session)
         let payload = CloudflareTunnelConfigurationPayload(
             config: .init(
                 ingress: resolvedRoutes.map {
@@ -330,13 +567,8 @@ public enum CloudflareService {
             )
         )
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(payload)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let request = apiRequest(url, method: "PUT", settings: settings, body: try JSONEncoder().encode(payload))
+        let (data, response) = try await session.data(for: request)
         _ = try decodeAPIResponse(
             CloudflareEmptyPayload.self,
             data: data,
@@ -346,11 +578,8 @@ public enum CloudflareService {
         )
     }
 
-    private static func remoteWarpRoutingEnabled(url: URL, settings: CloudflareSettings) async throws -> Bool {
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(settings.apiToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await URLSession.shared.data(for: request)
+    private static func remoteWarpRoutingEnabled(url: URL, settings: CloudflareSettings, session: URLSession) async throws -> Bool {
+        let (data, response) = try await session.data(for: apiRequest(url, settings: settings))
         let remote = try decodeAPIResponse(
             CloudflareRemoteTunnelConfiguration.self,
             data: data,

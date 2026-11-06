@@ -42,9 +42,14 @@ struct NestCTL {
             case "reload":
                 try await reload(store: store)
             case "render":
-                render(arguments.dropFirst().first ?? "all", store: store)
+                guard render(arguments.dropFirst().first ?? "all", store: store) else {
+                    fputs("Unknown render target: \(target)\n", stderr)
+                    usage(to: stderr)
+                    exit(2)
+                }
             case "doctor":
-                doctor(store: store)
+                let status = await doctor(store: store)
+                if status != 0 { exit(status) }
             case "push-cloudflare":
                 try await pushCloudflare(store: store)
             case "help", "--help", "-h":
@@ -60,8 +65,8 @@ struct NestCTL {
         }
     }
 
-    private static func usage() {
-        print("""
+    private static func usage(to stream: UnsafeMutablePointer<FILE> = stdout) {
+        fputs("""
         Usage:
           nestctl [--dev] start [frankenphp|mariadb|cloudflared|all]
           nestctl [--dev] stop [frankenphp|mariadb|cloudflared|all]
@@ -71,15 +76,16 @@ struct NestCTL {
           nestctl [--dev] push-cloudflare
 
         Manages the installed Nest.app's data. Pass --dev to manage the development build instead.
-        """)
+
+        """, stream)
     }
 
     @MainActor
     private static func start(_ target: String, store: SiteStore) async throws {
         switch target {
         case "frankenphp":
-            let ready = await SystemProcess.captureAsync("/usr/bin/curl", arguments: ["--silent", "--fail", "--max-time", "2", "--output", "/dev/null", "http://localhost:2019/config/"])
-            _ = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, running: ready.status == 0)
+            let running = await BlockingWork.run { LocalRedirectProbe.isCaddyAdminReachable() }
+            _ = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, running: running)
             try runBrew(.start, service: "frankenphp")
         case "mariadb":
             try runBrew(.start, service: "mariadb")
@@ -109,14 +115,18 @@ struct NestCTL {
         print("Stopped managed service: \(target). Externally managed processes are left running.")
     }
 
+    /// Reloading needs Caddy's admin API; with FrankenPHP stopped, save the config like the app does
+    /// ("Saved • FrankenPHP stopped") instead of failing the reload and rolling back.
     @MainActor
     private static func reload(store: SiteStore) async throws {
-        let message = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, running: true)
+        let running = await BlockingWork.run { LocalRedirectProbe.isCaddyAdminReachable() }
+        let message = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, running: running)
         print(message)
     }
 
+    /// Returns false for an unknown target, after printing nothing.
     @MainActor
-    private static func render(_ target: String, store: SiteStore) {
+    private static func render(_ target: String, store: SiteStore) -> Bool {
         switch target {
         case "caddy":
             print(caddyRenderer(store: store).render(sites: store.sites))
@@ -128,12 +138,14 @@ struct NestCTL {
             print("\n# cloudflared")
             print(tunnelRenderer(store: store).render(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects))
         default:
-            print("Unknown render target: \(target)")
+            return false
         }
+        return true
     }
 
+    /// Prints every check and returns the exit status: 1 when any `[error]` line was printed.
     @MainActor
-    private static func doctor(store: SiteStore) {
+    private static func doctor(store: SiteStore) async -> Int32 {
         print("[info] Data: \(AppSettings.nestDataDirectory)")
         let runtimeIssues = store.settings.runtimePaths.validate()
         if runtimeIssues.isEmpty {
@@ -151,13 +163,18 @@ struct NestCTL {
             print("[warning] \(error)")
         }
 
-        for check in PrerequisiteChecker.checkAll() {
+        // SMAppService cannot see the helper from outside Nest.app; ask launchd and the system instead.
+        let checks = await BlockingWork.run(qos: .userInitiated) {
+            PrerequisiteChecker.checkAll(pfHelperStatus: PFHelperManager.statusFromSystem())
+        }
+        for check in checks {
             let status = check.passed ? "ok" : check.severity.rawValue
             print("[\(status)] \(check.name): \(check.detail)")
             for command in check.fixCommands {
                 print("  fix: \(command)")
             }
         }
+        return PrerequisiteChecker.doctorExitStatus(runtimeIssues: runtimeIssues, checks: checks)
     }
 
     @MainActor

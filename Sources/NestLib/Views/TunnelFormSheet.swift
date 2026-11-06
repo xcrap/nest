@@ -27,6 +27,8 @@ public struct TunnelFormSheet: View {
     @State private var linkedProjectID = ""
     @State private var active = true
     @State private var errorMessage: String?
+    /// The configured Cloudflare zone, once known; hostnames outside it cannot be published.
+    @State private var zoneName: String?
 
     public init(mode: TunnelFormMode) {
         self.mode = mode
@@ -47,6 +49,7 @@ public struct TunnelFormSheet: View {
         }
         .frame(width: 520)
         .onAppear(perform: populate)
+        .task { await loadZoneName() }
     }
 
     private var header: some View {
@@ -82,8 +85,19 @@ public struct TunnelFormSheet: View {
                 }
 
                 field("Public Domain") {
-                    TextField("example.com", text: $publicDomain)
+                    TextField(zoneName ?? "example.com", text: $publicDomain)
                         .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            if let zoneIssue = currentZoneIssue {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(zoneIssue)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
             }
 
@@ -173,6 +187,37 @@ public struct TunnelFormSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var candidateHostname: String {
+        let normalizedSubdomain = subdomain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(normalizedSubdomain).\(NestValidation.normalizedDomain(publicDomain))"
+    }
+
+    /// Shown as soon as the domain is typed, not only on save.
+    private var currentZoneIssue: String? {
+        guard let zoneName, !NestValidation.normalizedDomain(publicDomain).isEmpty,
+              !subdomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return CloudflareService.zoneIssue(hostname: candidateHostname, zone: zoneName)
+    }
+
+    /// One cached lookup per zone; without API access the form simply skips the zone check
+    /// (publishing still enforces it).
+    private func loadZoneName() async {
+        let settings = store.settings.cloudflareSettings
+        guard settings.hasAPIConfiguration else { return }
+        if let cached = CloudflareService.cachedZoneName(zoneId: settings.zoneId) {
+            applyZoneName(cached)
+            return
+        }
+        guard let fetched = try? await CloudflareService.zoneName(settings: settings) else { return }
+        applyZoneName(fetched)
+    }
+
+    private func applyZoneName(_ name: String) {
+        zoneName = name
+        // A first route has no domain to suggest yet: the zone is the only one Nest can publish.
+        if case .add = mode, publicDomain.isEmpty { publicDomain = name }
+    }
+
     /// Links, host and port from the other route type are never valid for the new one
     /// (e.g. a PHP route's 443 would send an app route to Caddy's TLS port).
     private func changeKind(to newKind: TunnelRouteKind) {
@@ -189,7 +234,7 @@ public struct TunnelFormSheet: View {
         case .add:
             // Default to the domain the user already routes most, not a fixed one.
             let counts = Dictionary(grouping: store.tunnelRoutes.map(\.publicDomain).filter { !$0.isEmpty }, by: { $0 })
-            publicDomain = counts.max { $0.value.count < $1.value.count }?.key ?? ""
+            if let mostUsed = counts.max(by: { $0.value.count < $1.value.count })?.key { publicDomain = mostUsed }
         case .edit(let route):
             kind = route.kind
             subdomain = route.subdomain
@@ -228,6 +273,12 @@ public struct TunnelFormSheet: View {
         let issues = NestValidation.tunnelRouteIssues(candidate)
         guard issues.isEmpty else {
             errorMessage = issues.joined(separator: " ")
+            return
+        }
+
+        // Inactive routes publish no DNS, so a misplaced route can still be switched off or fixed later.
+        if active, let zoneName, let zoneIssue = CloudflareService.zoneIssue(hostname: hostname, zone: zoneName) {
+            errorMessage = zoneIssue
             return
         }
 

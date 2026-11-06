@@ -1,32 +1,57 @@
 import SwiftUI
 import AppKit
 
+/// The last completed run, kept across view instances so switching tabs or re-activating the
+/// app shows it at once and only re-runs the checks once it is stale.
+@MainActor
+private enum EnvironmentCheckCache {
+    static var checks: [PrerequisiteChecker.CheckResult] = []
+    static var helperStatus: PFHelperStatus = .unsupported
+    static var completedAt: Date?
+}
+
 public struct EnvironmentChecksView: View {
+    /// Automatic re-runs (appearing, app activation) are skipped within this window; an
+    /// explicit Recheck or a state change Nest caused always runs.
+    static let automaticRecheckInterval: TimeInterval = 30
+
     @EnvironmentObject var store: SiteStore
     @EnvironmentObject var processController: ProcessController
     @State private var checkTask: Task<Void, Never>?
+    @State private var delayedRecheck: Task<Void, Never>?
     @State private var recheckRequested = false
-    @State private var checks: [PrerequisiteChecker.CheckResult] = []
-    @State private var runtimeIssues: [String] = []
-    @State private var optionalRuntimeIssues: [String] = []
-    @State private var helperStatus: PFHelperStatus = .unsupported
+    @State private var checks: [PrerequisiteChecker.CheckResult] = EnvironmentCheckCache.checks
+    @State private var helperStatus: PFHelperStatus = EnvironmentCheckCache.helperStatus
     @State private var helperMessage: String?
     @State private var confirmUninstall = false
+
+    private var isChecking: Bool { checkTask != nil }
+    // Path validation is a few stat calls, so it always reflects the current settings.
+    private var runtimeIssues: [String] { store.settings.runtimePaths.validate() }
+    private var optionalRuntimeIssues: [String] { store.settings.runtimePaths.optionalIssues() }
 
     public init() {}
 
     public var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                HStack {
+                HStack(spacing: 8) {
                     Spacer()
+                    if isChecking {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { runChecks() }
+                        withAnimation(.easeInOut(duration: 0.2)) { runChecks(force: true) }
                     } label: {
                         Label("Recheck", systemImage: "arrow.clockwise")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(isChecking)
                 }
 
                 sectionCard(title: "Services", icon: "play.circle.fill", color: .green) {
@@ -106,25 +131,39 @@ public struct EnvironmentChecksView: View {
 
                 sectionCard(title: "System Prerequisites", icon: "shield.checkered", color: .blue) {
                     VStack(spacing: 4) {
+                        if checks.isEmpty {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Checking system prerequisites…")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
                         ForEach(checks) { check in
                             prerequisiteRow(check)
                         }
                     }
+                    .opacity(isChecking && !checks.isEmpty ? 0.6 : 1)
                 }
             }
             .padding(16)
         }
-        .onAppear { runChecks() }
+        .onAppear { runChecks(force: false) }
         .onDisappear {
             checkTask?.cancel()
             checkTask = nil
+            delayedRecheck?.cancel()
+            delayedRecheck = nil
             recheckRequested = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            runChecks()
+            runChecks(force: false)
         }
         // Redirect and CA results depend on FrankenPHP; refresh them when it starts or stops.
-        .onChange(of: processController.frankenphpRunning) { runChecks() }
+        .onChange(of: processController.frankenphpRunning) { runChecks(force: true) }
         .alert("Uninstall the Nest Helper?", isPresented: $confirmUninstall) {
             Button("Uninstall", role: .destructive) { uninstallPFHelper() }
             Button("Cancel", role: .cancel) {}
@@ -316,28 +355,34 @@ public struct EnvironmentChecksView: View {
 
     // MARK: - Actions
 
-    /// Checks launch several processes (curl, pgrep, security). A request while a run is in
-    /// flight schedules one follow-up run instead of stacking another.
-    private func runChecks() {
-        guard checkTask == nil else {
-            recheckRequested = true
+    /// Checks launch several processes (dig, curl, pgrep, security), so automatic triggers reuse a
+    /// recent result. A request while a run is in flight schedules one follow-up run instead of
+    /// stacking another.
+    private func runChecks(force: Bool) {
+        if !force, let completedAt = EnvironmentCheckCache.completedAt, !checks.isEmpty,
+           Date().timeIntervalSince(completedAt) < Self.automaticRecheckInterval {
             return
         }
-        let paths = store.settings.runtimePaths
+        guard checkTask == nil else {
+            if force { recheckRequested = true }
+            return
+        }
         checkTask = Task {
-            let result = await BlockingWork.run(qos: .userInitiated) {
-                (PrerequisiteChecker.checkAll(), paths.validate(), paths.optionalIssues(), PFHelperManager.status)
+            let result = await BlockingWork.run(qos: .userInitiated) { () -> ([PrerequisiteChecker.CheckResult], PFHelperStatus) in
+                let status = PFHelperManager.status
+                return (PrerequisiteChecker.checkAll(pfHelperStatus: status), status)
             }
             // A cancelled run was already detached from checkTask by onDisappear.
             guard !Task.isCancelled else { return }
             checkTask = nil
             checks = result.0
-            runtimeIssues = result.1
-            optionalRuntimeIssues = result.2
-            helperStatus = result.3
+            helperStatus = result.1
+            EnvironmentCheckCache.checks = result.0
+            EnvironmentCheckCache.helperStatus = result.1
+            EnvironmentCheckCache.completedAt = Date()
             if recheckRequested {
                 recheckRequested = false
-                runChecks()
+                runChecks(force: true)
             }
         }
     }
@@ -359,7 +404,7 @@ public struct EnvironmentChecksView: View {
         } catch {
             helperMessage = "Helper install failed: \(error.localizedDescription)"
         }
-        runChecks()
+        runChecks(force: true)
     }
 
     private func repairPFHelper() {
@@ -368,9 +413,14 @@ public struct EnvironmentChecksView: View {
         } else {
             helperMessage = "Helper repair could not be requested. Install or approve the helper first."
         }
-        // launchd throttles the helper to one run every 5 seconds.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
-            runChecks()
+        // launchd throttles the helper to one run every 5 seconds. The wait is cancelled with
+        // the view, so a closed tab never re-runs checks behind the user's back.
+        delayedRecheck?.cancel()
+        delayedRecheck = Task {
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            delayedRecheck = nil
+            runChecks(force: true)
         }
     }
 
@@ -383,7 +433,7 @@ public struct EnvironmentChecksView: View {
         } catch {
             helperMessage = "Helper uninstall failed: \(error.localizedDescription)"
         }
-        runChecks()
+        runChecks(force: true)
     }
 
     private func copy(_ value: String) {
