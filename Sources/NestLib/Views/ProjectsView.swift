@@ -20,6 +20,7 @@ public struct ProjectsView: View {
         return sorted.filter {
             $0.name.lowercased().contains(query)
             || $0.hostname.lowercased().contains(query)
+            || ($0.localDomain?.contains(query) ?? false)
             || $0.directory.lowercased().contains(query)
         }
     }
@@ -201,6 +202,8 @@ private struct ProjectRow: View, Equatable {
     let onShowLog: () -> Void
     let onDelete: () -> Void
 
+    @Environment(\.openURL) private var openURL
+
     /// Row-local so hovering redraws one row, not the whole list.
     @State private var isHovered = false
     @State private var hoveredAction: String?
@@ -231,11 +234,20 @@ private struct ProjectRow: View, Equatable {
                     .lineLimit(1)
                     .frame(width: 150, alignment: .leading)
 
-                Text(project.hostname)
-                    .font(.system(.callout, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(width: 180, alignment: .leading)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(project.hostname)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let localDomain = project.localDomain {
+                        Text(localDomain)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .accessibilityLabel("Local domain \(localDomain)")
+                    }
+                }
+                .frame(width: 180, alignment: .leading)
 
                 Text(project.directory)
                     .font(.callout)
@@ -251,12 +263,21 @@ private struct ProjectRow: View, Equatable {
                     .accessibilityLabel("Port \(project.port)")
 
                 HStack(spacing: 0) {
-                    rowAction(icon: "doc.text", title: "View Logs") { onShowLog() }
-                    rowAction(icon: "pencil", title: "Edit") { onEdit() }
-                    rowAction(icon: "trash", title: "Delete") { onDelete() }
+                    // Opening the page stays possible while the project starts or stops.
+                    if let localURL = project.localURL {
+                        rowAction(icon: "globe", title: "Open in Browser", help: "Open \(localURL.absoluteString)") { openURL(localURL) }
+                    } else {
+                        // Keeps the columns aligned with rows that have the button.
+                        Color.clear.frame(width: 26, height: 26).accessibilityHidden(true)
+                    }
+                    Group {
+                        rowAction(icon: "doc.text", title: "View Logs") { onShowLog() }
+                        rowAction(icon: "pencil", title: "Edit") { onEdit() }
+                        rowAction(icon: "trash", title: "Delete") { onDelete() }
+                    }
+                    .disabled(isBusy)
                 }
                 .opacity(isHovered || focusedAction != nil ? 1 : 0)
-                .disabled(isBusy)
 
                 StartStopButton(isRunning: isRunning, isPending: isBusy, action: onToggleRunning)
                     .accessibilityLabel("\(isRunning ? "Stop" : "Start") \(project.name)")
@@ -281,6 +302,10 @@ private struct ProjectRow: View, Equatable {
             withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
         }
         .contextMenu {
+            if let localURL = project.localURL {
+                Button("Open \(localURL.absoluteString)") { openURL(localURL) }
+                Divider()
+            }
             Button("Edit...") { onEdit() }
                 .disabled(isBusy)
             Button("View Logs") { onShowLog() }
@@ -295,13 +320,18 @@ private struct ProjectRow: View, Equatable {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(project.name)
         .accessibilityValue(isBusy ? (operation?.label ?? "") : (isRunning ? "Running" : "Stopped"))
+        .accessibilityActions {
+            if let localURL = project.localURL {
+                Button("Open in Browser") { openURL(localURL) }
+            }
+        }
         .accessibilityAction(named: "View Logs") { if !isBusy { onShowLog() } }
         .accessibilityAction(named: "Edit") { if !isBusy { onEdit() } }
         .accessibilityAction(named: isRunning ? "Stop" : "Start") { if !isBusy { onToggleRunning() } }
         .accessibilityAction(named: "Delete") { if !isBusy { onDelete() } }
     }
 
-    private func rowAction(icon: String, title: String, action: @escaping () -> Void) -> some View {
+    private func rowAction(icon: String, title: String, help: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: icon)
                 .labelStyle(.iconOnly)
@@ -317,7 +347,7 @@ private struct ProjectRow: View, Equatable {
         .foregroundStyle(hoveredAction == icon ? .primary : .secondary)
         .onHover { h in hoveredAction = h ? icon : nil }
         .focused($focusedAction, equals: icon)
-        .help(title)
+        .help(help ?? title)
         .accessibilityLabel("\(title) \(project.name)")
     }
 }

@@ -85,7 +85,7 @@ struct NestCTL {
         switch target {
         case "frankenphp":
             let running = await BlockingWork.run { LocalRedirectProbe.isCaddyAdminReachable() }
-            _ = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, running: running)
+            _ = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, projects: store.appProjects, running: running)
             try runBrew(.start, service: "frankenphp")
         case "mariadb":
             try runBrew(.start, service: "mariadb")
@@ -120,7 +120,7 @@ struct NestCTL {
     @MainActor
     private static func reload(store: SiteStore) async throws {
         let running = await BlockingWork.run { LocalRedirectProbe.isCaddyAdminReachable() }
-        let message = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, running: running)
+        let message = try await ConfigurationService.shared.applyCaddy(settings: store.settings, sites: store.sites, projects: store.appProjects, running: running)
         print(message)
     }
 
@@ -129,12 +129,12 @@ struct NestCTL {
     private static func render(_ target: String, store: SiteStore) -> Bool {
         switch target {
         case "caddy":
-            print(caddyRenderer(store: store).render(sites: store.sites))
+            print(caddyRenderer(store: store).render(sites: store.sites, projects: store.appProjects))
         case "cloudflared":
             print(tunnelRenderer(store: store).render(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects))
         case "all":
             print("# Caddyfile")
-            print(caddyRenderer(store: store).render(sites: store.sites))
+            print(caddyRenderer(store: store).render(sites: store.sites, projects: store.appProjects))
             print("\n# cloudflared")
             print(tunnelRenderer(store: store).render(routes: store.tunnelRoutes, sites: store.sites, projects: store.appProjects))
         default:

@@ -80,8 +80,9 @@ public final class SiteStore: ObservableObject {
     }
 
     /// A failed read is not a failed save, but neither may become live configuration.
+    /// Projects count: their local domains are Caddy routes, which an unreadable file would drop.
     public var caddyConfigurationError: String? {
-        configurationError(for: [.sites, .settings])
+        configurationError(for: [.sites, .projects, .settings])
     }
 
     public var tunnelConfigurationError: String? {
@@ -570,6 +571,7 @@ public final class SiteStore: ObservableObject {
         var updated = project
         updated.name = NestValidation.normalizedName(project.name)
         updated.hostname = NestValidation.normalizedDomain(project.hostname)
+        updated.localDomain = NestValidation.normalizedLocalDomain(project.localDomain)
         updated.directory = project.directory.trimmingCharacters(in: .whitespacesAndNewlines)
         updated.command = project.command.trimmingCharacters(in: .whitespacesAndNewlines)
         return updated
@@ -684,6 +686,9 @@ public final class SiteStore: ObservableObject {
         if sites.contains(where: { $0.id != site.id && $0.status == .running && $0.domain == site.domain }) {
             issues.append("Another running site already uses \(site.domain).")
         }
+        if let project = project(forLocalDomain: site.domain) {
+            issues.append("The project '\(project.name)' already uses \(site.domain).")
+        }
         return issues
     }
 
@@ -697,7 +702,7 @@ public final class SiteStore: ObservableObject {
 
     // MARK: - Project CRUD
 
-    public func addProject(name: String, hostname: String, directory: String, port: Int, command: String) -> AppProject {
+    public func addProject(name: String, hostname: String, directory: String, port: Int, command: String, localDomain: String? = nil) -> AppProject {
         // The ID names the launch agent and log file, so it must never collide with another project's.
         let base = AppProject.defaultID(from: name)
         let project = AppProject(
@@ -707,7 +712,8 @@ public final class SiteStore: ObservableObject {
             hostname: NestValidation.normalizedDomain(hostname),
             directory: directory.trimmingCharacters(in: .whitespacesAndNewlines),
             port: port,
-            command: command.trimmingCharacters(in: .whitespacesAndNewlines)
+            command: command.trimmingCharacters(in: .whitespacesAndNewlines),
+            localDomain: NestValidation.normalizedLocalDomain(localDomain)
         )
         // Publish the project only once it is durable; on failure `saveError(.projects)` says why.
         guard commitProjects(appProjects + [project]) else { return project }
@@ -738,6 +744,10 @@ public final class SiteStore: ObservableObject {
 
     public func project(forHostname hostname: String) -> AppProject? {
         appProjects.first { $0.hostname == hostname }
+    }
+
+    public func project(forLocalDomain domain: String) -> AppProject? {
+        appProjects.first { $0.localDomain == domain }
     }
 
     public func project(id: String?) -> AppProject? {

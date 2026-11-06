@@ -7,6 +7,9 @@ public struct AppProject: Codable, Identifiable, Equatable, Sendable {
     public var directory: String
     public var port: Int
     public var command: String
+    /// An optional `.test` domain Caddy serves over HTTPS and proxies to `port`; nil when the
+    /// project is only reachable on localhost.
+    public var localDomain: String?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -17,6 +20,7 @@ public struct AppProject: Codable, Identifiable, Equatable, Sendable {
         directory: String,
         port: Int,
         command: String = "",
+        localDomain: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -26,6 +30,7 @@ public struct AppProject: Codable, Identifiable, Equatable, Sendable {
         self.directory = directory
         self.port = port
         self.command = command
+        self.localDomain = localDomain
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -38,6 +43,7 @@ public struct AppProject: Codable, Identifiable, Equatable, Sendable {
         case dir
         case port
         case command
+        case localDomain
         case createdAt
         case updatedAt
     }
@@ -52,6 +58,10 @@ public struct AppProject: Codable, Identifiable, Equatable, Sendable {
             ?? ""
         port = try container.decode(Int.self, forKey: .port)
         command = try container.decodeIfPresent(String.self, forKey: .command) ?? ""
+        // Files written before local domains existed have no key; a malformed value must not
+        // drop the whole project, so it reads as "no local domain".
+        let storedLocalDomain = (try? container.decodeIfPresent(String.self, forKey: .localDomain)) ?? nil
+        localDomain = storedLocalDomain.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
@@ -64,8 +74,14 @@ public struct AppProject: Codable, Identifiable, Equatable, Sendable {
         try container.encode(directory, forKey: .directory)
         try container.encode(port, forKey: .port)
         try container.encode(command, forKey: .command)
+        try container.encodeIfPresent(localDomain, forKey: .localDomain)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
+    }
+
+    /// The HTTPS address Caddy serves for this project, when it has a local domain.
+    public var localURL: URL? {
+        localDomain.flatMap { URL(string: "https://\($0)") }
     }
 
     public var launchAgentLabel: String {

@@ -36,7 +36,7 @@ enum StorageApplyTests {
                 await Task.yield()
                 check(publications == 0 && !controller.isServiceBusy("Cloudflared"), "unreadable \(file.fileName) blocks automatic and manual publication/start")
                 check(controller.cloudflaredError?.contains(file.fileName) == true, "blocked publication identifies \(file.fileName)")
-                if file == .sites || file == .settings {
+                if file == .sites || file == .projects || file == .settings {
                     controller.markCaddyPending(store: store)
                     controller.applyCaddy(store: store)
                     controller.startFrankenPHP(store: store)
@@ -84,7 +84,7 @@ enum StorageApplyTests {
         do {
             let config = root.appendingPathComponent("etc").path
             let renderer = ConfigRenderer(configDirectory: config, frankenphpLogPath: "")
-            try renderer.writeAll(sites: [])
+            try renderer.writeAll(sites: [], projects: [])
             let sibling = config + "2/extra.caddy"
             try fm.createDirectory(atPath: config + "2", withIntermediateDirectories: true)
             try "# sibling".write(toFile: sibling, atomically: true, encoding: .utf8)

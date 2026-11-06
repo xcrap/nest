@@ -86,7 +86,11 @@ public struct ContentView: View {
             syncSavedTunnels()
         }
         .onChange(of: store.tunnelRoutes) { syncSavedTunnels() }
-        .onChange(of: store.appProjects) { syncSavedTunnels() }
+        .onChange(of: store.appProjects) {
+            // Local `.test` domains are Caddy routes; edits that render the same Caddyfile are skipped.
+            processController.applyCaddy(store: store)
+            syncSavedTunnels()
+        }
         .onChange(of: store.settings) {
             processController.markCaddyPending(store: store)
             syncSavedTunnels()

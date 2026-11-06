@@ -27,7 +27,7 @@ public final class ProcessController: ObservableObject {
     /// brew services, Caddy, launchd, the process table and PF. `init()` acts on the system;
     /// tests replace each member.
     public struct SystemHooks {
-        public var applyCaddy: (AppSettings, [Site], _ running: Bool) async throws -> String
+        public var applyCaddy: (AppSettings, [Site], [AppProject], _ running: Bool) async throws -> String
         public var brew: (BrewServiceAction, _ service: String) async throws -> Void
         public var isCaddyRunning: () async -> Bool
         public var isMariaDBRunning: () async -> Bool
@@ -41,7 +41,7 @@ public final class ProcessController: ObservableObject {
         public var routeRetryDelays: [Duration]
 
         public init() {
-            applyCaddy = { try await ConfigurationService.shared.applyCaddy(settings: $0, sites: $1, running: $2) }
+            applyCaddy = { try await ConfigurationService.shared.applyCaddy(settings: $0, sites: $1, projects: $2, running: $3) }
             brew = { try await ProcessController.brew($0, service: $1) }
             isCaddyRunning = { await BlockingWork.run { LocalRedirectProbe.isCaddyAdminReachable() } }
             isMariaDBRunning = { await BlockingWork.run { ProcessController.processExists("mariadbd") } }
@@ -129,13 +129,24 @@ public final class ProcessController: ObservableObject {
     }
     private var desiredTunnelInput: TunnelInput?
 
+    /// What a Caddy apply is built from: running sites and projects with a local domain.
+    private struct CaddyRequest {
+        var settings: AppSettings
+        var sites: [Site]
+        var projects: [AppProject]
+    }
+
+    /// Compared by rendered output, so renaming a stopped site or editing a project's command
+    /// leaves Caddy applied.
     private struct CaddyInput: Equatable {
         var rendered: String
         var directory: String
         var binary: String
 
-        init(settings: AppSettings, sites: [Site]) {
-            rendered = ConfigRenderer(configDirectory: settings.caddyConfigDirectory, frankenphpLogPath: settings.runtimePaths.frankenphpLog).render(sites: sites)
+        init(_ request: CaddyRequest) {
+            let settings = request.settings
+            rendered = ConfigRenderer(configDirectory: settings.caddyConfigDirectory, frankenphpLogPath: settings.runtimePaths.frankenphpLog)
+                .render(sites: request.sites, projects: request.projects)
             directory = settings.caddyConfigDirectory
             binary = settings.runtimePaths.frankenphpBinary
         }
@@ -153,17 +164,17 @@ public final class ProcessController: ObservableObject {
     // isolated controller tests, but cannot distinguish an empty list from a failed read.
     public func markCaddyPending(store: SiteStore) {
         guard canConfigureCaddy(store) else { return }
-        markCaddyPending(settings: store.settings, sites: store.sites)
+        markCaddyPending(settings: store.settings, sites: store.sites, projects: store.appProjects)
     }
 
     public func applyCaddy(store: SiteStore) {
         guard canConfigureCaddy(store) else { return }
-        applyCaddy(settings: store.settings, sites: store.sites)
+        applyCaddy(settings: store.settings, sites: store.sites, projects: store.appProjects)
     }
 
     public func startFrankenPHP(store: SiteStore) {
         guard canConfigureCaddy(store) else { return }
-        startFrankenPHP(settings: store.settings, sites: store.sites)
+        startFrankenPHP(settings: store.settings, sites: store.sites, projects: store.appProjects)
     }
 
     public func markTunnelsPending(store: SiteStore, automaticallyApply: Bool = false) {
@@ -205,12 +216,13 @@ public final class ProcessController: ObservableObject {
         }
     }
 
-    public func markCaddyPending(settings: AppSettings, sites: [Site]) {
-        guard CaddyInput(settings: settings, sites: sites) != appliedCaddyInput, !caddyApplyState.isBusy else { return }
+    public func markCaddyPending(settings: AppSettings, sites: [Site], projects: [AppProject]) {
+        let request = CaddyRequest(settings: settings, sites: sites, projects: projects)
+        guard CaddyInput(request) != appliedCaddyInput, !caddyApplyState.isBusy else { return }
         caddyApplyState = .pending
     }
 
-    private var queuedCaddy: (AppSettings, [Site])?
+    private var queuedCaddy: CaddyRequest?
 
     public nonisolated static var cloudflaredLaunchAgentLabel: String {
         "app.nest.\(AppSettings.storageRootName.replacingOccurrences(of: ".", with: "-")).cloudflared"
@@ -281,25 +293,25 @@ public final class ProcessController: ObservableObject {
 
     // MARK: - FrankenPHP / Caddy
 
-    public func applyCaddy(settings: AppSettings, sites: [Site]) {
-        queuedCaddy = (settings, sites)
+    public func applyCaddy(settings: AppSettings, sites: [Site], projects: [AppProject]) {
+        queuedCaddy = CaddyRequest(settings: settings, sites: sites, projects: projects)
         runQueuedCaddy()
     }
 
     /// Whether Caddy can be reloaded depends on FrankenPHP running, so while it starts or stops,
     /// requests wait and the newest one is applied once that settles.
     private func runQueuedCaddy() {
-        guard caddyTask == nil, !isServiceBusy("FrankenPHP"), let (settings, sites) = queuedCaddy else { return }
-        if isApplied(CaddyInput(settings: settings, sites: sites)) { queuedCaddy = nil; return }
+        guard caddyTask == nil, !isServiceBusy("FrankenPHP"), let request = queuedCaddy else { return }
+        if isApplied(CaddyInput(request)) { queuedCaddy = nil; return }
         caddyTask = Task {
-            while !isServiceBusy("FrankenPHP"), let (settings, sites) = queuedCaddy {
+            while !isServiceBusy("FrankenPHP"), let request = queuedCaddy {
                 queuedCaddy = nil
-                let input = CaddyInput(settings: settings, sites: sites)
+                let input = CaddyInput(request)
                 // Identical output (e.g. renaming a stopped site): nothing to validate, write or reload.
                 if isApplied(input) { continue }
                 caddyApplyState = .applying
                 do {
-                    let message = try await hooks.applyCaddy(settings, sites, frankenphpRunning)
+                    let message = try await hooks.applyCaddy(request.settings, request.sites, request.projects, frankenphpRunning)
                     clearFrankenPHPError()
                     appliedCaddyInput = input
                     caddyApplyState = .applied(message)
@@ -324,7 +336,7 @@ public final class ProcessController: ObservableObject {
         runQueuedCaddy()
     }
 
-    public func startFrankenPHP(settings: AppSettings, sites: [Site]) {
+    public func startFrankenPHP(settings: AppSettings, sites: [Site], projects: [AppProject]) {
         guard !isServiceBusy("FrankenPHP") else { return }
         beginOperation("FrankenPHP")
         caddyApplyState = .applying
@@ -333,12 +345,12 @@ public final class ProcessController: ObservableObject {
         Task {
             // A site toggle may be applying right now: start after it instead of dropping the request.
             while let pending = caddyTask { await pending.value }
-            var (settings, sites) = (settings, sites)
-            if let newer = queuedCaddy { (settings, sites) = newer; queuedCaddy = nil }
+            var request = CaddyRequest(settings: settings, sites: sites, projects: projects)
+            if let newer = queuedCaddy { request = newer; queuedCaddy = nil }
             caddyApplyState = .applying
             do {
-                _ = try await hooks.applyCaddy(settings, sites, frankenphpRunning)
-                appliedCaddyInput = CaddyInput(settings: settings, sites: sites)
+                _ = try await hooks.applyCaddy(request.settings, request.sites, request.projects, frankenphpRunning)
+                appliedCaddyInput = CaddyInput(request)
             } catch {
                 frankenphpError = error.localizedDescription
                 caddyApplyState = .failed(error.localizedDescription)

@@ -30,7 +30,7 @@ enum ProcessControllerTests {
             var resumeStart: CheckedContinuation<Void, Never>?
             var caddyUp = false
             var hooks = inertHooks()
-            hooks.applyCaddy = { _, sites, running in
+            hooks.applyCaddy = { _, sites, _, running in
                 calls.append("\(domains(sites)):\(running)")
                 return running ? "Applied to Caddy" : "Saved • FrankenPHP stopped"
             }
@@ -40,9 +40,9 @@ enum ProcessControllerTests {
             }
             hooks.isCaddyRunning = { caddyUp }
             let controller = ProcessController(hooks: hooks)
-            controller.startFrankenPHP(settings: settings, sites: [a])
+            controller.startFrankenPHP(settings: settings, sites: [a], projects: [])
             await waitFor { resumeStart != nil }
-            controller.applyCaddy(settings: settings, sites: [a, b])
+            controller.applyCaddy(settings: settings, sites: [a, b], projects: [])
             await settle()
             check(calls == ["a.test:false", "brew start"], "a toggle during FrankenPHP start waits instead of writing without a reload")
             resumeStart?.resume()
@@ -58,7 +58,7 @@ enum ProcessControllerTests {
             var hold = true
             var resumeApply: CheckedContinuation<Void, Never>?
             var hooks = inertHooks()
-            hooks.applyCaddy = { _, sites, running in
+            hooks.applyCaddy = { _, sites, _, running in
                 calls.append("\(domains(sites)):\(running)")
                 if hold { hold = false; await withCheckedContinuation { resumeApply = $0 } }
                 return running ? "Applied to Caddy" : "Saved • FrankenPHP stopped"
@@ -67,10 +67,10 @@ enum ProcessControllerTests {
             hooks.isCaddyRunning = { false }
             let controller = ProcessController(hooks: hooks)
             controller.frankenphpRunning = true
-            controller.applyCaddy(settings: settings, sites: [a])
+            controller.applyCaddy(settings: settings, sites: [a], projects: [])
             await waitFor { resumeApply != nil }
             controller.stopFrankenPHP()
-            controller.applyCaddy(settings: settings, sites: [a, b])
+            controller.applyCaddy(settings: settings, sites: [a, b], projects: [])
             await settle()
             check(calls == ["a.test:true"], "stop waits for the reload in flight")
             resumeApply?.resume()
@@ -84,20 +84,46 @@ enum ProcessControllerTests {
         do {
             var applies = 0
             var hooks = inertHooks()
-            hooks.applyCaddy = { _, _, _ in applies += 1; return "Saved • FrankenPHP stopped" }
+            hooks.applyCaddy = { _, _, _, _ in applies += 1; return "Saved • FrankenPHP stopped" }
             let controller = ProcessController(hooks: hooks)
             var stopped = Site(name: "Old", domain: "old.test", rootPath: "/tmp", documentRoot: ".")
-            controller.applyCaddy(settings: settings, sites: [a, stopped])
+            controller.applyCaddy(settings: settings, sites: [a, stopped], projects: [])
             await waitFor { applies == 1 && controller.caddyApplyState == .applied("Saved • FrankenPHP stopped") }
             stopped.name = "Renamed"
-            controller.applyCaddy(settings: settings, sites: [a, stopped])
-            controller.applyCaddy(settings: settings, sites: [a, stopped])
+            controller.applyCaddy(settings: settings, sites: [a, stopped], projects: [])
+            controller.applyCaddy(settings: settings, sites: [a, stopped], projects: [])
             await settle()
             check(applies == 1 && controller.caddyApplyState == .applied("Saved • FrankenPHP stopped"), "renaming a stopped site is a no-op apply")
             stopped.status = .running
-            controller.applyCaddy(settings: settings, sites: [a, stopped])
+            controller.applyCaddy(settings: settings, sites: [a, stopped], projects: [])
             await waitFor { applies == 2 }
             check(applies == 2, "a change to the rendered Caddyfile is still applied")
+        }
+
+        // Projects reach Caddy through their local domain only; other project edits are no-op applies.
+        do {
+            var applied: [[String]] = []
+            var hooks = inertHooks()
+            hooks.applyCaddy = { _, _, projects, _ in
+                applied.append(projects.compactMap(\.localDomain))
+                return "Saved • FrankenPHP stopped"
+            }
+            let controller = ProcessController(hooks: hooks)
+            var project = AppProject(name: "Vite", hostname: "vite.example.com", directory: "/tmp/vite", port: 5173)
+            controller.applyCaddy(settings: settings, sites: [a], projects: [project])
+            await waitFor { applied.count == 1 && controller.caddyApplyState == .applied("Saved • FrankenPHP stopped") }
+            project.command = "npm run dev"
+            controller.applyCaddy(settings: settings, sites: [a], projects: [project])
+            await settle()
+            check(applied.count == 1, "editing a project without a local domain does not touch Caddy")
+            project.localDomain = "vite.test"
+            controller.applyCaddy(settings: settings, sites: [a], projects: [project])
+            await waitFor { applied.count == 2 }
+            check(applied.last == ["vite.test"], "adding a local domain applies the project to Caddy")
+            project.port = 5174
+            controller.applyCaddy(settings: settings, sites: [a], projects: [project])
+            await waitFor { applied.count == 3 }
+            check(applied.count == 3, "a new port for a proxied project is applied")
         }
 
         // The PF administrator prompt is not repeated after a cancel; failures are visible.
@@ -139,7 +165,7 @@ enum ProcessControllerTests {
             await settle()
             check(allowed == [true, true] && controller.frankenphpError?.contains("pf.conf") == true,
                   "missing pf.conf wiring is reported without suppressing a later prompt")
-            controller.applyCaddy(settings: settings, sites: [a])
+            controller.applyCaddy(settings: settings, sites: [a], projects: [])
             await waitFor { controller.caddyApplyState == .applied("Applied to Caddy") }
             check(controller.frankenphpError?.contains("pf.conf") == true, "a successful Caddy apply does not hide the broken redirect")
             caddyUp = false
@@ -161,7 +187,7 @@ enum ProcessControllerTests {
             hooks.isMariaDBRunning = { mariadbUp }
             hooks.captureStatus = { _, _ in status }
             hooks.brew = { action, _ in if action == .start, failBrewStart { throw ConfigurationFailure("brew start failed") } }
-            hooks.applyCaddy = { _, _, _ in
+            hooks.applyCaddy = { _, _, _, _ in
                 if failApply { throw ConfigurationFailure("Invalid Caddy configuration: bad") }
                 return "Applied to Caddy"
             }
@@ -185,7 +211,7 @@ enum ProcessControllerTests {
             check(controller.frankenphpError == nil && controller.mariadbError == nil, "\"still running\" errors clear once the services stop")
 
             failBrewStart = true
-            controller.startFrankenPHP(settings: settings, sites: [a])
+            controller.startFrankenPHP(settings: settings, sites: [a], projects: [])
             await waitFor { !controller.isServiceBusy("FrankenPHP") }
             check(controller.frankenphpError == "brew start failed", "a failed start is reported")
             await refresh()
@@ -195,7 +221,7 @@ enum ProcessControllerTests {
             check(controller.frankenphpError == nil, "the start error clears once FrankenPHP runs")
 
             failApply = true
-            controller.applyCaddy(settings: settings, sites: [a, b])
+            controller.applyCaddy(settings: settings, sites: [a, b], projects: [])
             await waitFor { controller.frankenphpError?.contains("Invalid Caddy configuration") == true }
             status.frankenphp = false
             await refresh()
@@ -339,7 +365,7 @@ enum ProcessControllerTests {
     /// Hooks that never touch the Mac; each test replaces what it observes.
     static func inertHooks() -> ProcessController.SystemHooks {
         var hooks = ProcessController.SystemHooks()
-        hooks.applyCaddy = { _, _, running in running ? "Applied to Caddy" : "Saved • FrankenPHP stopped" }
+        hooks.applyCaddy = { _, _, _, running in running ? "Applied to Caddy" : "Saved • FrankenPHP stopped" }
         hooks.brew = { _, _ in }
         hooks.isCaddyRunning = { false }
         hooks.isMariaDBRunning = { false }

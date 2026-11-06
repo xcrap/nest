@@ -199,6 +199,10 @@ public struct SiteFormSheet: View {
             errorMessage = "A site with domain '\(normalizedDomain)' already exists."
             return
         }
+        if let project = store.project(forLocalDomain: normalizedDomain) {
+            errorMessage = "The project '\(project.name)' already uses \(normalizedDomain)."
+            return
+        }
 
         switch mode {
         case .add:

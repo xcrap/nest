@@ -18,6 +18,12 @@ public enum NestValidation {
         return domain
     }
 
+    /// A project's optional `.test` domain: `.test` is appended when missing, and a blank value means none.
+    public static func normalizedLocalDomain(_ value: String?) -> String? {
+        let domain = normalizedDomain(value ?? "", defaultTLD: "test")
+        return domain.isEmpty ? nil : domain
+    }
+
     /// The editable label for a `.test` site domain: only the trailing TLD is removed.
     public static func siteDomainLabel(_ domain: String) -> String {
         domain.hasSuffix(".test") ? String(domain.dropLast(".test".count)) : domain
@@ -62,12 +68,34 @@ public enum NestValidation {
         issues.append(contentsOf: domainIssues(project.hostname, field: "Project hostname"))
         issues.append(contentsOf: absolutePathIssues(project.directory, field: "Project directory"))
         issues.append(contentsOf: portIssues(project.port, field: "Project port"))
+        issues.append(contentsOf: localDomainIssues(project))
 
         if containsControlCharacters(project.command) {
             issues.append("Project command cannot contain control characters.")
         }
 
         return issues
+    }
+
+    /// A project's local domain becomes a Caddy site address, so it must be a `.test` domain
+    /// made of plain DNS labels. Empty when the project has none.
+    public static func localDomainIssues(_ project: AppProject) -> [String] {
+        guard let localDomain = project.localDomain else { return [] }
+        return domainIssues(localDomain, field: "Local domain", requiredTLD: "test")
+    }
+
+    /// Caddy refuses a config that defines one address twice, so a project's local domain may
+    /// not be any site's domain (a stopped site can be switched on later) or another project's.
+    /// `otherProjects` must not include `project` itself.
+    public static func localDomainConflicts(_ project: AppProject, sites: [Site], otherProjects: [AppProject]) -> [String] {
+        guard let localDomain = project.localDomain else { return [] }
+        if let site = sites.first(where: { $0.domain == localDomain }) {
+            return ["The site '\(site.name)' already uses \(localDomain)."]
+        }
+        if let other = otherProjects.first(where: { $0.localDomain == localDomain }) {
+            return ["The project '\(other.name)' already uses \(localDomain)."]
+        }
+        return []
     }
 
     public static func tunnelRouteIssues(_ route: TunnelRoute) -> [String] {

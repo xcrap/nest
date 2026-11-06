@@ -105,14 +105,14 @@ public actor ConfigurationService {
         }
     }
 
-    public func applyCaddy(settings: AppSettings, sites: [Site], running: Bool) async throws -> String {
+    public func applyCaddy(settings: AppSettings, sites: [Site], projects: [AppProject], running: Bool) async throws -> String {
         await acquire(.files)
         defer { release(.files) }
         let renderer = ConfigRenderer(configDirectory: settings.caddyConfigDirectory, frankenphpLogPath: settings.runtimePaths.frankenphpLog)
-        let issues = renderer.validationIssues(sites: sites)
+        let issues = renderer.validationIssues(sites: sites, projects: projects)
         guard issues.isEmpty else { throw ConfigurationFailure(issues.joined(separator: " ")) }
         try renderer.writeSupportFiles()
-        let content = renderer.render(sites: sites)
+        let content = renderer.render(sites: sites, projects: projects)
         try await validateCaddy(content, binary: settings.runtimePaths.frankenphpBinary)
         try await commit(content: content, path: renderer.caddyfilePath, apply: running ? reload : nil)
         return running ? "Applied to Caddy" : "Saved • FrankenPHP stopped"

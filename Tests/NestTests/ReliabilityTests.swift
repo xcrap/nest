@@ -14,17 +14,17 @@ enum ReliabilityTests {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let config = directory.appendingPathComponent("config").path
             let renderer = ConfigRenderer(configDirectory: config, frankenphpLogPath: "")
-            try renderer.writeAll(sites: [])
+            try renderer.writeAll(sites: [], projects: [])
             let snippet = config + "/snippets/php-app"
             try "# custom snippet".write(toFile: snippet, atomically: true, encoding: .utf8)
             try "# custom security".write(toFile: renderer.securityConfPath, atomically: true, encoding: .utf8)
             let custom = config + "/overrides/custom.caddy"
             try "# custom override".write(toFile: custom, atomically: true, encoding: .utf8)
-            try renderer.writeAll(sites: [])
+            try renderer.writeAll(sites: [], projects: [])
             check(try String(contentsOfFile: snippet, encoding: .utf8) == "# custom snippet", "regeneration preserves custom snippets")
             check(try String(contentsOfFile: renderer.securityConfPath, encoding: .utf8) == "# custom security", "regeneration preserves security settings")
             check(try String(contentsOfFile: custom, encoding: .utf8) == "# custom override", "regeneration preserves overrides")
-            check(renderer.render(sites: []).contains("overrides/*.caddy"), "generated file imports custom overrides")
+            check(renderer.render(sites: [], projects: []).contains("overrides/*.caddy"), "generated file imports custom overrides")
             let file = directory.appendingPathComponent("editable.conf").path
             try "old".write(toFile: file, atomically: true, encoding: .utf8)
             let service = ConfigurationService(command: { _, _ in .init(status: 0, output: "") }, reload: { _ in throw ConfigurationFailure("rejected reload") })
@@ -41,11 +41,11 @@ enum ReliabilityTests {
             var settings = AppSettings(caddyConfigDirectory: config)
             settings.runtimePaths.frankenphpBinary = "/test/frankenphp"
             let site = Site(name: "New", domain: "new.test", rootPath: directory.path, documentRoot: ".", status: .running)
-            do { _ = try await service.applyCaddy(settings: settings, sites: [site], running: true); check(false, "reload rejection propagates") }
+            do { _ = try await service.applyCaddy(settings: settings, sites: [site], projects: [], running: true); check(false, "reload rejection propagates") }
             catch { check(error.localizedDescription == "rejected reload", "reload error is preserved") }
             check(try String(contentsOfFile: renderer.caddyfilePath, encoding: .utf8) == originalCaddy, "Caddy apply failure restores disk config")
             let invalid = ConfigurationService(command: { _, _ in .init(status: 1, output: "bad syntax") })
-            do { _ = try await invalid.applyCaddy(settings: settings, sites: [site], running: false); check(false, "validation failure propagates") }
+            do { _ = try await invalid.applyCaddy(settings: settings, sites: [site], projects: [], running: false); check(false, "validation failure propagates") }
             catch { check(error.localizedDescription.contains("bad syntax"), "validator output reaches caller") }
             check(try String(contentsOfFile: renderer.caddyfilePath, encoding: .utf8) == originalCaddy, "invalid config never replaces current config")
             let documents = ConfigDocumentStore()

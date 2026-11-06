@@ -80,6 +80,44 @@ enum ValidationTests {
                    "exported key names exclude the token")
         }
 
+        // Test: a project's local domain is optional, gets .test appended, and blank means none.
+        do {
+            assert(NestValidation.normalizedLocalDomain(" My-App ") == "my-app.test", "should append .test to a local domain label")
+            assert(NestValidation.normalizedLocalDomain("App.TEST.") == "app.test", "should lowercase a full local domain")
+            assert(NestValidation.normalizedLocalDomain("   ") == nil && NestValidation.normalizedLocalDomain(nil) == nil, "a blank local domain is none")
+        }
+
+        // Test: a local domain must be a plain .test domain, because it becomes a Caddy address.
+        do {
+            var project = AppProject(name: "App", hostname: "app.example.com", directory: "/Users/test/app", port: 5173)
+            assert(NestValidation.projectIssues(project).isEmpty, "a project without a local domain is valid")
+            project.localDomain = "app.test"
+            assert(NestValidation.projectIssues(project).isEmpty, "a .test local domain is valid")
+            project.localDomain = "app.example.com"
+            assert(NestValidation.projectIssues(project).contains { $0.contains("Local domain must end in .test") }, "should require .test")
+            project.localDomain = "my_app.test"
+            assert(NestValidation.projectIssues(project).contains { $0.contains("Local domain contains an invalid DNS label") }, "should reject invalid labels")
+            project.localDomain = "app.test {"
+            assert(!NestValidation.localDomainIssues(project).isEmpty, "should reject Caddyfile syntax in a local domain")
+        }
+
+        // Test: a local domain may not clash with any site (running or not) or another project.
+        do {
+            let project = AppProject(id: "app", name: "App", hostname: "app.example.com", directory: "/tmp/app", port: 5173, localDomain: "app.test")
+            let stoppedSite = Site(name: "Legacy", domain: "app.test", rootPath: "/tmp/legacy", status: .stopped)
+            let otherSite = Site(name: "Blog", domain: "blog.test", rootPath: "/tmp/blog", status: .running)
+            let otherProject = AppProject(id: "web", name: "Web", hostname: "web.example.com", directory: "/tmp/web", port: 3000, localDomain: "app.test")
+            let siteClash = NestValidation.localDomainConflicts(project, sites: [otherSite, stoppedSite], otherProjects: [])
+            assert(siteClash == ["The site 'Legacy' already uses app.test."], "should reject a stopped site's domain")
+            let projectClash = NestValidation.localDomainConflicts(project, sites: [otherSite], otherProjects: [otherProject])
+            assert(projectClash == ["The project 'Web' already uses app.test."], "should reject another project's local domain")
+            assert(NestValidation.localDomainConflicts(project, sites: [otherSite], otherProjects: []).isEmpty, "distinct domains do not clash")
+            var noDomain = project
+            noDomain.localDomain = nil
+            assert(NestValidation.localDomainConflicts(noDomain, sites: [stoppedSite], otherProjects: [otherProject]).isEmpty,
+                   "a project without a local domain never clashes")
+        }
+
         return (passed, failed)
     }
 }

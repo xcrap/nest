@@ -21,6 +21,7 @@ public struct ProjectFormSheet: View {
 
     @State private var name = ""
     @State private var hostname = ""
+    @State private var localDomain = ""
     @State private var directory = ""
     @State private var port = ""
     @State private var command = ""
@@ -30,6 +31,7 @@ public struct ProjectFormSheet: View {
     private enum Field: Hashable {
         case name
         case hostname
+        case localDomain
         case directory
         case port
         case command
@@ -42,6 +44,19 @@ public struct ProjectFormSheet: View {
     private var isEditing: Bool {
         if case .edit = mode { return true }
         return false
+    }
+
+    /// The project being edited; nil while adding, so no stored project is mistaken for it.
+    private var editingID: String? {
+        if case .edit(let project) = mode { return project.id }
+        return nil
+    }
+
+    private var localDomainHelp: String {
+        if let domain = NestValidation.normalizedLocalDomain(localDomain) {
+            return "Caddy serves https://\(domain) and forwards it to the project's port."
+        }
+        return "Optional. Serves the project over HTTPS at a .test domain."
     }
 
     public var body: some View {
@@ -57,6 +72,7 @@ public struct ProjectFormSheet: View {
             if case .edit(let project) = mode {
                 name = project.name
                 hostname = project.hostname
+                localDomain = project.localDomain.map(NestValidation.siteDomainLabel) ?? ""
                 directory = project.directory
                 port = "\(project.port)"
                 command = project.command
@@ -93,6 +109,26 @@ public struct ProjectFormSheet: View {
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .focused($focusedField, equals: .hostname)
+            }
+
+            field("Local Domain") {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 0) {
+                        TextField("Local domain", text: $localDomain, prompt: Text("my-app"))
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .focused($focusedField, equals: .localDomain)
+                            .accessibilityHint("Optional. The .test suffix is added automatically.")
+                        Text(".test")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 6)
+                            .accessibilityHidden(true)
+                    }
+                    Text(localDomainHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             field("Directory") {
@@ -173,6 +209,7 @@ public struct ProjectFormSheet: View {
         }
 
         let normalizedHostname = NestValidation.normalizedDomain(hostname)
+        let localDomain = NestValidation.normalizedLocalDomain(self.localDomain)
         // Accept "~/…" as typed; services need the expanded path.
         let directory = (self.directory as NSString).expandingTildeInPath
         let candidate = AppProject(
@@ -181,7 +218,8 @@ public struct ProjectFormSheet: View {
             hostname: normalizedHostname,
             directory: directory,
             port: parsedPort,
-            command: command
+            command: command,
+            localDomain: localDomain
         )
 
         let issues = NestValidation.projectIssues(candidate)
@@ -190,11 +228,15 @@ public struct ProjectFormSheet: View {
             return
         }
 
-        let duplicateHostname = store.appProjects.contains {
-            $0.hostname == normalizedHostname && (mode.id != $0.id)
-        }
-        if duplicateHostname {
+        let otherProjects = store.appProjects.filter { $0.id != editingID }
+        if otherProjects.contains(where: { $0.hostname == normalizedHostname }) {
             errorMessage = "A project with hostname '\(normalizedHostname)' already exists."
+            return
+        }
+
+        let conflicts = NestValidation.localDomainConflicts(candidate, sites: store.sites, otherProjects: otherProjects)
+        guard conflicts.isEmpty else {
+            errorMessage = conflicts.joined(separator: " ")
             return
         }
 
@@ -205,7 +247,8 @@ public struct ProjectFormSheet: View {
                 hostname: normalizedHostname,
                 directory: directory,
                 port: parsedPort,
-                command: command
+                command: command,
+                localDomain: localDomain
             )
             if let error = store.saveError(.projects) { errorMessage = error; return }
         case .edit(var project):
@@ -215,6 +258,7 @@ public struct ProjectFormSheet: View {
             project.directory = directory
             project.port = parsedPort
             project.command = command
+            project.localDomain = localDomain
             // Never restart onto a definition that did not reach disk: the next launch would load the old one.
             guard store.updateProject(project) else {
                 errorMessage = store.saveError(.projects) ?? "Could not save the project."

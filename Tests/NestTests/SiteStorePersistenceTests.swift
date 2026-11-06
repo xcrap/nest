@@ -348,6 +348,51 @@ enum SiteStorePersistenceTests {
             assert(relaunched.settings.runtimePaths == paths, "paths that stayed undetected remain empty")
         } catch { fail("runtime path detection", error) }
 
+        // Project files written before local domains existed still load, and the new field round-trips.
+        do {
+            let directory = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let old: [String: Any] = ["id": "api", "name": "API", "hostname": "api.example.com", "directory": "/tmp/api", "port": 3000,
+                                      "command": "", "createdAt": "2026-09-30T10:00:00Z", "updatedAt": "2026-09-30T10:00:00Z"]
+            var blank = old
+            blank["id"] = "blank"
+            blank["localDomain"] = ""
+            var malformed = old
+            malformed["id"] = "malformed"
+            malformed["localDomain"] = 42
+            try envelope([old, blank, malformed]).write(to: directory.appendingPathComponent("projects.json"))
+
+            let store = SiteStore(dataDirectory: directory, defaults: AppSettings(), runOneTimeMigrations: false)
+            assert(store.appProjects.map(\.id) == ["api", "blank", "malformed"], "old, blank and malformed local domains all load")
+            assert(store.appProjects.allSatisfy { $0.localDomain == nil }, "a missing, blank or malformed local domain reads as none")
+            assert(store.persistenceErrors.isEmpty, "loading an old project file reports nothing")
+
+            var api = store.appProjects[0]
+            api.localDomain = " API "
+            assert(store.updateProject(api), "a local domain can be added to an old project")
+            assert(store.project(id: "api")?.localDomain == "api.test", "the stored local domain is normalized")
+            let reloaded = SiteStore(dataDirectory: directory, defaults: AppSettings(), runOneTimeMigrations: false)
+            assert(reloaded.project(id: "api")?.localDomain == "api.test", "the local domain persists")
+            assert(reloaded.project(id: "api")?.localURL?.absoluteString == "https://api.test", "the project opens at its HTTPS URL")
+
+            let added = reloaded.addProject(name: "Web", hostname: "web.example.com", directory: "/tmp/web", port: 5173, command: "", localDomain: "")
+            assert(added.localDomain == nil, "a blank local domain is stored as none")
+            let saved = try String(contentsOf: directory.appendingPathComponent("projects.json"), encoding: .utf8)
+            assert(saved.components(separatedBy: "localDomain").count == 2, "only projects with a local domain write the key")
+        } catch { fail("project local domain decoding", error) }
+
+        // A site cannot be switched on when a project serves its domain: Caddy would reject both.
+        do {
+            let directory = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = SiteStore(dataDirectory: directory, defaults: AppSettings(), runOneTimeMigrations: false)
+            _ = store.addProject(name: "Vite", hostname: "vite.example.com", directory: "/tmp/vite", port: 5173, command: "", localDomain: "app")
+            let site = store.addSite(name: "App", domain: "app", rootPath: directory.path, documentRoot: ".")
+            assert(store.runIssues(for: site).contains("The project 'Vite' already uses app.test."), "the clash is explained")
+            assert(!store.setSiteStatus(id: site.id, status: .running), "the clashing site stays stopped")
+        }
+
         return (passed, failed)
     }
 
